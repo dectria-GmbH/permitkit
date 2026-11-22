@@ -14,10 +14,17 @@ import {
   type Catalog,
   type Subject,
 } from "../src/index.js";
-import { accessRequest, human, role, viaAgent } from "../src/testing/index.js";
+import {
+  accessRequest,
+  everywhere,
+  human,
+  role,
+  unlimited,
+  viaAgent,
+} from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
-const lead = human("u-lead", role("lead"));
+const lead = human("u-lead", role("lead", everywhere));
 const later = "2026-01-15T10:30:00.000Z";
 
 describe("compiled policy cannot be changed", () => {
@@ -31,7 +38,7 @@ describe("compiled policy cannot be changed", () => {
     expect(() => {
       target["version"] = "other";
     }).toThrow(TypeError);
-    const ghost = human("u-ghost", role("ghost"));
+    const ghost = human("u-ghost", role("ghost", everywhere));
     expect(decide(policy, accessRequest(ghost, "ticket:read")).outcome).toBe("deny");
   });
 
@@ -42,7 +49,7 @@ describe("compiled policy cannot be changed", () => {
 });
 
 describe("timestamps fail closed", () => {
-  const grantEntries = [{ permissions: ["ticket:read"] }];
+  const grantEntries = [{ permissions: ["ticket:read"], scope: everywhere, limits: unlimited }];
   const unreadable = [
     "2026-01-01T00:00:00+24:00",
     "2020-01-01T00:00:00+99:99",
@@ -75,7 +82,7 @@ describe("timestamps fail closed", () => {
     const request = accessRequest(lead, "ticket:refund", { properties: { amount: 500 } });
     const digestValue = requestDigest(policy, request);
     const approvals = ["u-a", "u-b"].map((id) => ({
-      approver: human(id, role("lead")),
+      approver: human(id, role("lead", everywhere)),
       approvedAt: "2030-01-01T00:00:00+24:00",
       requestDigest: digestValue,
     }));
@@ -117,7 +124,11 @@ describe("hostile input does not throw", () => {
 
 describe("agent grants are bound to the agent", () => {
   it("denies a grant presented by another agent", () => {
-    const subject = viaAgent(lead, "bot", { entries: [{ permissions: ["ticket:read"] }] });
+    const subject = viaAgent(lead, "bot", {
+      entries: [
+        { permissions: ["ticket:read"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
+    });
     const other: Subject = { ...subject, act: { ...subject.act!, id: "other-agent" } };
     expect(decide(policy, accessRequest(other, "ticket:read")).reason).toBe(
       "agent_grant_actor_mismatch",
@@ -126,9 +137,19 @@ describe("agent grants are bound to the agent", () => {
 
   it("gives requests with different grant content different digests", () => {
     const narrow = viaAgent(lead, "bot", {
-      entries: [{ permissions: ["ticket:refund"], limits: { amount: { max: 10 } } }],
+      entries: [
+        {
+          permissions: ["ticket:refund"],
+          limits: { kind: "range", properties: { amount: { max: 10 } } },
+          scope: { kind: "all" },
+        },
+      ],
     });
-    const wide = viaAgent(lead, "bot", { entries: [{ permissions: ["ticket:refund"] }] });
+    const wide = viaAgent(lead, "bot", {
+      entries: [
+        { permissions: ["ticket:refund"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
+    });
     const properties = { amount: 500 };
     expect(requestDigest(policy, accessRequest(narrow, "ticket:refund", { properties }))).not.toBe(
       requestDigest(policy, accessRequest(wide, "ticket:refund", { properties })),
@@ -139,7 +160,11 @@ describe("agent grants are bound to the agent", () => {
 describe("approver exclusions", () => {
   it("does not count an approver whose id is an agent in the requester's chain", async () => {
     const request = accessRequest(
-      viaAgent(lead, "bot", { entries: [{ permissions: ["ticket:refund"] }] }),
+      viaAgent(lead, "bot", {
+        entries: [
+          { permissions: ["ticket:refund"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+        ],
+      }),
       "ticket:refund",
       { properties: { amount: 500 } },
     );
@@ -148,7 +173,11 @@ describe("approver exclusions", () => {
       request,
       now: later,
       approvals: [
-        { approver: human("bot", role("lead")), approvedAt: later, requestDigest: digestValue },
+        {
+          approver: human("bot", role("lead", everywhere)),
+          approvedAt: later,
+          requestDigest: digestValue,
+        },
       ],
     });
     expect(result.rejected[0]?.reason).toBe("requester_cannot_approve");
@@ -159,9 +188,16 @@ describe("approver exclusions", () => {
     input.roles = { ...input.roles, suspended: { grants: [] } };
     input.denies = [
       ...(input.denies ?? []),
-      { id: "suspended-no-refunds", permissions: ["ticket:refund"], roles: ["suspended"] },
+      {
+        id: "suspended-no-refunds",
+        permissions: ["ticket:refund"],
+        roles: ["suspended"],
+        scope: { kind: "all" },
+      },
     ];
-    input.approvalRules = [{ ...input.approvalRules![0]!, approverRoles: ["approver"] }];
+    input.approvalRules = [
+      { ...input.approvalRules[0]!, eligibleApprovers: { kind: "roles", roles: ["approver"] } },
+    ];
     const withDeny = compilePolicy(catalog, input);
     const request = accessRequest(lead, "ticket:refund", { properties: { amount: 500 } });
     const digestValue = requestDigest(withDeny, request);
@@ -170,7 +206,7 @@ describe("approver exclusions", () => {
       now: later,
       approvals: [
         {
-          approver: human("u-sue", role("approver"), role("suspended")),
+          approver: human("u-sue", role("approver", everywhere), role("suspended", everywhere)),
           approvedAt: later,
           requestDigest: digestValue,
         },
@@ -203,7 +239,19 @@ describe("re-evaluation compares the actor chain", () => {
 describe("catalogue registry", () => {
   it("accepts catalogues from defineCatalog", () => {
     const fresh = defineCatalog({ note: { actions: ["read"] } });
-    expect(() => compilePolicy(fresh, { schema: 1, version: "v", roles: {} })).not.toThrow();
+    expect(() =>
+      compilePolicy(fresh, {
+        schema: 2,
+        version: "v",
+        roles: {},
+        denies: [],
+        approvalRules: [],
+        separationOfDuties: {
+          requesterNeverApprovesSameType: false,
+          exclusiveRequestAndApproveRoles: false,
+        },
+      }),
+    ).not.toThrow();
   });
 });
 

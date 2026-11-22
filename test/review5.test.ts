@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { compilePolicy, evaluateApprovals, PermitkitError, requestDigest } from "../src/index.js";
-import { accessRequest, human, role } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 const polluted: string[] = [];
@@ -20,14 +20,16 @@ afterEach(() => {
 
 const later = "2026-01-15T10:30:00.000Z";
 const input = editablePolicyInput();
-input.approvalRules = [{ ...input.approvalRules![0]!, approvers: 1, requireProof: true }];
+input.approvalRules = [
+  { ...input.approvalRules[0]!, approvers: 1, requireProof: true, proofTypes: ["t"] },
+];
 const proofPolicy = compilePolicy(catalog, input);
-const request = accessRequest(human("u-req", role("lead")), "ticket:refund", {
+const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
   properties: { amount: 500 },
 });
 const digestValue = requestDigest(proofPolicy, request);
 const unproven = {
-  approver: human("u5", role("lead")),
+  approver: human("u5", role("lead", everywhere)),
   approvedAt: "2026-01-15T10:10:00.000Z",
   requestDigest: digestValue,
 };
@@ -78,7 +80,7 @@ describe("verifier options", () => {
   });
 
   it("validates options on every path and rejects unknown keys", async () => {
-    const small = accessRequest(human("u-req", role("lead")), "ticket:refund", {
+    const small = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
       properties: { amount: 5 },
     });
     for (const options of [null, { verifiers: "nope" }, { verifier: [strict] }]) {

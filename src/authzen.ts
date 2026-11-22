@@ -12,8 +12,8 @@ import type { ReasonCode } from "./reasons.js";
 
 /**
  * An access evaluation request in the shape of the OpenID AuthZEN Authorization API 1.0.
- * permitkit reads `subject.properties.roles` and `subject.properties.act`, and needs
- * `context.now` because it never reads the clock.
+ * permitkit reads `subject.properties.roles` and `subject.properties.act` (required, `null`
+ * if no agent acts), and needs `context.now` because it never reads the clock.
  */
 export interface AuthZenRequest {
   subject: { type: string; id: string; properties?: Record<string, unknown> };
@@ -107,7 +107,9 @@ function evaluateUnsafe(policy: CompiledPolicy, input: AuthZenRequest): AuthZenR
           type: own(subject, "type"),
           id: own(subject, "id"),
           roles: own(subjectProperties, "roles"),
-          ...(act === undefined ? {} : { act }),
+          // Passed as read: a missing act is refused by the request schema, never read as
+          // "the principal acts directly". Send null for no actor.
+          act,
         },
         action: { name: own(action, "name") },
         resource: {

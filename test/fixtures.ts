@@ -10,13 +10,23 @@ export const catalog = defineCatalog({
 });
 
 export const policyInput = {
-  schema: 1,
+  schema: 2,
   version: "2026-01-01.1",
   roles: {
     support: {
       grants: [
-        { id: "support-work", permissions: ["ticket:read", "ticket:close"] },
-        { id: "support-refund", permissions: ["ticket:refund"], limits: { amount: { max: 500 } } },
+        {
+          id: "support-work",
+          permissions: ["ticket:read", "ticket:close"],
+          scope: { kind: "all" },
+          limits: { kind: "unlimited" },
+        },
+        {
+          id: "support-refund",
+          permissions: ["ticket:refund"],
+          limits: { kind: "range", properties: { amount: { max: 500 } } },
+          scope: { kind: "all" },
+        },
       ],
     },
     lead: {
@@ -24,6 +34,8 @@ export const policyInput = {
         {
           id: "lead-all",
           permissions: ["ticket:read", "ticket:close", "ticket:refund", "ticket:delete"],
+          scope: { kind: "all" },
+          limits: { kind: "unlimited" },
         },
       ],
     },
@@ -32,30 +44,42 @@ export const policyInput = {
         {
           id: "auditor-read",
           permissions: ["ticket:read", "report:read"],
-          scope: { project: ["alpha"] },
+          scope: { kind: "match", properties: { project: ["alpha"] } },
+          limits: { kind: "unlimited" },
         },
       ],
     },
     approver: { grants: [] },
   },
   denies: [
-    { id: "no-delete-by-agents", permissions: ["ticket:delete"], subjectTypes: ["agent"] },
+    {
+      id: "no-delete-by-agents",
+      permissions: ["ticket:delete"],
+      subjectTypes: ["agent"],
+      scope: { kind: "all" },
+    },
     {
       id: "vip-queue-frozen",
       permissions: ["ticket:close"],
       roles: ["support"],
-      scope: { queue: ["vip"] },
+      scope: { kind: "match", properties: { queue: ["vip"] } },
     },
   ],
   approvalRules: [
     {
       id: "refund-dual",
       permissions: ["ticket:refund"],
-      when: { amount: { gte: 100 } },
+      when: { kind: "threshold", properties: { amount: { gte: 100 } } },
       approvers: 2,
       expiresInSeconds: 3600,
+      eligibleApprovers: { kind: "permission" },
+      requireProof: false,
     },
   ],
+  separationOfDuties: {
+    requesterNeverApprovesSameType: false,
+    exclusiveRequestAndApproveRoles: false,
+  },
 } satisfies PolicyInput;
 
 export const policy = compilePolicy(catalog, policyInput);

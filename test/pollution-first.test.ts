@@ -20,19 +20,48 @@ describe("first parse under a polluted prototype", () => {
     const catalog = defineCatalog({ ticket: { actions: ["read"] } });
     expect(() =>
       compilePolicy(catalog, {
-        schema: 1,
+        schema: 2,
         version: "v",
         roles: {},
-        denies: [{ id: "d", permissions: ["ticket:read"], subjectTypes: ["typo" as never] }],
+        denies: [
+          {
+            id: "d",
+            permissions: ["ticket:read"],
+            subjectTypes: ["typo" as never],
+            scope: { kind: "all" },
+          },
+        ],
+        approvalRules: [],
+        separationOfDuties: {
+          requesterNeverApprovesSameType: false,
+          exclusiveRequestAndApproveRoles: false,
+        },
       }),
     ).toThrow(/not valid/);
     const policy = compilePolicy(catalog, {
-      schema: 1,
+      schema: 2,
       version: "v",
-      roles: { reader: { grants: [{ id: "g", permissions: ["ticket:read"] }] } },
+      roles: {
+        reader: {
+          grants: [
+            {
+              id: "g",
+              permissions: ["ticket:read"],
+              scope: { kind: "all" },
+              limits: { kind: "unlimited" },
+            },
+          ],
+        },
+      },
+      denies: [],
+      approvalRules: [],
+      separationOfDuties: {
+        requesterNeverApprovesSameType: false,
+        exclusiveRequestAndApproveRoles: false,
+      },
     });
     const decision = decide(policy, {
-      subject: { type: "Human", id: "u", roles: [{ role: "reader", scope: {} }] },
+      subject: { type: "Human", id: "u", roles: [{ role: "reader", scope: { kind: "all" } }] },
       action: { name: "read" },
       resource: { type: "ticket" },
       context: { now: "2026-01-15T10:00:00Z" },

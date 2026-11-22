@@ -10,7 +10,7 @@ import {
   requestDigest,
   type ApprovalProofVerifier,
 } from "../src/index.js";
-import { accessRequest, human, role } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 const polluted: string[] = [];
@@ -37,14 +37,19 @@ describe("AuthZEN evaluate", () => {
       context: { now },
     };
     const noContext = {
-      subject: { type: "human", id: "u", properties: { roles: [{ role: "lead", scope: {} }] } },
+      subject: {
+        type: "human",
+        id: "u",
+        properties: { roles: [{ role: "lead", scope: { kind: "all" } }], act: null },
+      },
       action: { name: "read" },
       resource: { type: "ticket", id: "t-1" },
     };
     // Empty own objects are where an inherited value could be read.
     const emptyProperties = { ...noRoles, subject: { ...noRoles.subject, properties: {} } };
     const emptyContext = { ...noContext, context: {} };
-    pollute("roles", [{ role: "lead", scope: {} }]);
+    pollute("roles", [{ role: "lead", scope: { kind: "all" } }]);
+    pollute("act", null);
     pollute("now", now);
     for (const request of [noRoles, emptyProperties]) {
       expect(evaluate(policy, request).decision).toBe(false);
@@ -59,7 +64,10 @@ describe("AuthZEN evaluate", () => {
       subject: {
         type: "human",
         id: "u-lead",
-        properties: { roles: [{ role: "lead", scope: {} }] } as Record<string, unknown>,
+        properties: { roles: [{ role: "lead", scope: { kind: "all" } }], act: null } as Record<
+          string,
+          unknown
+        >,
       },
       action: { name: "read" },
       resource: { type: "ticket", id: "t-1" },
@@ -86,7 +94,7 @@ describe("AuthZEN evaluate", () => {
       subject: {
         type: "human",
         id: "u-lead",
-        properties: { roles: [{ role: "lead", scope: {} }] },
+        properties: { roles: [{ role: "lead", scope: { kind: "all" } }], act: null },
       },
       action: { name: "read" },
       resource: { type: "ticket", id: "t-1" },
@@ -98,9 +106,10 @@ describe("AuthZEN evaluate", () => {
 
 describe("schema checks under a polluted prototype", () => {
   it("does not count a polluted act toward the actor chain", () => {
-    pollute("act", { type: "agent", id: "x" });
+    pollute("act", { type: "agent", id: "x", grant: null, act: null });
     expect(
-      decide(policy, accessRequest(human("u-lead", role("lead")), "ticket:read")).outcome,
+      decide(policy, accessRequest(human("u-lead", role("lead", everywhere)), "ticket:read"))
+        .outcome,
     ).toBe("allow");
   });
 });
@@ -108,7 +117,7 @@ describe("schema checks under a polluted prototype", () => {
 describe("decideAndRecord", () => {
   it("does not read the request a second time after a failed parse", () => {
     let reads = 0;
-    const request = accessRequest(human("u-lead", role("lead")), "ticket:read");
+    const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket:read");
     const flipping = {
       ...request,
       get action() {
@@ -126,14 +135,14 @@ describe("decideAndRecord", () => {
 
 describe("proof verifiers and options", () => {
   const input = editablePolicyInput();
-  input.approvalRules = [{ ...input.approvalRules![0]!, requireProof: true }];
+  input.approvalRules = [{ ...input.approvalRules[0]!, requireProof: true, proofTypes: ["t"] }];
   const proofPolicy = compilePolicy(catalog, input);
-  const request = accessRequest(human("u-req", role("lead")), "ticket:refund", {
+  const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
     properties: { amount: 500 },
   });
   const digestValue = requestDigest(proofPolicy, request);
   const approvals = ["u-a", "u-b"].map((id) => ({
-    approver: human(id, role("lead")),
+    approver: human(id, role("lead", everywhere)),
     approvedAt: "2026-01-15T10:10:00.000Z",
     requestDigest: digestValue,
     proof: { type: "t", approverId: id, requestDigest: digestValue, payload: {} },
@@ -196,9 +205,12 @@ describe("proof verifiers and options", () => {
 describe("limits with a minimum", () => {
   it("denies values below the minimum and rejects min above max", () => {
     const input = editablePolicyInput();
-    input.roles["support"]!.grants[1]!.limits = { amount: { min: 0, max: 500 } };
+    input.roles["support"]!.grants[1]!.limits = {
+      kind: "range",
+      properties: { amount: { min: 0, max: 500 } },
+    };
     const bounded = compilePolicy(catalog, input);
-    const support = human("u-s", role("support"));
+    const support = human("u-s", role("support", everywhere));
     const negative = accessRequest(support, "ticket:refund", { properties: { amount: -1e9 } });
     expect(decide(policy, negative).outcome).toBe("allow");
     expect(decide(bounded, negative).reason).toBe("limit_exceeded");
@@ -206,7 +218,10 @@ describe("limits with a minimum", () => {
       decide(bounded, accessRequest(support, "ticket:refund", { properties: { amount: 0 } }))
         .outcome,
     ).toBe("allow");
-    input.roles["support"]!.grants[1]!.limits = { amount: { min: 10, max: 5 } };
+    input.roles["support"]!.grants[1]!.limits = {
+      kind: "range",
+      properties: { amount: { min: 10, max: 5 } },
+    };
     expect(() => compilePolicy(catalog, input)).toThrow(/not valid/);
   });
 });
@@ -214,7 +229,7 @@ describe("limits with a minimum", () => {
 describe("calendar days in early years", () => {
   it("accepts 29 February of the year 0, which is a leap year", () => {
     const request = accessRequest(
-      human("u-lead", role("lead")),
+      human("u-lead", role("lead", everywhere)),
       "ticket:read",
       {},
       {

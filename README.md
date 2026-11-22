@@ -48,27 +48,51 @@ const catalog = defineCatalog({
 });
 
 // 2. The policy is data. Store it, version it, review changes to it.
+// "Everywhere" and "no limit" are always written out: { kind: "all" }, { kind: "unlimited" }.
 const policy = compilePolicy(catalog, {
-  schema: 1,
+  schema: 2,
   version: "2026-01-01.1",
   roles: {
     support: {
       grants: [
-        { id: "support-work", permissions: ["ticket:read", "ticket:close"] },
-        { id: "support-refund", permissions: ["ticket:refund"], limits: { amount: { max: 500 } } },
+        {
+          id: "support-work",
+          permissions: ["ticket:read", "ticket:close"],
+          scope: { kind: "all" },
+          limits: { kind: "unlimited" },
+        },
+        {
+          id: "support-refund",
+          permissions: ["ticket:refund"],
+          scope: { kind: "all" },
+          limits: { kind: "range", properties: { amount: { max: 500 } } },
+        },
       ],
     },
   },
-  denies: [{ id: "no-agent-refunds", permissions: ["ticket:refund"], subjectTypes: ["agent"] }],
+  denies: [
+    {
+      id: "no-agent-refunds",
+      permissions: ["ticket:refund"],
+      subjectTypes: ["agent"],
+      scope: { kind: "all" },
+    },
+  ],
   approvalRules: [
     {
       id: "refund-dual",
       permissions: ["ticket:refund"],
-      when: { amount: { gte: 100 } },
+      when: { kind: "threshold", properties: { amount: { gte: 100 } } },
       approvers: 2,
+      eligibleApprovers: { kind: "permission" },
       expiresInSeconds: 86400,
+      requireProof: false,
     },
   ],
+  separationOfDuties: {
+    requesterNeverApprovesSameType: false,
+    exclusiveRequestAndApproveRoles: false,
+  },
 });
 
 // 3. Decide.
@@ -76,7 +100,8 @@ const decision = decide(policy, {
   subject: {
     type: "human",
     id: "user-17",
-    roles: [{ role: "support", scope: { queue: ["billing"] } }],
+    roles: [{ role: "support", scope: { kind: "match", properties: { queue: ["billing"] } } }],
+    act: null, // no agent acts; required, so a failed actor lookup cannot pass as "acts directly"
   },
   action: { name: "close" },
   resource: { type: "ticket", id: "t-4711", properties: { queue: "billing" } },
@@ -98,36 +123,51 @@ that names a permission, scope property or limit property that the catalogue doe
 
 ### Policy
 
-A policy document has `schema: 1`, a `version` label, `roles`, `denies`, `approvalRules` and
-`separationOfDuties`. Unknown keys are rejected everywhere, so a typo fails validation instead of
-being ignored. `compilePolicy()` returns a frozen policy with a digest over the catalogue and the
+A policy document has `schema: 2`, a `version` label, `roles`, `denies`, `approvalRules` and
+`separationOfDuties`, all required. Unknown keys are rejected everywhere, so a typo fails
+validation instead of being ignored. A document with another `schema` value, such as a schema 1
+document from an earlier release, fails with `policy_schema_unsupported`; permitkit does not
+migrate old documents. `compilePolicy()` returns a frozen policy with a digest over the catalogue and the
 normalized document. Only compiled policies are accepted by `decide()`. A request can pin
 `context.policyVersion` (a label) and `context.policyDigest` (the exact content); a mismatch
 denies with `policy_version_mismatch`. Pin the digest when the label alone is not enough.
 
+Shapes:
+
+| Field                            | Accepted values                                                                                     |
+| -------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `scope`                          | `{ kind: "all" }` or `{ kind: "match", properties: { queue: ["billing"] } }`                        |
+| `limits`                         | `{ kind: "unlimited" }` or `{ kind: "range", properties: { amount: { min: 0, max: 500 } } }`        |
+| `when` (approval rule)           | `{ kind: "always" }` or `{ kind: "threshold", properties: { amount: { gte: 100 } } }`               |
+| `eligibleApprovers`              | `{ kind: "roles", roles: ["approver"] }` or `{ kind: "permission" }`                                |
+| `requireProof`, `proofTypes`     | `requireProof: true` with `proofTypes: ["webauthn"]`, or `requireProof: false` without `proofTypes` |
+| `notBefore`, `revokedAt` (grant) | A timestamp, or `null` for "no start bound" and "not revoked"                                       |
+| `act` (subject, actor)           | An actor, or `null` for "no agent acts"                                                             |
+
 Matching rules:
 
-| Element              | Rule                                                                                                                        |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Grant scope          | Every listed property must be present on the resource as a string and be in the list.                                       |
-| Assignment scope     | Same as grant scope. `scope: {}` is explicit and means everywhere.                                                          |
-| Limit                | The property must be a finite number in the range `min` to `max` (both inclusive, either optional). Missing means exceeded. |
-| Deny rule scope      | Matches unless the property is a string outside the list. Missing or non-string values count as inside.                     |
-| Approval rule `when` | Applies if any listed property is missing, not a number, or at least `gte`.                                                 |
-| Precedence           | Deny rules win over grants. Approval rules apply only after a grant covers the request.                                     |
+| Element              | Rule                                                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Grant scope          | `all` covers every resource. `match`: every listed property must be present on the resource as a string and be in the list.                            |
+| Assignment scope     | Same as grant scope.                                                                                                                                   |
+| Agent grant scope    | Same as grant scope.                                                                                                                                   |
+| Limits               | `unlimited` holds always. `range`: the property must be a finite number from `min` to `max` (both inclusive, either optional). Missing means exceeded. |
+| Deny rule scope      | `all` matches every resource. `match`: matches unless the property is a string outside the list. Missing or non-string values count as inside.         |
+| Approval rule `when` | `always` applies always. `threshold`: applies if any listed property is missing, not a number, or at least `gte`.                                      |
+| Precedence           | Deny rules win over grants. Approval rules apply only after a grant covers the request.                                                                |
 
-Several properties in one scope combine with AND: a deny rule with `{ queue: ["vip"], project:
-["alpha"] }` matches only resources in both. The conditions of one deny rule (`roles`,
+Several properties in one match scope combine with AND: a deny rule with
+`{ kind: "match", properties: { queue: ["vip"], project: ["alpha"] } }` matches only resources in
+both. The conditions of one deny rule (`roles`,
 `subjectTypes`, `scope`) also combine with AND: `roles: ["contractor"]` with
 `subjectTypes: ["agent"]` denies only agents acting for contractors. Use separate deny rules for
-OR. Approval rule `when`
-conditions combine with OR, so more conditions mean more approvals.
+OR. The properties of a `threshold` combine with OR, so more conditions mean more approvals.
 
 ### Subjects and agents
 
 A subject is a `human` or `service` principal with role assignments. If an agent acts, the
 request carries the agent as `subject.act`, in the RFC 8693 `act` shape; nested `act` values are
-prior actors. They do not grant rights. If a prior actor carries a grant, that grant must come
+prior actors. `act` is required on the subject and on every actor: `null` ends the chain. They do not grant rights. If a prior actor carries a grant, that grant must come
 from the same principal, name that prior actor as its agent, and be inside its validity window
 and not revoked; otherwise the request is denied (`agent_grant_principal_mismatch`,
 `agent_grant_expired`, `agent_grant_revoked` or `agent_grant_not_yet_valid`). A prior grant's
@@ -159,14 +199,15 @@ and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
   of its grant, action, resource, request time and policy version, so an approval cannot move
   to another request or survive a policy change;
 - approvals count only inside the window, both ends inclusive;
-- with `approverRoles`, the approver must hold one of those roles with an assignment scope that
-  covers the resource. Only the assignment scope counts, not the scope of the role's grants, so
-  use dedicated approver roles with `grants: []`. Without `approverRoles`, the approver must hold
-  the permission itself;
+- with `eligibleApprovers: { kind: "roles", roles }`, the approver must hold one of those roles
+  with an assignment scope that covers the resource. Only the assignment scope counts, not the
+  scope of the role's grants, so use dedicated approver roles with `grants: []`. With
+  `{ kind: "permission" }`, the approver must hold the permission itself;
 - a deny rule for the permission that matches the approver excludes the approval;
-- with `requireProof`, each approval needs a proof that a registered verifier accepts; with
-  `proofTypes`, only those proof types count, so an approver cannot pick a weaker registered
-  verifier. `proofTypes` without `requireProof` is a policy error.
+- with `requireProof: true`, each approval needs a proof that a registered verifier accepts, and
+  only the listed `proofTypes` count, so an approver cannot pick a weaker registered verifier.
+  `requireProof: true` without `proofTypes`, and `proofTypes` without `requireProof`, are policy
+  errors.
 
 `evaluateApprovals()` checks the identity data you pass in; it cannot look it up. The stored
 request's `subject.id`, `subject.type` and actor chain must come from the requester's
@@ -233,7 +274,10 @@ The operator switches these settings in the policy:
   action of that type. Pass the history as `priorRequests`; without it, the result is a deny.
   An empty list means "no earlier requests", so pass the full history for the approvers.
 - `exclusiveRequestAndApproveRoles`: nobody may hold both a role that grants the permission and an
-  approver role for it. Requests and approvals from such subjects are refused.
+  approver role for it. Requests and approvals from such subjects are refused. Every approval
+  rule then needs `eligibleApprovers: { kind: "roles", ... }`.
+
+Both flags are required, also when `false`.
 
 ### Audit and re-evaluation
 
@@ -253,7 +297,7 @@ you need tamper evidence.
 
 `evaluate(policy, request)` accepts an OpenID AuthZEN 1.0 access evaluation request and returns
 `{ decision, context }`. It reads `subject.type`, `subject.id`, `subject.properties.roles`,
-`subject.properties.act`, `action.name`, `resource.type`, `resource.id`, `resource.properties`,
+`subject.properties.act` (required, `null` if no agent acts), `action.name`, `resource.type`, `resource.id`, `resource.properties`,
 `context.now`, `context.policy_version` and `context.policy_digest`. `action.properties` is
 accepted and not used. Any other key gives `invalid_request`, so a misspelt actor or pin cannot
 be ignored. AuthZEN defines no reason fields, so `context` uses permitkit's own
@@ -275,19 +319,11 @@ code can change the behaviour of any library in the process.
 
 ### Input rules
 
-- A key set to `undefined` counts as absent, as in JSON. Watch the cases where absent widens or
-  skips a check: `subject.act: undefined` (an actor lookup that failed) decides as the principal
-  acting directly, so deny rules for agents do not apply; `requireProof: undefined` compiles to
-  `false`; an agent grant entry's `scope` or `limits` set to `undefined` gives that entry the
-  principal's full rights for its permissions; `notBefore`, `revokedAt`, `policyVersion`,
-  `policyDigest`, `approverRoles`, `proofTypes`, grant `limits` and the separation-of-duties
-  flags set to `undefined` count as not set, and `denies: undefined` or `approvalRules: undefined`
-  compile to no deny rules or no approval rules. Agent grants usually come from database rows, so
-  map optional columns on purpose.
-  Check optional values before you build a request or a policy from them.
-- For the same reason, `limits: { amount: { max: undefined } }` is an empty limit and fails
-  validation, and `scope: undefined` on a grant means no scope restriction. Build policies from
-  validated configuration, not from optional values.
+- A key set to `undefined` counts as absent, as in JSON. No absent field widens access: see
+  [Design choices](#design-choices). `limits: { kind: "range", properties: { amount: { max:
+undefined } } }` is an empty limit and fails validation.
+- Agent grants usually come from database rows. Map every column on purpose: a nullable
+  `revoked_at` column maps to `revokedAt: row.revoked_at ?? null`, never to a missing key.
 - Zod drops a `__proto__` key in `resource.properties`. It cannot be a scope or limit name, but
   two requests that differ only in it share a request digest.
 - A service principal is its own identity. If a person triggers a service action, model the
@@ -307,17 +343,80 @@ code can change the behaviour of any library in the process.
   (`Z` or `+hh:mm` up to 23:59). Other forms are rejected, because engines read them differently.
 - Inputs pass a size guard before validation. Limits are in [docs/reference.md](docs/reference.md).
 
+## Design choices
+
+### Everywhere is a value, never a default
+
+A scope, limit, approval condition or approver constraint that is lost on its way into
+permitkit must not grant more. A non-plain object copied as `{}`, an unmapped database column or
+a default that a schema fills in all look like "nothing was said". So permitkit has no default
+for any of them: the wide case is a value of its own, `{ kind: "all" }`, `{ kind: "unlimited" }`,
+`{ kind: "always" }` or `{ kind: "permission" }`. It cannot come from data loss:
+
+- the marker is an exact string in a discriminated union, not a truthy flag;
+- losing `kind` or `properties`, emptying the object, or passing `null` gives a shape that the
+  schema refuses, both in `compilePolicy` (`policy_invalid`) and in a decision
+  (`invalid_request`);
+- `{ kind: "all" }` with extra keys is refused, so a match scope that lost its `kind` and gained
+  nothing cannot turn into it;
+- `"*"` is not a wildcard; it is refused as a scope value;
+- the condition engine reads only an own `kind`, and treats an unknown kind as "covers nothing"
+  (grants, assignments, agent grants, limits) or "applies" (deny scopes, approval conditions).
+
+What absence means after this rule:
+
+| Field                                                         | Absent, empty, `null` or malformed                                      |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Grant, assignment, agent grant `scope`                        | Refused                                                                 |
+| Grant and agent grant `limits`                                | Refused                                                                 |
+| Deny rule `scope`                                             | Refused                                                                 |
+| Approval rule `when`                                          | Refused                                                                 |
+| Approval rule `eligibleApprovers`                             | Refused                                                                 |
+| `requireProof`; `proofTypes` when `requireProof` is true      | Refused                                                                 |
+| `denies`, `approvalRules`, `separationOfDuties` and its flags | Refused                                                                 |
+| `subject.act`, actor `act`, actor `grant`                     | Refused (`null` is the explicit "none")                                 |
+| Agent grant `notBefore`, `revokedAt`                          | Refused (`null` is the explicit "not set")                              |
+| A property inside a match scope, on the resource              | Narrows: the grant does not match                                       |
+| A property inside a deny match scope, on the resource         | Narrows: counts as inside, the deny rule matches                        |
+| A property in a `range` limit, on the resource                | Narrows: the limit counts as exceeded                                   |
+| A property in a `threshold`, on the resource                  | Narrows: the approval rule applies                                      |
+| `resource.properties`                                         | Narrows: as if every property were missing                              |
+| Deny rule `roles`, `subjectTypes`                             | Narrows: the deny rule applies to everyone                              |
+| `priorRequests` with `requesterNeverApprovesSameType`         | Narrows: `sod_history_missing`                                          |
+| An approval `proof` with `requireProof`                       | Narrows: `proof_missing`                                                |
+| Prior actor `grant: null`                                     | No effect: prior actors grant nothing                                   |
+| `context.policyVersion`, `context.policyDigest`               | No pin: the loaded policy decides, which still grants only what it says |
+| `resource.id`, `description`                                  | No effect on the decision                                               |
+
+### Own rule engine
+
+Rule matching is permitkit's own small engine in one module, `src/engine/conditions.ts`. No
+third-party rule engine is used. Reason: the rule set is small and fixed (scopes, ranges,
+thresholds), and fully covered by tests and adversarial review. A general engine would add a
+policy language, a dependency and behaviour that this library would have to re-test without
+gaining a rule it needs.
+
 ## Test kit
 
 `permitkit/testing` has builders and assertions that work with any test runner:
 
 ```ts
-import { accessRequest, assertDecision, human, permissionMatrix, role } from "permitkit/testing";
+import {
+  accessRequest,
+  assertDecision,
+  everywhere,
+  human,
+  permissionMatrix,
+  role,
+} from "permitkit/testing";
 
-assertDecision(policy, accessRequest(human("u1", role("support")), "ticket:read"), {
+assertDecision(policy, accessRequest(human("u1", role("support", everywhere)), "ticket:read"), {
   outcome: "allow",
 });
 ```
+
+The builders never default a scope or a limit: `role()` needs `everywhere` or `within(...)`, and
+agent grant entries need `unlimited` or `range(...)`.
 
 `permissionMatrix()` decides a set of subjects against a set of cases and returns a sorted table.
 Commit it as a snapshot, so that every policy change shows up as a reviewable diff.

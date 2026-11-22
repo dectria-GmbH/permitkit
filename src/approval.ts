@@ -1,6 +1,14 @@
 import { z } from "zod";
 
-import { boundedSnapshot, detach, requestBounds, wrapperBounds } from "./bounds.js";
+import {
+  approvalInputBounds,
+  detach,
+  maxApprovals,
+  ownArrayLength,
+  ownDataValue,
+  requestBounds,
+  snapshotOf,
+} from "./bounds.js";
 import { decide, denyRuleMatches, permissionOf, requestDigest, type Decision } from "./decide.js";
 import { scopeCovers } from "./engine/conditions.js";
 import { safeParse } from "./parse.js";
@@ -8,7 +16,7 @@ import { PermitkitError } from "./errors.js";
 import { internalsOf, type CompiledPolicy } from "./policy.js";
 import type { ApprovalReasonCode, ApprovalRejectionCode } from "./reasons.js";
 import { accessRequestSchema, subjectSchema } from "./request.js";
-import { instant, timestampSchema } from "./time.js";
+import { instant, requestTimeSchema, timestampSchema } from "./time.js";
 
 const hexDigest = z.string().regex(/^[0-9a-f]{64}$/, "Use a lowercase hex SHA-256 digest.");
 const timestamp = timestampSchema;
@@ -66,9 +74,9 @@ export const approvalInputSchema = z
   .object({
     /** The original request. Its context.now is the request time. */
     request: accessRequestSchema,
-    approvals: z.array(z.unknown()).max(100),
+    approvals: z.array(z.unknown()).max(maxApprovals),
     /** Evaluation time. The requester's rights and the window are checked at this time. */
-    now: timestamp,
+    now: requestTimeSchema,
     /**
      * Earlier requests by the approvers, as the consumer's records show them. Required if the
      * operator switched on requesterNeverApprovesSameType.
@@ -183,16 +191,24 @@ async function evaluateApprovalsUnguarded(
       ...rest,
     });
 
-  const snapshot = boundedSnapshot(input, wrapperBounds);
-  // The request inside must meet the same bounds as a request passed to decide().
-  const requestPart: unknown =
-    typeof snapshot === "object" && snapshot !== null && Object.hasOwn(snapshot, "request")
-      ? Reflect.get(snapshot, "request")
-      : undefined;
-  if (snapshot !== undefined && boundedSnapshot(requestPart, requestBounds) === undefined) {
-    return result("deny", "invalid_input");
+  // Cost bounds before any other work: the number of approvals is read without copying, and
+  // the request must meet the same bounds as a request passed to decide().
+  const approvalCount = ownArrayLength(input, "approvals");
+  if (approvalCount !== undefined && approvalCount > maxApprovals) {
+    return result("deny", "too_many_approvals");
   }
-  if (snapshot === undefined) return result("deny", "invalid_input");
+  const requestCheck = snapshotOf(ownDataValue(input, "request"), requestBounds);
+  if (!requestCheck.ok) {
+    return result(
+      "deny",
+      requestCheck.reason === "too_large" ? "input_too_large" : "invalid_input",
+    );
+  }
+  const whole = snapshotOf(input, approvalInputBounds);
+  if (!whole.ok) {
+    return result("deny", whole.reason === "too_large" ? "input_too_large" : "invalid_input");
+  }
+  const snapshot = whole.value;
   const parsed = safeParse(approvalInputSchema, snapshot);
   if (!parsed.success) return result("deny", "invalid_input");
   const data = detach(parsed.data);
@@ -246,7 +262,7 @@ async function evaluateApprovalsUnguarded(
   const properties = request.resource.properties;
   // The requester is the principal and every agent in its actor chain.
   const requesterIds = new Set<string>([request.subject.id]);
-  for (let actor = request.subject.act; actor !== undefined; actor = actor.act) {
+  for (let actor = request.subject.act; actor !== null; actor = actor.act) {
     requesterIds.add(actor.id);
   }
 
@@ -268,7 +284,7 @@ async function evaluateApprovalsUnguarded(
       reject("approver_not_human");
       continue;
     }
-    if (approver.act !== undefined) {
+    if (approver.act !== null) {
       reject("approver_is_delegated");
       continue;
     }
@@ -304,8 +320,9 @@ async function evaluateApprovalsUnguarded(
       reject("approver_denied_by_rule", denyRule.id);
       continue;
     }
-    if (rule.approverRoles !== undefined) {
-      const approverRoles = rule.approverRoles;
+    const eligibility = rule.eligibleApprovers;
+    if (eligibility.kind === "roles") {
+      const approverRoles = eligibility.roles;
       const eligible = approver.roles.some(
         (assignment) =>
           approverRoles.includes(assignment.role) && scopeCovers(assignment.scope, properties).ok,
@@ -314,7 +331,7 @@ async function evaluateApprovalsUnguarded(
         reject("approver_role_missing");
         continue;
       }
-    } else {
+    } else if (eligibility.kind === "permission") {
       const peer = decide(policy, {
         subject: approver,
         action: request.action,
@@ -325,6 +342,10 @@ async function evaluateApprovalsUnguarded(
         reject("approver_not_permitted", peer.reason);
         continue;
       }
+    } else {
+      // No other kind passes the schema. Fail closed if one ever does.
+      reject("approver_role_missing");
+      continue;
     }
     if (sod.exclusiveRequestAndApproveRoles) {
       const conflict = approver.roles.find((assignment) => requestingRoles.has(assignment.role));

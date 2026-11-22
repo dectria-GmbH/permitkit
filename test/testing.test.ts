@@ -4,6 +4,7 @@ import {
   accessRequest,
   assertDecision,
   DecisionAssertionError,
+  everywhere,
   human,
   permissionMatrix,
   role,
@@ -13,7 +14,7 @@ import { policy } from "./fixtures.js";
 
 describe("test kit", () => {
   it("asserts outcomes and reasons", () => {
-    const lead = human("u-lead", role("lead"));
+    const lead = human("u-lead", role("lead", everywhere));
     expect(
       assertDecision(policy, accessRequest(lead, "ticket:read"), { outcome: "allow" }).reason,
     ).toBe("granted");
@@ -35,7 +36,10 @@ describe("test kit", () => {
   it("builds a sorted permission matrix", () => {
     const rows = permissionMatrix(
       policy,
-      { support: human("u-s", role("support")), sync: service("svc", role("auditor")) },
+      {
+        support: human("u-s", role("support", everywhere)),
+        sync: service("svc", role("auditor", everywhere)),
+      },
       [
         { permission: "ticket:read" },
         { permission: "ticket:refund", properties: { amount: 200 }, label: "refund 200" },

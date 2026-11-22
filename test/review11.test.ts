@@ -12,7 +12,7 @@ import {
   reevaluate,
 } from "../src/index.js";
 import { detach } from "../src/bounds.js";
-import { accessRequest, human, role, viaAgent } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role, viaAgent } from "../src/testing/index.js";
 import { policy } from "./fixtures.js";
 
 function withPollution<T>(target: object, key: string, value: unknown, run: () => T): T {
@@ -26,7 +26,7 @@ function withPollution<T>(target: object, key: string, value: unknown, run: () =
   }
 }
 
-const lead = human("u-lead", role("lead"));
+const lead = human("u-lead", role("lead", everywhere));
 
 describe("Object.prototype.return", () => {
   it("does not make reevaluate or canonicalJson throw", () => {
@@ -70,7 +70,7 @@ describe("Array.prototype.constructor", () => {
       subject: {
         type: "human",
         id: "u-lead",
-        properties: { roles: [{ role: "lead", scope: {} }] },
+        properties: { roles: [{ role: "lead", scope: { kind: "all" } }] },
       },
       action: { name: "read" },
       resource: { type: "ticket", id: "t" },
@@ -120,8 +120,16 @@ describe("Array.prototype.constructor", () => {
 
 describe("prior actor grants", () => {
   it("denies a prior actor whose grant names another agent", () => {
-    const current = viaAgent(lead, "bot1", { entries: [{ permissions: ["ticket:read"] }] });
-    const prior = viaAgent(lead, "bot0", { entries: [{ permissions: ["ticket:read"] }] });
+    const current = viaAgent(lead, "bot1", {
+      entries: [
+        { permissions: ["ticket:read"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
+    });
+    const prior = viaAgent(lead, "bot0", {
+      entries: [
+        { permissions: ["ticket:read"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
+    });
     const subject = {
       ...current,
       act: { ...current.act!, act: { ...prior.act!, id: "someone-else" } },

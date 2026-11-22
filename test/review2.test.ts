@@ -12,7 +12,7 @@ import {
   type ApprovalProofVerifier,
   type PolicyInput,
 } from "../src/index.js";
-import { accessRequest, human, role } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 const pollutionKeys = [
@@ -63,21 +63,52 @@ function cleanUp(): void {
 }
 
 const pollutedInput: PolicyInput = {
-  schema: 1,
+  schema: 2,
   version: "p",
   roles: {
     worker: {
       grants: [
-        { id: "w-scoped", permissions: ["ticket:read"], scope: { queue: ["billing"] } },
-        { id: "w-refund", permissions: ["ticket:refund"] },
+        {
+          id: "w-scoped",
+          permissions: ["ticket:read"],
+          scope: { kind: "match", properties: { queue: ["billing"] } },
+          limits: { kind: "unlimited" },
+        },
+        {
+          id: "w-refund",
+          permissions: ["ticket:refund"],
+          scope: { kind: "all" },
+          limits: { kind: "unlimited" },
+        },
       ],
     },
-    lead: { grants: [{ id: "l-all", permissions: ["ticket:delete", "ticket:refund"] }] },
+    lead: {
+      grants: [
+        {
+          id: "l-all",
+          permissions: ["ticket:delete", "ticket:refund"],
+          scope: { kind: "all" },
+          limits: { kind: "unlimited" },
+        },
+      ],
+    },
   },
-  denies: [{ id: "no-delete", permissions: ["ticket:delete"] }],
+  denies: [{ id: "no-delete", permissions: ["ticket:delete"], scope: { kind: "all" } }],
   approvalRules: [
-    { id: "refund", permissions: ["ticket:refund"], approvers: 2, expiresInSeconds: 3600 },
+    {
+      id: "refund",
+      permissions: ["ticket:refund"],
+      approvers: 2,
+      expiresInSeconds: 3600,
+      when: { kind: "always" },
+      eligibleApprovers: { kind: "permission" },
+      requireProof: false,
+    },
   ],
+  separationOfDuties: {
+    requesterNeverApprovesSameType: false,
+    exclusiveRequestAndApproveRoles: false,
+  },
 };
 
 describe("a polluted Object.prototype does not change decisions", () => {
@@ -85,12 +116,12 @@ describe("a polluted Object.prototype does not change decisions", () => {
 
   it("keeps deny rules, approval rules, scopes and peer eligibility", async () => {
     const compiled = compilePolicy(catalog, pollutedInput);
-    const lead = human("u-lead", role("lead"));
-    const worker = human("u-w", role("worker"));
+    const lead = human("u-lead", role("lead", everywhere));
+    const worker = human("u-w", role("worker", everywhere));
     const refund = accessRequest(lead, "ticket:refund", { properties: { amount: 5 } });
     const digestValue = requestDigest(compiled, refund);
     const approvals = ["u-1", "u-2"].map((id) => ({
-      approver: human(id, role("ghost")),
+      approver: human(id, role("ghost", everywhere)),
       approvedAt: "2026-01-15T10:10:00.000Z",
       requestDigest: digestValue,
     }));
@@ -130,7 +161,7 @@ describe("a polluted Object.prototype does not change decisions", () => {
 describe("audit records", () => {
   it("records exactly the request that was decided, and never runs getters", () => {
     let reads = 0;
-    const request = accessRequest(human("u-lead", role("lead")), "ticket:read");
+    const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket:read");
     const shifting = {
       ...request,
       get action() {
@@ -148,7 +179,7 @@ describe("audit records", () => {
   });
 
   it("reports a record with non-JSON values as not replayable", () => {
-    const request = accessRequest(human("u-lead", role("lead")), "ticket:read");
+    const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket:read");
     const record = toDecisionRecord(request, decide(policy, request));
     for (const rule of [() => 1, Number.NaN, 1n, Symbol("x")]) {
       expect(reevaluate(policy, { ...record, rule } as never).status).toBe("not_replayable");
@@ -158,14 +189,14 @@ describe("audit records", () => {
 
 describe("proof verifier results", () => {
   const input = editablePolicyInput();
-  input.approvalRules = [{ ...input.approvalRules![0]!, requireProof: true }];
+  input.approvalRules = [{ ...input.approvalRules[0]!, requireProof: true, proofTypes: ["t"] }];
   const proofPolicy = compilePolicy(catalog, input);
-  const request = accessRequest(human("u-req", role("lead")), "ticket:refund", {
+  const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
     properties: { amount: 500 },
   });
   const digestValue = requestDigest(proofPolicy, request);
   const approvals = ["u-a", "u-b"].map((id) => ({
-    approver: human(id, role("lead")),
+    approver: human(id, role("lead", everywhere)),
     approvedAt: "2026-01-15T10:10:00.000Z",
     requestDigest: digestValue,
     proof: { type: "t", approverId: id, requestDigest: digestValue, payload: {} },
@@ -207,7 +238,7 @@ describe("policy pins", () => {
     const input = editablePolicyInput();
     input.roles["lead"]!.grants[0]!.permissions = ["ticket:read"];
     const sameLabel = compilePolicy(catalog, input);
-    const lead = human("u-lead", role("lead"));
+    const lead = human("u-lead", role("lead", everywhere));
     const pinned = accessRequest(lead, "ticket:read", {}, { policyVersion: policy.version });
     const withDigest = { ...pinned, context: { ...pinned.context, policyDigest: policy.digest } };
     expect(decide(sameLabel, pinned).outcome).toBe("allow");
@@ -220,16 +251,16 @@ describe("empty restrictions", () => {
   it("rejects empty scope, limits and when, which would restrict nothing", () => {
     const empties: ((input: ReturnType<typeof editablePolicyInput>) => void)[] = [
       (input) => {
-        input.roles["support"]!.grants[0]!.scope = {};
+        input.roles["support"]!.grants[0]!.scope = { kind: "match", properties: {} };
       },
       (input) => {
-        input.roles["support"]!.grants[1]!.limits = {};
+        input.roles["support"]!.grants[1]!.limits = { kind: "range", properties: {} };
       },
       (input) => {
-        input.denies![1]!.scope = {};
+        input.denies[1]!.scope = { kind: "match", properties: {} };
       },
       (input) => {
-        input.approvalRules![0]!.when = {};
+        input.approvalRules[0]!.when = { kind: "threshold", properties: {} };
       },
     ];
     for (const change of empties) {
@@ -239,9 +270,9 @@ describe("empty restrictions", () => {
     }
   });
 
-  it("still accepts an explicit empty assignment scope", () => {
-    expect(decide(policy, accessRequest(human("u", role("lead", {})), "ticket:read")).outcome).toBe(
-      "allow",
-    );
+  it("accepts the explicit all marker on an assignment scope", () => {
+    expect(
+      decide(policy, accessRequest(human("u", role("lead", everywhere)), "ticket:read")).outcome,
+    ).toBe("allow");
   });
 });

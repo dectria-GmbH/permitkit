@@ -1,14 +1,25 @@
 import { createHash } from "node:crypto";
+import { types } from "node:util";
 
 import { PermitkitError } from "./errors.js";
 
 /**
  * Serializes a JSON value with sorted object keys and no insignificant whitespace.
  * The same value always gives the same string, so a digest over it is stable across
- * processes and releases. Values that JSON cannot represent exactly are rejected.
+ * processes and releases. Values that JSON cannot represent exactly are rejected with
+ * `not_canonical`: non-plain objects (class instances, a Map or Date, proxies), symbol or
+ * non-enumerable keys, getters and setters, array holes and named array properties. Nothing is
+ * dropped silently, except a key set to `undefined`, which counts as absent as in JSON.
+ * No caller code runs: only data properties are read.
  */
 export function canonicalJson(value: unknown): string {
-  return serialize(value, new Set());
+  try {
+    return serialize(value, new Set());
+  } catch (error) {
+    if (error instanceof PermitkitError) throw error;
+    // For example a stack overflow on very deep input. Never a raw error.
+    throw new PermitkitError("not_canonical", "The value could not be read as plain JSON data.");
+  }
 }
 
 /**
@@ -25,6 +36,10 @@ export function digest(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 }
 
+function notCanonical(message: string): never {
+  throw new PermitkitError("not_canonical", message);
+}
+
 function serialize(value: unknown, seen: Set<object>): string {
   if (value === null) return "null";
   switch (typeof value) {
@@ -33,9 +48,7 @@ function serialize(value: unknown, seen: Set<object>): string {
     case "boolean":
       return value ? "true" : "false";
     case "number":
-      if (!Number.isFinite(value)) {
-        throw new PermitkitError("not_canonical", "Non-finite numbers have no JSON form.");
-      }
+      if (!Number.isFinite(value)) return notCanonical("Non-finite numbers have no JSON form.");
       return JSON.stringify(value);
     case "object":
       return serializeObject(value, seen);
@@ -43,42 +56,55 @@ function serialize(value: unknown, seen: Set<object>): string {
     case "function":
     case "symbol":
     case "undefined":
-      throw new PermitkitError(
-        "not_canonical",
-        `Values of type ${typeof value} have no JSON form.`,
-      );
+      return notCanonical(`Values of type ${typeof value} have no JSON form.`);
   }
-  throw new PermitkitError("not_canonical", "Unknown value type.");
+  return notCanonical("Unknown value type.");
+}
+
+/** The value of an own data property. Accessors and missing properties are refused. */
+function dataProperty(object: object, key: string): unknown {
+  const descriptor = Reflect.getOwnPropertyDescriptor(object, key);
+  if (descriptor === undefined || !Object.hasOwn(descriptor, "value")) {
+    return notCanonical("Getters, setters and array holes have no JSON form.");
+  }
+  const item: unknown = descriptor.value;
+  return item;
 }
 
 function serializeObject(object: object, seen: Set<object>): string {
-  if (seen.has(object)) {
-    throw new PermitkitError("not_canonical", "Cyclic values have no JSON form.");
-  }
+  // A proxy can report any shape and run code on every read.
+  if (types.isProxy(object)) return notCanonical("Proxies have no canonical JSON form.");
+  if (seen.has(object)) return notCanonical("Cyclic values have no JSON form.");
   seen.add(object);
   try {
+    const prototype: unknown = Object.getPrototypeOf(object);
     if (Array.isArray(object)) {
+      if (prototype !== Array.prototype) {
+        return notCanonical("Only plain arrays have a canonical JSON form.");
+      }
+      const length: unknown = dataProperty(object, "length");
       // A plain array only: holes or named properties would be lost or printed as non-JSON.
-      if (Reflect.ownKeys(object).length !== object.length + 1) {
-        throw new PermitkitError(
-          "not_canonical",
-          "Arrays with holes or extra keys have no JSON form.",
-        );
+      if (typeof length !== "number" || Reflect.ownKeys(object).length !== length + 1) {
+        return notCanonical("Arrays with holes or extra keys have no JSON form.");
       }
       const items: string[] = [];
-      for (let index = 0; index < object.length; index += 1) {
-        items.push(serialize(Reflect.get(object, index), seen));
+      for (let index = 0; index < length; index += 1) {
+        items.push(serialize(dataProperty(object, String(index)), seen));
       }
       return `[${items.join(",")}]`;
     }
-    const prototype: unknown = Object.getPrototypeOf(object);
     if (prototype !== Object.prototype && prototype !== null) {
-      throw new PermitkitError("not_canonical", "Only plain objects have a canonical JSON form.");
+      return notCanonical("Only plain objects have a canonical JSON form.");
+    }
+    const keys = Object.keys(object);
+    // Symbol and non-enumerable keys would be dropped from the output.
+    if (Reflect.ownKeys(object).length !== keys.length) {
+      return notCanonical("Symbol and non-enumerable keys have no JSON form.");
     }
     // Keys plus index access, no [key, value] destructuring (see detach in bounds.ts).
     const members: string[] = [];
-    for (const key of Object.keys(object).toSorted(compareText)) {
-      const item: unknown = Reflect.get(object, key);
+    for (const key of keys.toSorted(compareText)) {
+      const item = dataProperty(object, key);
       if (item !== undefined) members.push(`${JSON.stringify(key)}:${serialize(item, seen)}`);
     }
     return `{${members.join(",")}}`;

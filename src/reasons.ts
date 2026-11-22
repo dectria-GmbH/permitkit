@@ -90,7 +90,10 @@ export const approvalReasonCodes = Object.freeze({
     "At its request time, the request was not an approval_required decision under this rule.",
   sod_history_missing:
     "The operator requires the prior-request check, but the input has no priorRequests.",
-  invalid_input: "The approval input does not match the schema.",
+  too_many_approvals: "The input holds more approvals than one evaluation reads (20).",
+  input_too_large: "The request or the whole approval input exceeds the size bounds.",
+  invalid_input:
+    "The approval input does not match the schema, is not plain data, or is inconsistent.",
 } as const);
 
 export type ApprovalReasonCode = keyof typeof approvalReasonCodes;

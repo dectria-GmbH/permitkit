@@ -9,12 +9,12 @@ import {
   type ApprovalProofVerifier,
   type Subject,
 } from "../src/index.js";
-import { accessRequest, human, role, viaAgent } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role, viaAgent, within } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
-const requester = human("u-req", role("lead"));
-const peerA = human("u-a", role("lead"));
-const peerB = human("u-b", role("lead"));
+const requester = human("u-req", role("lead", everywhere));
+const peerA = human("u-a", role("lead", everywhere));
+const peerB = human("u-b", role("lead", everywhere));
 const request = accessRequest(requester, "ticket:refund", {
   id: "t-1",
   properties: { amount: 250 },
@@ -76,7 +76,11 @@ describe("dual approval", () => {
 
   it("does not count the principal behind a requesting agent", async () => {
     const agentRequest = accessRequest(
-      viaAgent(requester, "agent-1", { entries: [{ permissions: ["ticket:refund"] }] }),
+      viaAgent(requester, "agent-1", {
+        entries: [
+          { permissions: ["ticket:refund"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+        ],
+      }),
       "ticket:refund",
       { id: "t-1", properties: { amount: 250 } },
     );
@@ -109,7 +113,7 @@ describe("dual approval", () => {
 
   it("does not let one subject satisfy a one-approver rule alone", async () => {
     const input = editablePolicyInput();
-    input.approvalRules = [{ ...input.approvalRules![0]!, approvers: 1 }];
+    input.approvalRules = [{ ...input.approvalRules[0]!, approvers: 1 }];
     const single = compilePolicy(catalog, input);
     const singleDigest = requestDigest(single, request);
     const result = await evaluateApprovals(single, {
@@ -122,14 +126,16 @@ describe("dual approval", () => {
 
   it("rejects agents and services as approvers", async () => {
     const agentApprover = viaAgent(peerA, "agent-9", {
-      entries: [{ permissions: ["ticket:refund"] }],
+      entries: [
+        { permissions: ["ticket:refund"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
     });
     const result = await evaluateApprovals(policy, {
       request,
       now: later,
       approvals: [
         approval(agentApprover),
-        approval({ type: "service", id: "svc-1", roles: [role("lead")] }),
+        approval({ type: "service", id: "svc-1", roles: [role("lead", everywhere)], act: null }),
       ],
     });
     expect(result.rejected.map((item) => item.reason)).toEqual([
@@ -261,7 +267,9 @@ describe("approver eligibility", () => {
   });
 
   const input = editablePolicyInput();
-  input.approvalRules = [{ ...input.approvalRules![0]!, approverRoles: ["approver"] }];
+  input.approvalRules = [
+    { ...input.approvalRules[0]!, eligibleApprovers: { kind: "roles", roles: ["approver"] } },
+  ];
   const withRoles = compilePolicy(catalog, input);
   const rolesDigest = requestDigest(withRoles, request);
   const roleApproval = (approver: Subject) => ({
@@ -281,9 +289,9 @@ describe("approver eligibility", () => {
       now: later,
       approvals: [
         make(peerA),
-        make(human("u-c", role("approver", { queue: ["legal"] }))),
-        make(human("u-d", role("approver", { queue: ["billing"] }))),
-        make(human("u-e", role("approver"))),
+        make(human("u-c", role("approver", within({ queue: ["legal"] })))),
+        make(human("u-d", role("approver", within({ queue: ["billing"] })))),
+        make(human("u-e", role("approver", everywhere))),
       ],
     });
     expect(result.outcome).toBe("allow");
@@ -297,9 +305,15 @@ describe("approver eligibility", () => {
   it("checks exclusive roles at approval time", async () => {
     const strictInput = editablePolicyInput();
     strictInput.approvalRules = [
-      { ...strictInput.approvalRules![0]!, approverRoles: ["approver"] },
+      {
+        ...strictInput.approvalRules[0]!,
+        eligibleApprovers: { kind: "roles", roles: ["approver"] },
+      },
     ];
-    strictInput.separationOfDuties = { exclusiveRequestAndApproveRoles: true };
+    strictInput.separationOfDuties = {
+      exclusiveRequestAndApproveRoles: true,
+      requesterNeverApprovesSameType: false,
+    };
     const strict = compilePolicy(catalog, strictInput);
     const strictDigest = requestDigest(strict, request);
     const make = (approver: Subject) => ({ ...approval(approver), requestDigest: strictDigest });
@@ -307,9 +321,9 @@ describe("approver eligibility", () => {
       request,
       now: later,
       approvals: [
-        make(human("u-c", role("approver"), role("support"))),
-        make(human("u-d", role("approver"))),
-        make(human("u-e", role("approver"))),
+        make(human("u-c", role("approver", everywhere), role("support", everywhere))),
+        make(human("u-d", role("approver", everywhere))),
+        make(human("u-e", role("approver", everywhere))),
       ],
     });
     expect(result.outcome).toBe("allow");
@@ -323,8 +337,8 @@ describe("approver eligibility", () => {
       request,
       now: later,
       approvals: [
-        roleApproval(human("u-d", role("approver"))),
-        roleApproval(human("u-e", role("approver"))),
+        roleApproval(human("u-d", role("approver", everywhere))),
+        roleApproval(human("u-e", role("approver", everywhere))),
       ],
     });
     expect(result.outcome).toBe("allow");
@@ -333,7 +347,10 @@ describe("approver eligibility", () => {
 
 describe("separation of duties by history", () => {
   const input = editablePolicyInput();
-  input.separationOfDuties = { requesterNeverApprovesSameType: true };
+  input.separationOfDuties = {
+    requesterNeverApprovesSameType: true,
+    exclusiveRequestAndApproveRoles: false,
+  };
   const history = compilePolicy(catalog, input);
   const historyDigest = requestDigest(history, request);
   const make = (approver: Subject) => ({ ...approval(approver), requestDigest: historyDigest });
@@ -374,7 +391,9 @@ describe("separation of duties by history", () => {
 
 describe("approval proofs", () => {
   const input = editablePolicyInput();
-  input.approvalRules = [{ ...input.approvalRules![0]!, requireProof: true }];
+  input.approvalRules = [
+    { ...input.approvalRules[0]!, requireProof: true, proofTypes: ["test-signature", "other"] },
+  ];
   const proofPolicy = compilePolicy(catalog, input);
   const proofDigest = requestDigest(proofPolicy, request);
 
@@ -427,8 +446,8 @@ describe("approval proofs", () => {
         approvals: [
           { approver: peerA, approvedAt: "2026-01-15T10:10:00.000Z", requestDigest: proofDigest },
           signed(peerB, undefined, { approverId: "u-a" }),
-          signed(human("u-c", role("lead")), undefined, { type: "other" }),
-          signed(human("u-d", role("lead")), { signedBy: "u-a", over: proofDigest }),
+          signed(human("u-c", role("lead", everywhere)), undefined, { type: "other" }),
+          signed(human("u-d", role("lead", everywhere)), { signedBy: "u-a", over: proofDigest }),
         ],
       },
       { verifiers: [verifier] },

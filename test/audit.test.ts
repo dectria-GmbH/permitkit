@@ -13,14 +13,18 @@ import {
   reevaluate,
   toDecisionRecord,
 } from "../src/index.js";
-import { accessRequest, human, role, viaAgent } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role, viaAgent, within } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
-const lead = human("u-lead", role("lead"));
+const lead = human("u-lead", role("lead", everywhere));
 
 describe("audit records", () => {
   it("records the decision with the actor chain and reproduces it", () => {
-    const subject = viaAgent(lead, "agent-1", { entries: [{ permissions: ["ticket:read"] }] });
+    const subject = viaAgent(lead, "agent-1", {
+      entries: [
+        { permissions: ["ticket:read"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
+    });
     const request = accessRequest(subject, "ticket:read", { id: "t-1" });
     const record = toDecisionRecord(request, decide(policy, request));
     expect(record.actorChain).toEqual([
@@ -63,7 +67,7 @@ describe("AuthZEN evaluate", () => {
       subject: {
         type: "human",
         id: "u-lead",
-        properties: { roles: [{ role: "lead", scope: {} }] },
+        properties: { roles: [{ role: "lead", scope: { kind: "all" } }], act: null },
       },
       action: { name: "refund" },
       resource: { type: "ticket", id: "t-1", properties: { amount: 1000 } },
@@ -81,7 +85,7 @@ describe("AuthZEN evaluate", () => {
       subject: {
         type: "human",
         id: "u-lead",
-        properties: { roles: [{ role: "lead", scope: {} }] },
+        properties: { roles: [{ role: "lead", scope: { kind: "all" } }], act: null },
       },
       action: { name: "read" },
       resource: { type: "ticket", id: "t-1" },
@@ -99,7 +103,7 @@ describe("AuthZEN evaluate", () => {
 
 describe("explain", () => {
   it("shows why a scoped grant did not match", () => {
-    const subject = human("u-s", role("support", { queue: ["billing"] }));
+    const subject = human("u-s", role("support", within({ queue: ["billing"] })));
     const result = explain(
       policy,
       accessRequest(subject, "ticket:read", { properties: { queue: "legal" } }),

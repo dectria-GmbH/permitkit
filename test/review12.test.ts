@@ -11,10 +11,10 @@ import {
   toDecisionRecord,
   decide,
 } from "../src/index.js";
-import { accessRequest, human, role } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
-const request = accessRequest(human("u-lead", role("lead")), "ticket:read");
+const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket:read");
 
 describe("exported helpers under a polluted Array.prototype", () => {
   it("parseRequest, toDecisionRecord and requestDigest do not throw raw errors", () => {
@@ -46,7 +46,7 @@ describe("exported helpers under a polluted Array.prototype", () => {
         writable: true,
       });
     }
-    expect(outcomes).toEqual([false, "permitkit.decision/1", "request_invalid"]);
+    expect(outcomes).toEqual([false, "permitkit.decision/2", "request_invalid"]);
   });
 });
 
@@ -65,9 +65,11 @@ describe("canonical JSON arrays", () => {
 describe("functions in the input", () => {
   it("never reach a proof verifier", async () => {
     const input = editablePolicyInput();
-    input.approvalRules = [{ ...input.approvalRules![0]!, approvers: 1, requireProof: true }];
+    input.approvalRules = [
+      { ...input.approvalRules[0]!, approvers: 1, requireProof: true, proofTypes: ["t"] },
+    ];
     const proofPolicy = compilePolicy(catalog, input);
-    const refund = accessRequest(human("u-req", role("lead")), "ticket:refund", {
+    const refund = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
       properties: { amount: 500 },
     });
     const digestValue = requestDigest(proofPolicy, refund);
@@ -79,7 +81,7 @@ describe("functions in the input", () => {
         now: "2026-01-15T10:30:00.000Z",
         approvals: [
           {
-            approver: human("u-a", role("lead")),
+            approver: human("u-a", role("lead", everywhere)),
             approvedAt: "2026-01-15T10:10:00.000Z",
             requestDigest: digestValue,
             proof: { type: "t", approverId: "u-a", requestDigest: digestValue, payload: () => 1 },

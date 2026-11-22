@@ -5,7 +5,7 @@ import {
   limitsHold,
   scopeCovers,
   scopeTouches,
-  thresholdApplies,
+  whenApplies,
   type LimitResult,
   type ScopeResult,
 } from "./engine/conditions.js";
@@ -172,7 +172,7 @@ function factsOf(subject: Subject): { types: Set<string>; held: Set<string> } {
   let facts = subjectFacts.get(subject);
   if (facts === undefined) {
     const types = new Set<string>([subject.type]);
-    if (subject.act !== undefined) types.add("agent");
+    if (subject.act !== null) types.add("agent");
     facts = { types, held: new Set(subject.roles.map((assignment) => assignment.role)) };
     subjectFacts.set(subject, facts);
   }
@@ -181,12 +181,12 @@ function factsOf(subject: Subject): { types: Set<string>; held: Set<string> } {
 
 function digestOfRequest(policy: CompiledPolicy, request: AccessRequest): string {
   const actors: unknown[] = [];
-  for (let actor = request.subject.act; actor !== undefined; actor = actor.act) {
+  for (let actor = request.subject.act; actor !== null; actor = actor.act) {
     const grant = actor.grant;
     actors.push({
       id: actor.id,
       grant:
-        grant === undefined
+        grant === null
           ? null
           : {
               id: grant.id,
@@ -194,13 +194,13 @@ function digestOfRequest(policy: CompiledPolicy, request: AccessRequest): string
               principalType: grant.principalType,
               agentId: grant.agentId,
               entries: grant.entries,
-              notBefore: grant.notBefore === undefined ? null : utc(grant.notBefore),
+              notBefore: grant.notBefore === null ? null : utc(grant.notBefore),
               expiresAt: utc(grant.expiresAt),
             },
     });
   }
   return digest({
-    schema: "permitkit.request/1",
+    schema: "permitkit.request/2",
     policy: { version: policy.version, digest: policy.digest },
     principal: { type: request.subject.type, id: request.subject.id },
     actors,
@@ -261,7 +261,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   if (!known) return deny("unknown_permission", requestDigestValue);
 
   const actor = request.subject.act;
-  if (actor !== undefined) {
+  if (actor !== null) {
     const reason = agentGrantValidity(actor, request.subject, now);
     trace?.push({
       step: "agent_grant",
@@ -274,8 +274,8 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
     // person behind the request, where the requester exclusion of dual approval cannot see them.
     // A revoked or expired grant upstream also ends the chain. Prior grants grant nothing, so
     // their coverage is not checked.
-    for (let prior = actor.act; prior !== undefined; prior = prior.act) {
-      if (prior.grant === undefined) continue;
+    for (let prior = actor.act; prior !== null; prior = prior.act) {
+      if (prior.grant === null) continue;
       const priorReason = agentGrantValidity(prior, request.subject, now);
       if (priorReason !== null) {
         const mapped =
@@ -352,7 +352,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   }
   if (matchedGrant === null) return deny(closestFailure ?? "no_grant", requestDigestValue);
 
-  if (actor?.grant !== undefined) {
+  if (actor !== null && actor.grant !== null) {
     let covered = false;
     actor.grant.entries.forEach((entry, index) => {
       if (covered) return;
@@ -368,8 +368,10 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   }
 
   const approvalRule = internal.approvalRules.get(permission);
+  const approverRoles =
+    approvalRule?.eligibleApprovers.kind === "roles" ? approvalRule.eligibleApprovers.roles : null;
   if (internal.separationOfDuties.exclusiveRequestAndApproveRoles && approvalRule !== undefined) {
-    const conflicting = (approvalRule.approverRoles ?? []).filter((role) => heldRoles.has(role));
+    const conflicting = (approverRoles ?? []).filter((role) => heldRoles.has(role));
     trace?.push({
       step: "separation_of_duties",
       ok: conflicting.length === 0,
@@ -379,7 +381,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   }
 
   if (approvalRule !== undefined) {
-    const applies = thresholdApplies(approvalRule.when, properties);
+    const applies = whenApplies(approvalRule.when, properties);
     trace?.push({ step: "approval_rule", id: approvalRule.id, applies });
     if (applies) {
       return {
@@ -390,7 +392,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
         approval: {
           ruleId: approvalRule.id,
           approvers: approvalRule.approvers,
-          approverRoles: approvalRule.approverRoles ?? null,
+          approverRoles,
           requireProof: approvalRule.requireProof,
           expiresAt: new Date(now + approvalRule.expiresInSeconds * 1000).toISOString(),
         },
@@ -414,15 +416,15 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
 /** Every time check is written so that an unreadable time counts as a failed check. */
 function agentGrantValidity(actor: Actor, principal: Subject, now: number): ReasonCode | null {
   const grant = actor.grant;
-  if (grant === undefined) return "agent_grant_missing";
+  if (grant === null) return "agent_grant_missing";
   if (grant.principalId !== principal.id || grant.principalType !== principal.type) {
     return "agent_grant_principal_mismatch";
   }
   if (grant.agentId !== actor.id) return "agent_grant_actor_mismatch";
-  if (grant.revokedAt !== undefined && !(instant(grant.revokedAt) > now)) {
+  if (grant.revokedAt !== null && !(instant(grant.revokedAt) > now)) {
     return "agent_grant_revoked";
   }
-  if (grant.notBefore !== undefined && !(instant(grant.notBefore) <= now)) {
+  if (grant.notBefore !== null && !(instant(grant.notBefore) <= now)) {
     return "agent_grant_not_yet_valid";
   }
   if (!(instant(grant.expiresAt) > now)) return "agent_grant_expired";

@@ -66,17 +66,20 @@ describe("policy validation", () => {
 
   it("rejects scope and limit names that the resource type does not declare", () => {
     const input = editablePolicyInput();
-    input.roles["auditor"]!.grants[0]!.scope = { queue: ["x"] };
-    input.roles["support"]!.grants[1]!.limits = { weight: { max: 1 } };
+    input.roles["auditor"]!.grants[0]!.scope = { kind: "match", properties: { queue: ["x"] } };
+    input.roles["support"]!.grants[1]!.limits = {
+      kind: "range",
+      properties: { weight: { max: 1 } },
+    };
     const paths = issuesOf(() => compilePolicy(catalog, input)).map((item) => item.path);
-    expect(paths).toContain("roles.auditor.grants.0.scope.queue");
-    expect(paths).toContain("roles.support.grants.1.limits.weight");
+    expect(paths).toContain("roles.auditor.grants.0.scope.properties.queue");
+    expect(paths).toContain("roles.support.grants.1.limits.properties.weight");
   });
 
   it("rejects duplicate rule ids and unknown role references", () => {
     const input = editablePolicyInput();
-    input.denies![0]!.id = "support-work";
-    input.denies![1]!.roles = ["ghost"];
+    input.denies[0]!.id = "support-work";
+    input.denies[1]!.roles = ["ghost"];
     const messages = issuesOf(() => compilePolicy(catalog, input)).map((item) => item.message);
     expect(messages.some((message) => message.includes("also used"))).toBe(true);
     expect(messages.some((message) => message.includes("ghost"))).toBe(true);
@@ -84,28 +87,31 @@ describe("policy validation", () => {
 
   it("rejects two approval rules for one permission", () => {
     const input = editablePolicyInput();
-    input.approvalRules!.push({ ...input.approvalRules![0]!, id: "refund-other" });
+    input.approvalRules.push({ ...input.approvalRules[0]!, id: "refund-other" });
     expect(issuesOf(() => compilePolicy(catalog, input))[0]?.message).toMatch(/already has/);
   });
 
   it("requires approver roles when exclusive roles are switched on", () => {
     const input = editablePolicyInput();
-    input.separationOfDuties = { exclusiveRequestAndApproveRoles: true };
+    input.separationOfDuties = {
+      exclusiveRequestAndApproveRoles: true,
+      requesterNeverApprovesSameType: false,
+    };
     expect(issuesOf(() => compilePolicy(catalog, input))[0]?.path).toBe(
-      "approvalRules.0.approverRoles",
+      "approvalRules.0.eligibleApprovers",
     );
   });
 
   it("rejects approval rules with no approvers or a too short window", () => {
     const input = editablePolicyInput();
-    input.approvalRules![0]!.approvers = 0;
-    input.approvalRules![0]!.expiresInSeconds = 10;
+    input.approvalRules[0]!.approvers = 0;
+    input.approvalRules[0]!.expiresInSeconds = 10;
     expect(issuesOf(() => compilePolicy(catalog, input))).toHaveLength(2);
   });
 
   it("rejects an empty scope value list", () => {
     const input = editablePolicyInput();
-    input.roles["auditor"]!.grants[0]!.scope = { project: [] };
+    input.roles["auditor"]!.grants[0]!.scope = { kind: "match", properties: { project: [] } };
     expect(issuesOf(() => compilePolicy(catalog, input))).toHaveLength(1);
   });
 
@@ -133,12 +139,25 @@ describe("compiled policy", () => {
   it("has a stable digest that changes with any rule", () => {
     expect(compilePolicy(catalog, editablePolicyInput()).digest).toBe(policy.digest);
     const input = editablePolicyInput();
-    input.roles["support"]!.grants[1]!.limits = { amount: { max: 501 } };
+    input.roles["support"]!.grants[1]!.limits = {
+      kind: "range",
+      properties: { amount: { max: 501 } },
+    };
     expect(compilePolicy(catalog, input).digest).not.toBe(policy.digest);
   });
 
   it("applies schema defaults", () => {
-    const minimal = compilePolicy(catalog, { schema: 1, version: "v1", roles: {} });
+    const minimal = compilePolicy(catalog, {
+      schema: 2,
+      version: "v1",
+      roles: {},
+      denies: [],
+      approvalRules: [],
+      separationOfDuties: {
+        requesterNeverApprovesSameType: false,
+        exclusiveRequestAndApproveRoles: false,
+      },
+    });
     expect(minimal.document.denies).toEqual([]);
     expect(minimal.document.separationOfDuties).toEqual({
       requesterNeverApprovesSameType: false,

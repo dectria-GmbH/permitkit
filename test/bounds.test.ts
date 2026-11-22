@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { boundedSnapshot, requestBounds } from "../src/bounds.js";
 import { compilePolicy, decide, evaluateApprovals, explain, PermitkitError } from "../src/index.js";
-import { accessRequest, human, role } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role, within } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
-const lead = human("u-lead", role("lead"));
+const lead = human("u-lead", role("lead", everywhere));
 
 describe("input size bounds", () => {
   it("denies a request with an oversized array before schema validation", () => {
@@ -34,7 +34,7 @@ describe("input size bounds", () => {
       now: "2026-01-15T10:30:00.000Z",
       approvals,
     });
-    expect(result.reason).toBe("invalid_input");
+    expect(result.reason).toBe("too_many_approvals");
     const input = editablePolicyInput();
     input.roles["support"]!.grants[0]!.permissions = Array.from(
       { length: 20_000 },
@@ -52,7 +52,7 @@ describe("input size bounds", () => {
   });
 
   it("does not let a __proto__ property match a scope", () => {
-    const scoped = human("u-s", role("support", { queue: ["billing"] }));
+    const scoped = human("u-s", role("support", within({ queue: ["billing"] })));
     const properties = JSON.parse('{"__proto__": {"queue": "billing"}}') as Record<string, string>;
     const request = accessRequest(scoped, "ticket:read", { properties });
     expect(decide(policy, request).outcome).toBe("deny");

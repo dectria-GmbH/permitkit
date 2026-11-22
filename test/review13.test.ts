@@ -2,14 +2,18 @@
 import { describe, expect, it } from "vitest";
 
 import { decide } from "../src/index.js";
-import { accessRequest, human, role, viaAgent } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role, viaAgent } from "../src/testing/index.js";
 import { policy } from "./fixtures.js";
 
-const lead = human("u-lead", role("lead"));
+const lead = human("u-lead", role("lead", everywhere));
 
 describe("prior actor grants", () => {
   it("ends the chain when an upstream grant is revoked, expired or not yet valid", () => {
-    const current = viaAgent(lead, "bot-b", { entries: [{ permissions: ["ticket:close"] }] });
+    const current = viaAgent(lead, "bot-b", {
+      entries: [
+        { permissions: ["ticket:close"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
+    });
     const cases: [Record<string, string>, string][] = [
       [{ revokedAt: "2020-01-01T00:00:00Z" }, "agent_grant_revoked"],
       [{ expiresAt: "2021-01-01T00:00:00Z" }, "agent_grant_expired"],
@@ -17,7 +21,9 @@ describe("prior actor grants", () => {
     ];
     for (const [times, reason] of cases) {
       const prior = viaAgent(lead, "bot-a", {
-        entries: [{ permissions: ["ticket:read"] }],
+        entries: [
+          { permissions: ["ticket:read"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+        ],
         ...times,
       });
       const subject = { ...current, act: { ...current.act!, act: prior.act } };

@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { compilePolicy, decide, evaluateApprovals, requestDigest } from "../src/index.js";
-import { accessRequest, human, role } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 afterEach(() => {
@@ -15,18 +15,18 @@ function deletingAssignment(): object {
       delete (this as Record<string, unknown>)["scope"];
       return "support";
     },
-    scope: { queue: ["billing"] },
+    scope: { kind: "match", properties: { queue: ["billing"] } },
   };
 }
 
 function reparentingAssignment(): object {
   return {
     get role() {
-      Object.setPrototypeOf(this, { scope: {} });
+      Object.setPrototypeOf(this, { scope: { kind: "all" } });
       delete (this as Record<string, unknown>)["scope"];
       return "support";
     },
-    scope: { queue: ["billing"] },
+    scope: { kind: "match", properties: { queue: ["billing"] } },
   };
 }
 
@@ -35,7 +35,7 @@ describe("accessor properties in the input", () => {
     // The test simulates a prototype-pollution bug elsewhere in the process.
     // oxlint-disable-next-line no-extend-native
     Object.defineProperty(Object.prototype, "scope", {
-      value: {},
+      value: { kind: "all" },
       configurable: true,
       writable: true,
     });
@@ -49,17 +49,21 @@ describe("accessor properties in the input", () => {
   it("does not count an approver whose assignment uses such a getter", async () => {
     const input = editablePolicyInput();
     input.approvalRules = [
-      { ...input.approvalRules![0]!, approvers: 1, approverRoles: ["approver"] },
+      {
+        ...input.approvalRules[0]!,
+        approvers: 1,
+        eligibleApprovers: { kind: "roles", roles: ["approver"] },
+      },
     ];
     const withRoles = compilePolicy(catalog, input);
-    const request = accessRequest(human("u-req", role("lead")), "ticket:refund", {
+    const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
       properties: { amount: 500, queue: "other" },
     });
     const digestValue = requestDigest(withRoles, request);
     // The test simulates a prototype-pollution bug elsewhere in the process.
     // oxlint-disable-next-line no-extend-native
     Object.defineProperty(Object.prototype, "scope", {
-      value: {},
+      value: { kind: "all" },
       configurable: true,
       writable: true,
     });
@@ -68,14 +72,14 @@ describe("accessor properties in the input", () => {
         delete (this as Record<string, unknown>)["scope"];
         return "approver";
       },
-      scope: { queue: ["billing"] },
+      scope: { kind: "match", properties: { queue: ["billing"] } },
     };
     const result = await evaluateApprovals(withRoles, {
       request,
       now: "2026-01-15T10:30:00.000Z",
       approvals: [
         {
-          approver: { type: "human", id: "u-a", roles: [sneaky] },
+          approver: { type: "human", id: "u-a", roles: [sneaky], act: null },
           approvedAt: "2026-01-15T10:10:00.000Z",
           requestDigest: digestValue,
         },

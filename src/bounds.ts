@@ -24,13 +24,26 @@ export const requestBounds: InputBounds = Object.freeze({
 });
 
 /**
- * Bounds for inputs that wrap a request: approval inputs and audit records. The request inside
- * is checked again with requestBounds, so a request at the limit can still be approved or
- * replayed.
+ * Bounds for audit records, which wrap a request. The request inside is checked again with
+ * requestBounds, so a request at the limit can still be replayed.
  */
 export const wrapperBounds: InputBounds = Object.freeze({
   maxDepth: 24,
   maxNodes: 300_000,
+  maxArrayLength: 1_000,
+  maxStringLength: 4_096,
+});
+
+/** The most approvals that one evaluateApprovals call reads. Twice the largest `approvers`. */
+export const maxApprovals = 20;
+
+/**
+ * Bounds for approval inputs: the request (which must also meet requestBounds), up to
+ * maxApprovals approvals and the prior-request history.
+ */
+export const approvalInputBounds: InputBounds = Object.freeze({
+  maxDepth: 24,
+  maxNodes: 100_000,
   maxArrayLength: 1_000,
   maxStringLength: 4_096,
 });
@@ -79,25 +92,62 @@ export function detach<T>(value: T): T {
  * so the schema still rejects functions, symbols and similar values.
  */
 export function boundedSnapshot(value: unknown, bounds: InputBounds): unknown {
-  const state = { nodes: 0 };
+  const result = snapshotOf(value, bounds);
+  return result.ok ? result.value : undefined;
+}
+
+export type SnapshotResult =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly reason: "too_large" | "not_plain" };
+
+/** Like boundedSnapshot, but says whether the input was too large or not plain data. */
+export function snapshotOf(value: unknown, bounds: InputBounds): SnapshotResult {
+  const state = { nodes: 0, tooLarge: false };
   try {
     const copy = clone(value, 0, bounds, state);
-    return copy === unusable ? undefined : copy;
+    if (copy !== unusable) return { ok: true, value: copy };
+    return { ok: false, reason: state.tooLarge ? "too_large" : "not_plain" };
   } catch {
     // A throwing getter or a revoked proxy: treat the input as unusable.
-    return undefined;
+    return { ok: false, reason: "not_plain" };
   }
+}
+
+/**
+ * The length of an own data property that holds a plain array, read without running caller
+ * code and without copying. Undefined for anything else; the full snapshot then decides.
+ */
+export function ownArrayLength(value: unknown, key: string): number | undefined {
+  if (typeof value !== "object" || value === null || types.isProxy(value)) return undefined;
+  const item = dataValue(value, key);
+  if (!Array.isArray(item) || types.isProxy(item)) return undefined;
+  const length: unknown = dataValue(item, "length");
+  return typeof length === "number" ? length : undefined;
+}
+
+/** An own data property, read without running caller code. Undefined for anything else. */
+export function ownDataValue(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null || types.isProxy(value)) return undefined;
+  const item = dataValue(value, key);
+  return item === unusable ? undefined : item;
 }
 
 function clone(
   value: unknown,
   depth: number,
   bounds: InputBounds,
-  state: { nodes: number },
+  state: { nodes: number; tooLarge: boolean },
 ): unknown {
   state.nodes += 1;
-  if (state.nodes > bounds.maxNodes || depth > bounds.maxDepth) return unusable;
-  if (typeof value === "string") return value.length > bounds.maxStringLength ? unusable : value;
+  if (state.nodes > bounds.maxNodes || depth > bounds.maxDepth) {
+    state.tooLarge = true;
+    return unusable;
+  }
+  if (typeof value === "string") {
+    if (value.length <= bounds.maxStringLength) return value;
+    state.tooLarge = true;
+    return unusable;
+  }
   // Functions, symbols and bigints are not JSON data. Unusable, so nothing else can reach them.
   if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
     return unusable;
@@ -113,7 +163,10 @@ function clone(
   if (Array.isArray(value)) {
     if (prototype !== Array.prototype) return unusable;
     const length: number = value.length;
-    if (length > bounds.maxArrayLength) return unusable;
+    if (length > bounds.maxArrayLength) {
+      state.tooLarge = true;
+      return unusable;
+    }
     // Own keys of a plain array are its indices plus "length". Fewer means holes, more means
     // named or symbol properties.
     if (Reflect.ownKeys(value).length !== length + 1) return unusable;
@@ -130,12 +183,18 @@ function clone(
   }
   if (prototype !== Object.prototype && prototype !== null) return unusable;
   const keys = Object.keys(value);
-  if (keys.length > bounds.maxArrayLength) return unusable;
+  if (keys.length > bounds.maxArrayLength) {
+    state.tooLarge = true;
+    return unusable;
+  }
   if (Reflect.ownKeys(value).length !== keys.length) return unusable;
   // A null prototype: a missing key reads as undefined even if Object.prototype was polluted.
   const result: Record<string, unknown> = Object.create(null);
   for (const key of keys) {
-    if (key.length > bounds.maxStringLength) return unusable;
+    if (key.length > bounds.maxStringLength) {
+      state.tooLarge = true;
+      return unusable;
+    }
     const property = dataValue(value, key);
     if (property === unusable) return unusable;
     // JSON has no undefined. A key set to undefined counts as absent, so `{ max: undefined }`

@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import { compilePolicy, decide, PermitkitError, type CompiledPolicy } from "../src/index.js";
-import { accessRequest, fixedNow, human, role, service } from "../src/testing/index.js";
+import {
+  accessRequest,
+  everywhere,
+  fixedNow,
+  human,
+  role,
+  service,
+  within,
+} from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
-const support = human("u-support", role("support"));
-const lead = human("u-lead", role("lead"));
+const support = human("u-support", role("support", everywhere));
+const lead = human("u-lead", role("lead", everywhere));
 
 describe("deny by default", () => {
   it("denies a subject without roles", () => {
@@ -19,13 +27,19 @@ describe("deny by default", () => {
   });
 
   it("denies a subject whose role is not in the policy", () => {
-    const decision = decide(policy, accessRequest(human("u-x", role("ghost")), "ticket:read"));
+    const decision = decide(
+      policy,
+      accessRequest(human("u-x", role("ghost", everywhere)), "ticket:read"),
+    );
     expect(decision.reason).toBe("no_grant");
   });
 
   it("denies a role name that only exists on Object.prototype", () => {
     for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
-      const decision = decide(policy, accessRequest(human("u-x", role(name)), "ticket:read"));
+      const decision = decide(
+        policy,
+        accessRequest(human("u-x", role(name, everywhere)), "ticket:read"),
+      );
       expect({ name, outcome: decision.outcome }).toEqual({ name, outcome: "deny" });
     }
   });
@@ -55,7 +69,7 @@ describe("deny by default", () => {
   it("allows a service principal with a role", () => {
     const decision = decide(
       policy,
-      accessRequest(service("svc-sync", role("support")), "ticket:read"),
+      accessRequest(service("svc-sync", role("support", everywhere)), "ticket:read"),
     );
     expect(decision.outcome).toBe("allow");
   });
@@ -109,7 +123,7 @@ describe("policy version", () => {
 });
 
 describe("scopes", () => {
-  const scopedSupport = human("u-s", role("support", { queue: ["billing", "general"] }));
+  const scopedSupport = human("u-s", role("support", within({ queue: ["billing", "general"] })));
 
   it("allows inside the assignment scope", () => {
     const request = accessRequest(scopedSupport, "ticket:read", {
@@ -137,7 +151,7 @@ describe("scopes", () => {
   });
 
   it("denies when the resource is outside the grant scope", () => {
-    const auditor = human("u-a", role("auditor"));
+    const auditor = human("u-a", role("auditor", everywhere));
     const inside = accessRequest(auditor, "report:read", { properties: { project: "alpha" } });
     const outside = accessRequest(auditor, "report:read", { properties: { project: "beta" } });
     expect(decide(policy, inside).outcome).toBe("allow");
@@ -147,7 +161,7 @@ describe("scopes", () => {
   it("does not read inherited properties for scope checks", () => {
     const tricky = human(
       "u-t",
-      role("support", { queue: ["function Object() { [native code] }"] }),
+      role("support", within({ queue: ["function Object() { [native code] }"] })),
     );
     const request = accessRequest(tricky, "ticket:read", { properties: {} });
     expect(decide(policy, request).reason).toBe("scope_mismatch");
@@ -156,8 +170,8 @@ describe("scopes", () => {
   it("uses any assignment that covers the resource", () => {
     const twoScopes = human(
       "u-2",
-      role("support", { queue: ["billing"] }),
-      role("support", { queue: ["legal"] }),
+      role("support", within({ queue: ["billing"] })),
+      role("support", within({ queue: ["legal"] })),
     );
     const request = accessRequest(twoScopes, "ticket:read", { properties: { queue: "legal" } });
     expect(decide(policy, request).outcome).toBe("allow");
@@ -235,18 +249,23 @@ describe("approval rules", () => {
 
 describe("separation of duties at request time", () => {
   const input = editablePolicyInput();
-  input.separationOfDuties = { exclusiveRequestAndApproveRoles: true };
-  input.approvalRules = [{ ...input.approvalRules![0]!, approverRoles: ["approver"] }];
+  input.separationOfDuties = {
+    exclusiveRequestAndApproveRoles: true,
+    requesterNeverApprovesSameType: false,
+  };
+  input.approvalRules = [
+    { ...input.approvalRules[0]!, eligibleApprovers: { kind: "roles", roles: ["approver"] } },
+  ];
   const strict = compilePolicy(catalog, input);
 
   it("denies a requester who also holds an approving role", () => {
-    const both = human("u-both", role("lead"), role("approver"));
+    const both = human("u-both", role("lead", everywhere), role("approver", everywhere));
     const request = accessRequest(both, "ticket:refund", { properties: { amount: 10 } });
     expect(decide(strict, request).reason).toBe("sod_role_conflict");
   });
 
   it("allows the same request when the setting is off", () => {
-    const both = human("u-both", role("lead"), role("approver"));
+    const both = human("u-both", role("lead", everywhere), role("approver", everywhere));
     const request = accessRequest(both, "ticket:refund", { properties: { amount: 10 } });
     expect(decide(policy, request).outcome).toBe("allow");
   });

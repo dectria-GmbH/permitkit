@@ -10,7 +10,7 @@ import {
   PermitkitError,
   requestDigest,
 } from "../src/index.js";
-import { accessRequest, human, role } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role, within } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 afterEach(() => {
@@ -38,9 +38,13 @@ function nonPlainScopes(): unknown[] {
 
 describe("non-plain scopes never read as everywhere", () => {
   it("denies a role assignment whose scope is not a plain object", () => {
-    const plain = accessRequest(human("u", role("lead", { queue: ["billing"] })), "ticket:read", {
-      properties: { queue: "vip" },
-    });
+    const plain = accessRequest(
+      human("u", role("lead", within({ queue: ["billing"] }))),
+      "ticket:read",
+      {
+        properties: { queue: "vip" },
+      },
+    );
     expect(decide(policy, plain).reason).toBe("scope_mismatch");
     for (const scope of nonPlainScopes()) {
       const request = {
@@ -59,8 +63,8 @@ describe("non-plain scopes never read as everywhere", () => {
   });
 
   it("rejects an array with extra named properties", () => {
-    const plain = accessRequest(human("u", role("lead")), "ticket:read");
-    const roles = Object.assign([{ role: "lead", scope: {} }], { extra: true });
+    const plain = accessRequest(human("u", role("lead", everywhere)), "ticket:read");
+    const roles = Object.assign([{ role: "lead", scope: { kind: "all" } }], { extra: true });
     expect(decide(policy, { ...plain, subject: { ...plain.subject, roles } }).reason).toBe(
       "invalid_request",
     );
@@ -69,10 +73,14 @@ describe("non-plain scopes never read as everywhere", () => {
   it("does not count an approver whose assignment scope is not a plain object", async () => {
     const input = editablePolicyInput();
     input.approvalRules = [
-      { ...input.approvalRules![0]!, approvers: 1, approverRoles: ["approver"] },
+      {
+        ...input.approvalRules[0]!,
+        approvers: 1,
+        eligibleApprovers: { kind: "roles", roles: ["approver"] },
+      },
     ];
     const withRoles = compilePolicy(catalog, input);
-    const request = accessRequest(human("u-req", role("lead")), "ticket:refund", {
+    const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
       properties: { amount: 500, queue: "vip" },
     });
     const digestValue = requestDigest(withRoles, request);
@@ -81,6 +89,7 @@ describe("non-plain scopes never read as everywhere", () => {
         type: "human",
         id: "u-a",
         roles: [{ role: "approver", scope: new Map([["queue", ["billing"]]]) }],
+        act: null,
       },
       approvedAt: "2026-01-15T10:10:00.000Z",
       requestDigest: digestValue,
@@ -97,8 +106,9 @@ describe("non-plain scopes never read as everywhere", () => {
     class LimitedGrant {
       id = "g";
       permissions = ["ticket:refund"];
+      scope = { kind: "all" as const };
       get limits() {
-        return { amount: { max: 10 } };
+        return { kind: "range" as const, properties: { amount: { max: 10 } } };
       }
     }
     const variants: ((input: ReturnType<typeof editablePolicyInput>) => void)[] = [

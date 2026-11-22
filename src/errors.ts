@@ -2,6 +2,7 @@
 export type ErrorCode =
   | "catalog_invalid"
   | "policy_invalid"
+  | "policy_schema_unsupported"
   | "not_canonical"
   | "policy_unknown"
   | "request_invalid"
@@ -17,6 +18,8 @@ export interface PolicyIssue {
 const errorHints: Record<ErrorCode, string> = {
   catalog_invalid: "Fix the catalogue definition in code. Names must match /^[a-z][a-z0-9_-]*$/.",
   policy_invalid: "Fix the policy document. Each issue names its path and a hint.",
+  policy_schema_unsupported:
+    "Rewrite the policy document in the current schema. permitkit does not migrate old documents.",
   not_canonical:
     "Pass only JSON values: plain objects, arrays, strings, finite numbers, booleans, null.",
   options_invalid: "Pass options as { verifiers: [...] } with one verifier per proof type.",

@@ -1,12 +1,14 @@
 /**
  * Test helpers for code that uses permitkit. They throw plain errors, so they work with any
- * test runner. Nothing here is needed at run time, and the defaults are for tests only:
- * `role(name)` has the scope `{}` (everywhere), and `accessRequest` uses the fixed `fixedNow`.
+ * test runner. Nothing here is needed at run time. Scopes and limits are never defaulted: pass
+ * `everywhere`, `within(...)`, `unlimited` or `range(...)`. The time defaults are for tests
+ * only: `accessRequest` uses the fixed `fixedNow`, and `viaAgent` grants run until 2099 with
+ * `notBefore` and `revokedAt` set to `null` unless given. Do not build production grants with it.
  */
 
 import { compareText } from "../canonical.js";
 import { decide, explain, permissionOf, type Decision, type Outcome } from "../decide.js";
-import type { CompiledPolicy, Scope } from "../policy.js";
+import type { CompiledPolicy, Limits, Scope } from "../policy.js";
 import type { ReasonCode } from "../reasons.js";
 import type {
   AccessRequest,
@@ -20,24 +22,43 @@ import type {
 /** A fixed evaluation time for tests. */
 export const fixedNow = "2026-01-15T10:00:00.000Z";
 
-export function role(name: string, scope: Scope = {}): RoleAssignment {
+/** The explicit "everywhere" scope. */
+export const everywhere: Scope = Object.freeze({ kind: "all" });
+
+/** A match scope over the given properties. */
+export function within(properties: Record<string, string[]>): Scope {
+  return { kind: "match", properties };
+}
+
+/** The explicit "no limit" value. */
+export const unlimited: Limits = Object.freeze({ kind: "unlimited" });
+
+/** A range limit over the given properties. */
+export function range(properties: Record<string, { min?: number; max?: number }>): Limits {
+  return { kind: "range", properties };
+}
+
+/** A role assignment. The scope is required: pass `everywhere` for everywhere. */
+export function role(name: string, scope: Scope): RoleAssignment {
   return { role: name, scope };
 }
 
+/** A human principal acting directly (`act: null`). */
 export function human(id: string, ...roles: RoleAssignment[]): Subject {
-  return { type: "human", id, roles };
+  return { type: "human", id, roles, act: null };
 }
 
+/** A service principal acting directly (`act: null`). */
 export function service(id: string, ...roles: RoleAssignment[]): Subject {
-  return { type: "service", id, roles };
+  return { type: "service", id, roles, act: null };
 }
 
 export interface AgentGrantOptions {
   id?: string;
   entries: AgentGrantEntry[];
   expiresAt?: string;
-  notBefore?: string;
-  revokedAt?: string;
+  notBefore?: string | null;
+  revokedAt?: string | null;
 }
 
 /** The principal with an agent as the current actor, holding a grant from that principal. */
@@ -49,10 +70,10 @@ export function viaAgent(principal: Subject, agentId: string, options: AgentGran
     agentId,
     entries: options.entries,
     expiresAt: options.expiresAt ?? "2099-01-01T00:00:00.000Z",
-    ...(options.notBefore === undefined ? {} : { notBefore: options.notBefore }),
-    ...(options.revokedAt === undefined ? {} : { revokedAt: options.revokedAt }),
+    notBefore: options.notBefore ?? null,
+    revokedAt: options.revokedAt ?? null,
   };
-  return { ...principal, act: { type: "agent", id: agentId, grant } };
+  return { ...principal, act: { type: "agent", id: agentId, grant, act: null } };
 }
 
 /** Builds a request from a permission name such as `ticket:close`. */

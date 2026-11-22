@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import { decide } from "../src/index.js";
-import { accessRequest, human, role, viaAgent } from "../src/testing/index.js";
+import {
+  accessRequest,
+  everywhere,
+  human,
+  role,
+  unlimited,
+  viaAgent,
+  within,
+} from "../src/testing/index.js";
 import { policy } from "./fixtures.js";
 
-const support = human("u-support", role("support", { queue: ["billing", "general"] }));
-const readBilling = [{ permissions: ["ticket:read"], scope: { queue: ["billing"] } }];
+const support = human("u-support", role("support", within({ queue: ["billing", "general"] })));
+const readBilling = [
+  { permissions: ["ticket:read"], scope: within({ queue: ["billing"] }), limits: unlimited },
+];
 
 describe("agents acting for a principal", () => {
   it("allows what both the principal and the grant cover", () => {
@@ -31,7 +41,13 @@ describe("agents acting for a principal", () => {
 
   it("denies above a grant limit even inside the principal limit", () => {
     const subject = viaAgent(support, "agent-1", {
-      entries: [{ permissions: ["ticket:refund"], limits: { amount: { max: 20 } } }],
+      entries: [
+        {
+          permissions: ["ticket:refund"],
+          limits: { kind: "range", properties: { amount: { max: 20 } } },
+          scope: { kind: "all" },
+        },
+      ],
     });
     const ok = accessRequest(subject, "ticket:refund", {
       properties: { amount: 20, queue: "billing" },
@@ -44,17 +60,25 @@ describe("agents acting for a principal", () => {
   });
 
   it("denies when the grant names a permission that the principal lacks", () => {
-    const subject = viaAgent(support, "agent-1", { entries: [{ permissions: ["ticket:delete"] }] });
+    const subject = viaAgent(support, "agent-1", {
+      entries: [
+        { permissions: ["ticket:delete"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
+    });
     const request = accessRequest(subject, "ticket:delete", { properties: { queue: "billing" } });
     expect(decide(policy, request).outcome).toBe("deny");
-    const wide = viaAgent(support, "agent-1", { entries: [{ permissions: ["ticket:read"] }] });
+    const wide = viaAgent(support, "agent-1", {
+      entries: [
+        { permissions: ["ticket:read"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
+    });
     const outside = accessRequest(wide, "ticket:read", { properties: { queue: "legal" } });
     expect(decide(policy, outside).reason).toBe("scope_mismatch");
   });
 
   it("denies when the agent has no grant", () => {
     const request = accessRequest(
-      { ...support, act: { type: "agent", id: "agent-1" } },
+      { ...support, act: { type: "agent", id: "agent-1", grant: null, act: null } },
       "ticket:read",
       { properties: { queue: "billing" } },
     );
@@ -62,7 +86,9 @@ describe("agents acting for a principal", () => {
   });
 
   it("denies when the grant belongs to another principal", () => {
-    const other = viaAgent(human("u-other", role("support")), "agent-1", { entries: readBilling });
+    const other = viaAgent(human("u-other", role("support", everywhere)), "agent-1", {
+      entries: readBilling,
+    });
     const subject = { ...support, act: other.act };
     const request = accessRequest(subject, "ticket:read", { properties: { queue: "billing" } });
     expect(decide(policy, request).reason).toBe("agent_grant_principal_mismatch");
@@ -104,8 +130,12 @@ describe("agents acting for a principal", () => {
   });
 
   it("applies deny rules for agents to the principal's own rights", () => {
-    const lead = human("u-lead", role("lead"));
-    const subject = viaAgent(lead, "agent-1", { entries: [{ permissions: ["ticket:delete"] }] });
+    const lead = human("u-lead", role("lead", everywhere));
+    const subject = viaAgent(lead, "agent-1", {
+      entries: [
+        { permissions: ["ticket:delete"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
+    });
     expect(decide(policy, accessRequest(lead, "ticket:delete")).outcome).toBe("allow");
     expect(decide(policy, accessRequest(subject, "ticket:delete"))).toMatchObject({
       reason: "denied_by_rule",
@@ -117,14 +147,22 @@ describe("agents acting for a principal", () => {
     const subject = viaAgent(support, "agent-2", { entries: readBilling });
     const withPrior = {
       ...subject,
-      act: { ...subject.act!, act: { type: "agent" as const, id: "agent-1" } },
+      act: {
+        ...subject.act!,
+        act: { type: "agent" as const, id: "agent-1", grant: null, act: null },
+      },
     };
     const request = accessRequest(withPrior, "ticket:read", { properties: { queue: "billing" } });
     expect(decide(policy, request).outcome).toBe("allow");
 
-    let deep: { type: "agent"; id: string; act?: unknown } = { type: "agent", id: "a0" };
+    let deep: { type: "agent"; id: string; grant: null; act: unknown } = {
+      type: "agent",
+      id: "a0",
+      grant: null,
+      act: null,
+    };
     for (let index = 1; index <= 5; index += 1)
-      deep = { type: "agent", id: `a${index}`, act: deep };
+      deep = { type: "agent", id: `a${index}`, act: deep, grant: null };
     const tooDeep = { ...subject, act: { ...subject.act!, act: deep } };
     expect(
       decide(

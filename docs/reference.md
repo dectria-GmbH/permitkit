@@ -10,7 +10,7 @@ an unknown decision reason as a deny. The exported objects `reasonCodes`, `reaso
 | -------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------- |
 | `granted`                        | `allow`             | A grant of one of the subject's roles covers the request.                                               |
 | `approval_required`              | `approval_required` | A grant covers the request, and a dual-approval rule applies to it.                                     |
-| `invalid_request`                | `deny`              | The request does not match the schema or exceeds the size bounds.                                       |
+| `invalid_request`                | `deny`              | The request does not match the schema or exceeds the size bounds, for example a missing or empty scope. |
 | `policy_version_mismatch`        | `deny`              | The request pins a policy version or digest that is not the loaded policy.                              |
 | `unknown_permission`             | `deny`              | The permission is not in the catalogue.                                                                 |
 | `no_grant`                       | `deny`              | No grant of the subject's roles includes the permission.                                                |
@@ -43,7 +43,9 @@ that would be valid.
 | `requester_denied`               | `deny`    | The requester no longer holds the permission. See `requesterDecision`.        |
 | `not_approvable_at_request_time` | `deny`    | At its request time, the request was not `approval_required` under this rule. |
 | `sod_history_missing`            | `deny`    | The prior-request check is on, but the input has no `priorRequests`.          |
-| `invalid_input`                  | `deny`    | The input does not match the schema, exceeds the bounds, or is inconsistent.  |
+| `too_many_approvals`             | `deny`    | The input holds more than 20 approvals. Checked before any other work.        |
+| `input_too_large`                | `deny`    | The request or the whole input exceeds the size bounds below.                 |
+| `invalid_input`                  | `deny`    | The input does not match the schema, is not plain data, or is inconsistent.   |
 
 ## Approval rejections (`ApprovalDecision.rejected`)
 
@@ -74,15 +76,19 @@ that would be valid.
 permitkit throws only for programming and configuration errors. Decisions never throw for bad
 requests, including throwing getters and revoked proxies; they deny. `catalog_invalid` is also
 thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
+`canonicalJson` and `digest` throw `not_canonical`, never a raw error: for proxies, objects other
+than plain objects and arrays, symbol or non-enumerable keys, getters and setters (which are not
+run), array holes and named array properties, and input too deep to walk.
 
-| Code              | Thrown by                                                                                              | Meaning                                                                    |
-| ----------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| `catalog_invalid` | `defineCatalog`                                                                                        | The catalogue definition is not valid. See `issues`.                       |
-| `policy_invalid`  | `compilePolicy`                                                                                        | The policy document is not valid. See `issues`.                            |
-| `policy_unknown`  | `decide`, `explain`, `evaluate`, `evaluateApprovals`, `reevaluate`, `decideAndRecord`, `requestDigest` | The policy did not come from `compilePolicy`.                              |
-| `request_invalid` | `requestDigest`                                                                                        | The request does not match the schema.                                     |
-| `options_invalid` | `evaluateApprovals`                                                                                    | The options are not `{ verifiers: [...] }`, or two verifiers share a type. |
-| `not_canonical`   | `canonicalJson`, `digest`                                                                              | The value has no exact JSON form.                                          |
+| Code                        | Thrown by                                                                                              | Meaning                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| `catalog_invalid`           | `defineCatalog`                                                                                        | The catalogue definition is not valid. See `issues`.                       |
+| `policy_invalid`            | `compilePolicy`                                                                                        | The policy document is not valid. See `issues`.                            |
+| `policy_schema_unsupported` | `compilePolicy`                                                                                        | The document has another `schema` value than 2. No automatic migration.    |
+| `policy_unknown`            | `decide`, `explain`, `evaluate`, `evaluateApprovals`, `reevaluate`, `decideAndRecord`, `requestDigest` | The policy did not come from `compilePolicy`.                              |
+| `request_invalid`           | `requestDigest`                                                                                        | The request does not match the schema.                                     |
+| `options_invalid`           | `evaluateApprovals`                                                                                    | The options are not `{ verifiers: [...] }`, or two verifiers share a type. |
+| `not_canonical`             | `canonicalJson`, `digest`                                                                              | The value has no exact JSON form, or is not plain data.                    |
 
 Each `PermitkitError` has `code`, `hint` and, for validation errors, `issues` with `path`,
 `message` and `hint`.
@@ -94,7 +100,33 @@ that is not plain data (objects other than plain objects and arrays, hidden keys
 unusable as a whole and gives a deny. Getters and setters count as not plain data; the guard reads
 data properties only, so no caller code runs during the copy.
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
-characters per string. Approval inputs and audit records: 300,000 values, and the request inside
-meets the request bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters. The
+characters per string. Audit records: 300,000 values, and the request inside meets the request
+bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.
+
+`evaluateApprovals` bounds its cost before any other work, in this order:
+
+1. At most 20 approvals (`too_many_approvals`). The count is read from the array length, without
+   reading any approval. The largest rule needs 10 approvers.
+2. The request meets the request bounds (`input_too_large`).
+3. The whole input: 100,000 values, depth 24, 1,000 items per array, 4,096 characters per string
+   (`input_too_large`).
+
+The work after that is linear in the number of approvals: at most one decision per approval, and
+at most one verifier call per approval.
+
+## Timestamps
+
+Every timestamp must lie between `0000-01-01T00:00:00Z` and `9999-12-31T23:59:59.999Z` as an
+instant, after its offset is applied. Inside this range the UTC form has a four-digit year, so a
+normalized time is again a valid timestamp. A request time (`context.now`, and `now` of
+`evaluateApprovals`) must be at most `9999-11-30T23:59:59.999Z`, 31 days before the end, so that
+`approval.expiresAt` after the longest approval window is still a valid timestamp.
+
+## Digests
+
+The request digest has the format tag `permitkit.request/2`. It covers the agent grant entries,
+including their `scope` and `limits` in the schema 2 shape, so digests from the earlier format do
+not match. Audit records have the format tag `permitkit.decision/2`; a record with another tag is
+`not_replayable`. The
 guard exists because Zod 3 validates every item of an oversized array and keeps one issue per
 failing item (GHSA-mrhx-c7xc-m3w5, no fix in Zod 3).

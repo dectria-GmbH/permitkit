@@ -7,13 +7,33 @@ const testing = await import("permitkit/testing");
 
 const catalog = core.defineCatalog({ ticket: { actions: ["read"] } });
 const policy = core.compilePolicy(catalog, {
-  schema: 1,
+  schema: 2,
   version: "smoke",
-  roles: { reader: { grants: [{ id: "g", permissions: ["ticket:read"] }] } },
+  roles: {
+    reader: {
+      grants: [
+        {
+          id: "g",
+          permissions: ["ticket:read"],
+          scope: { kind: "all" },
+          limits: { kind: "unlimited" },
+        },
+      ],
+    },
+  },
+  denies: [],
+  approvalRules: [],
+  separationOfDuties: {
+    requesterNeverApprovesSameType: false,
+    exclusiveRequestAndApproveRoles: false,
+  },
 });
 const allowed = core.decide(
   policy,
-  testing.accessRequest(testing.human("u", testing.role("reader")), "ticket:read"),
+  testing.accessRequest(
+    testing.human("u", testing.role("reader", testing.everywhere)),
+    "ticket:read",
+  ),
 );
 const denied = core.decide(policy, testing.accessRequest(testing.human("u"), "ticket:read"));
 assert.equal(allowed.outcome, "allow");

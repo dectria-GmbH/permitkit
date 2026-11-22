@@ -1,0 +1,546 @@
+import { afterEach, describe, expect, it } from "vitest";
+
+import { limitsHold, scopeCovers, scopeTouches, whenApplies } from "../src/engine/conditions.js";
+import {
+  canonicalJson,
+  compilePolicy,
+  decide,
+  digest,
+  evaluate,
+  evaluateApprovals,
+  explain,
+  PermitkitError,
+  requestDigest,
+} from "../src/index.js";
+import {
+  accessRequest,
+  everywhere,
+  human,
+  role,
+  unlimited,
+  viaAgent,
+  within,
+} from "../src/testing/index.js";
+import { catalog, editablePolicyInput, policy } from "./fixtures.js";
+
+const polluted: string[] = [];
+
+function pollute(key: string, value: unknown): void {
+  polluted.push(key);
+  // The test simulates a prototype-pollution bug elsewhere in the process.
+  // oxlint-disable-next-line no-extend-native
+  Object.defineProperty(Object.prototype, key, { value, configurable: true, writable: true });
+}
+
+afterEach(() => {
+  for (const key of polluted.splice(0)) delete (Object.prototype as Record<string, unknown>)[key];
+});
+
+function codeOf(run: () => unknown): unknown {
+  try {
+    run();
+    return "no error";
+  } catch (error) {
+    return error instanceof PermitkitError ? error.code : error;
+  }
+}
+
+function issuesOf(run: () => unknown): { path: string; message: string }[] {
+  try {
+    run();
+    return [];
+  } catch (error) {
+    return error instanceof PermitkitError ? [...error.issues] : [];
+  }
+}
+
+/** Every way a scope can be lost, emptied or misspelt. None of them may mean everywhere. */
+const brokenScopes: [string, unknown][] = [
+  ["missing", undefined],
+  ["empty object", {}],
+  ["null", null],
+  ["old shape", { queue: ["billing"] }],
+  ["unknown kind", { kind: "ALL" }],
+  ["kind true", { kind: true }],
+  ["star string", "*"],
+  ["array", []],
+  ["match without properties", { kind: "match" }],
+  ["match with empty properties", { kind: "match", properties: {} }],
+  ["all with properties", { kind: "all", properties: { queue: ["billing"] } }],
+  ["star value in match", { kind: "match", properties: { queue: ["*"] } }],
+];
+
+function withAssignmentScope(scope: unknown) {
+  const assignment: Record<string, unknown> = { role: "lead" };
+  if (scope !== undefined) assignment["scope"] = scope;
+  return {
+    ...accessRequest(human("u-lead"), "ticket:read", { properties: { queue: "billing" } }),
+    subject: { type: "human", id: "u-lead", roles: [assignment], act: null },
+  };
+}
+
+describe("explicit everywhere: role assignment scopes", () => {
+  it("allows with the explicit all marker", () => {
+    expect(decide(policy, withAssignmentScope({ kind: "all" })).outcome).toBe("allow");
+  });
+
+  it("refuses a missing, empty, null or malformed assignment scope", () => {
+    for (const [label, scope] of brokenScopes) {
+      expect({ label, reason: decide(policy, withAssignmentScope(scope)).reason }).toEqual({
+        label,
+        reason: "invalid_request",
+      });
+    }
+  });
+
+  it("names the accepted shapes in the explain issue", () => {
+    const issues = explain(policy, withAssignmentScope({})).steps[0];
+    expect(issues).toMatchObject({ step: "validate", ok: false });
+    const text = JSON.stringify(issues);
+    expect(text).toContain("subject.roles.0.scope");
+    expect(text).toContain("State the scope explicitly");
+  });
+
+  it("refuses an empty assignment scope under a polluted kind", () => {
+    pollute("kind", "all");
+    expect(decide(policy, withAssignmentScope({})).reason).toBe("invalid_request");
+  });
+
+  it('does not read "*" in a match scope as everywhere', () => {
+    const request = withAssignmentScope({ kind: "match", properties: { queue: ["*"] } });
+    expect(decide(policy, request).reason).toBe("invalid_request");
+    const literal = within({ queue: ["billing"] });
+    const other = accessRequest(human("u", role("lead", literal)), "ticket:read", {
+      properties: { queue: "*" },
+    });
+    expect(decide(policy, other).reason).toBe("scope_mismatch");
+  });
+});
+
+describe("explicit everywhere: agent grant entries", () => {
+  const lead = human("u-lead", role("lead", everywhere));
+  const entry = (fields: Record<string, unknown>) =>
+    viaAgent(lead, "bot", {
+      entries: [{ permissions: ["ticket:read"], ...fields } as never],
+    });
+
+  it("allows with explicit all and unlimited", () => {
+    const subject = entry({ scope: everywhere, limits: unlimited });
+    expect(decide(policy, accessRequest(subject, "ticket:read")).outcome).toBe("allow");
+  });
+
+  it("refuses a missing, empty, null or malformed entry scope", () => {
+    for (const [label, scope] of brokenScopes) {
+      const fields: Record<string, unknown> = { limits: unlimited };
+      if (scope !== undefined) fields["scope"] = scope;
+      const reason = decide(policy, accessRequest(entry(fields), "ticket:read")).reason;
+      expect({ label, reason }).toEqual({ label, reason: "invalid_request" });
+    }
+  });
+
+  it("refuses missing, empty or null entry limits", () => {
+    for (const limits of [undefined, {}, null, { amount: { max: 5 } }, { kind: "range" }]) {
+      const fields: Record<string, unknown> = { scope: everywhere };
+      if (limits !== undefined) fields["limits"] = limits;
+      const reason = decide(policy, accessRequest(entry(fields), "ticket:read")).reason;
+      expect({ limits, reason }).toEqual({ limits, reason: "invalid_request" });
+    }
+  });
+
+  it("refuses a grant without notBefore or revokedAt, and an actor without grant or act", () => {
+    const valid = entry({ scope: everywhere, limits: unlimited });
+    const actor = valid.act!;
+    const grant = actor.grant!;
+    const variants = [
+      { ...actor, grant: { ...grant, revokedAt: undefined } },
+      { ...actor, grant: { ...grant, notBefore: undefined } },
+      { ...actor, grant: undefined },
+      { ...actor, act: undefined },
+    ];
+    for (const variant of variants) {
+      const request = accessRequest({ ...lead, act: variant as never }, "ticket:read");
+      expect(decide(policy, request).reason).toBe("invalid_request");
+    }
+    expect(decide(policy, accessRequest(valid, "ticket:read")).outcome).toBe("allow");
+  });
+
+  it("refuses a subject without act instead of reading it as acting directly", () => {
+    const request = accessRequest(lead, "ticket:delete");
+    expect(decide(policy, request).outcome).toBe("allow");
+    const { act: _act, ...withoutAct } = lead;
+    expect(decide(policy, { ...request, subject: withoutAct }).reason).toBe("invalid_request");
+  });
+
+  it("puts the entry scope into the request digest", () => {
+    const wide = accessRequest(entry({ scope: everywhere, limits: unlimited }), "ticket:read", {
+      properties: { queue: "a" },
+    });
+    const narrow = accessRequest(
+      entry({ scope: within({ queue: ["a"] }), limits: unlimited }),
+      "ticket:read",
+      { properties: { queue: "a" } },
+    );
+    expect(requestDigest(policy, wide)).not.toBe(requestDigest(policy, narrow));
+  });
+});
+
+type Input = ReturnType<typeof editablePolicyInput>;
+
+/** Sets a field, or deletes it for undefined. */
+function set(target: object, key: string, value: unknown): void {
+  if (value === undefined) delete (target as Record<string, unknown>)[key];
+  else (target as Record<string, unknown>)[key] = value;
+}
+
+describe("explicit everywhere: policy documents", () => {
+  it("refuses a missing, empty, null or malformed grant scope", () => {
+    for (const [label, scope] of brokenScopes) {
+      const input = editablePolicyInput();
+      set(input.roles["support"]!.grants[0]!, "scope", scope);
+      const issues = issuesOf(() => compilePolicy(catalog, input));
+      expect({ label, refused: issues.length > 0 }).toEqual({ label, refused: true });
+      expect(issues[0]?.path.startsWith("roles.support.grants.0.scope")).toBe(true);
+    }
+  });
+
+  it("refuses a missing, empty, null or malformed deny scope", () => {
+    for (const [label, scope] of brokenScopes) {
+      const input = editablePolicyInput();
+      set(input.denies[1]!, "scope", scope);
+      expect({ label, code: codeOf(() => compilePolicy(catalog, input)) }).toEqual({
+        label,
+        code: "policy_invalid",
+      });
+    }
+  });
+
+  it("refuses missing, empty or malformed grant limits, when and approver eligibility", () => {
+    const changes: [string, (input: Input) => void][] = [
+      ["limits missing", (input) => set(input.roles["support"]!.grants[1]!, "limits", undefined)],
+      ["limits empty", (input) => set(input.roles["support"]!.grants[1]!, "limits", {})],
+      ["limits null", (input) => set(input.roles["support"]!.grants[1]!, "limits", null)],
+      ["when missing", (input) => set(input.approvalRules[0]!, "when", undefined)],
+      ["when empty", (input) => set(input.approvalRules[0]!, "when", {})],
+      ["when old shape", (input) => set(input.approvalRules[0]!, "when", { amount: { gte: 1 } })],
+      ["eligibility missing", (input) => set(input.approvalRules[0]!, "eligibleApprovers", null)],
+      [
+        "eligibility empty roles",
+        (input) => set(input.approvalRules[0]!, "eligibleApprovers", { kind: "roles", roles: [] }),
+      ],
+      ["old approverRoles", (input) => set(input.approvalRules[0]!, "approverRoles", ["lead"])],
+      ["requireProof missing", (input) => set(input.approvalRules[0]!, "requireProof", undefined)],
+      [
+        "requireProof without proofTypes",
+        (input) => set(input.approvalRules[0]!, "requireProof", true),
+      ],
+      ["denies missing", (input) => set(input, "denies", undefined)],
+      ["approvalRules missing", (input) => set(input, "approvalRules", undefined)],
+      ["separationOfDuties missing", (input) => set(input, "separationOfDuties", undefined)],
+      [
+        "separation flag missing",
+        (input) => set(input.separationOfDuties, "exclusiveRequestAndApproveRoles", undefined),
+      ],
+    ];
+    for (const [label, change] of changes) {
+      const input = editablePolicyInput();
+      change(input);
+      expect({ label, code: codeOf(() => compilePolicy(catalog, input)) }).toEqual({
+        label,
+        code: "policy_invalid",
+      });
+    }
+  });
+
+  it("refuses an empty grant scope under a polluted kind", () => {
+    const input = editablePolicyInput();
+    set(input.roles["support"]!.grants[0]!, "scope", {});
+    pollute("kind", "all");
+    expect(codeOf(() => compilePolicy(catalog, input))).toBe("policy_invalid");
+  });
+
+  it("refuses a policy in the old schema with its own error code", () => {
+    const old = {
+      schema: 1,
+      version: "old",
+      roles: { r: { grants: [{ id: "g", permissions: ["ticket:read"] }] } },
+    };
+    expect(codeOf(() => compilePolicy(catalog, old))).toBe("policy_schema_unsupported");
+    const issues = issuesOf(() => compilePolicy(catalog, old));
+    expect(issues[0]?.path).toBe("schema");
+    expect(issues[0]?.message).toMatch(/no automatic migration/);
+    expect(codeOf(() => compilePolicy(catalog, { ...editablePolicyInput(), schema: 3 }))).toBe(
+      "policy_schema_unsupported",
+    );
+  });
+});
+
+describe("explicit everywhere: deny scopes stay deny-biased", () => {
+  it("counts a missing or non-string property as inside a deny match scope", () => {
+    const support = human("u-s", role("support", everywhere));
+    for (const properties of [{}, { queue: 7 }, { queue: null }, { queue: "vip" }]) {
+      const request = accessRequest(support, "ticket:close", { properties });
+      expect(decide(policy, request).reason).toBe("denied_by_rule");
+    }
+    const outside = accessRequest(support, "ticket:close", { properties: { queue: "billing" } });
+    expect(decide(policy, outside).outcome).toBe("allow");
+  });
+});
+
+function authzen(properties: Record<string, unknown>) {
+  return {
+    subject: { type: "human", id: "u-lead", properties },
+    action: { name: "read" },
+    resource: { type: "ticket" },
+    context: { now: "2026-01-15T10:00:00.000Z" },
+  };
+}
+
+describe("explicit everywhere: AuthZEN", () => {
+  it("needs act: null for a principal that acts directly", () => {
+    const roles = [{ role: "lead", scope: { kind: "all" } }];
+    expect(evaluate(policy, authzen({ roles, act: null })).decision).toBe(true);
+    expect(evaluate(policy, authzen({ roles })).context.reason_codes).toEqual(["invalid_request"]);
+  });
+});
+
+describe("explicit everywhere: approvers", () => {
+  it("does not count an approver without act", async () => {
+    const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
+      properties: { amount: 500 },
+    });
+    const digestValue = requestDigest(policy, request);
+    const approval = (approver: unknown) => ({
+      approver,
+      approvedAt: "2026-01-15T10:10:00.000Z",
+      requestDigest: digestValue,
+    });
+    const { act: _act, ...withoutAct } = human("u-a", role("lead", everywhere));
+    const result = await evaluateApprovals(policy, {
+      request,
+      now: "2026-01-15T10:30:00.000Z",
+      approvals: [approval(withoutAct), approval(human("u-b", role("lead", everywhere)))],
+    });
+    expect(result.counted).toEqual(["u-b"]);
+    expect(result.rejected[0]?.reason).toBe("approval_invalid");
+  });
+});
+
+describe("condition engine fails toward less access on an unknown kind", () => {
+  const properties = { queue: "billing", amount: 5 };
+  const bogus = { kind: "bogus" } as never;
+
+  it("covers nothing with an unknown or empty scope", () => {
+    expect(scopeCovers(bogus, properties).ok).toBe(false);
+    expect(scopeCovers({ kind: "match", properties: {} }, properties).ok).toBe(false);
+    expect(scopeCovers({} as never, properties).ok).toBe(false);
+  });
+
+  it("touches every resource with an unknown deny scope", () => {
+    expect(scopeTouches(bogus, properties)).toBe(true);
+    expect(scopeTouches({} as never, properties)).toBe(true);
+  });
+
+  it("holds for nothing with unknown or empty limits", () => {
+    expect(limitsHold(bogus, properties).ok).toBe(false);
+    expect(limitsHold({ kind: "range", properties: {} }, properties).ok).toBe(false);
+  });
+
+  it("applies an unknown when condition", () => {
+    expect(whenApplies(bogus, properties)).toBe(true);
+  });
+
+  it("does not read an inherited kind", () => {
+    pollute("kind", "all");
+    // A plain object inherits from Object.prototype, where the polluted kind lives.
+    expect(scopeCovers({} as never, properties).ok).toBe(false);
+  });
+});
+
+describe("canonicalJson refuses non-plain data with a coded error", () => {
+  const variants: [string, () => unknown][] = [
+    ["proxy", () => new Proxy({ a: 1 }, {})],
+    [
+      "revoked proxy",
+      () => {
+        const { proxy, revoke } = Proxy.revocable({ a: 1 }, {});
+        revoke();
+        return proxy;
+      },
+    ],
+    ["symbol key", () => ({ a: 1, [Symbol("hidden")]: 2 })],
+    [
+      "non-enumerable key",
+      () => Object.defineProperty({ a: 1 }, "hidden", { value: 2, enumerable: false }),
+    ],
+    [
+      "throwing getter",
+      () =>
+        Object.defineProperty({}, "a", {
+          enumerable: true,
+          get() {
+            throw new Error("raw");
+          },
+        }),
+    ],
+    [
+      "class instance",
+      () =>
+        new (class Point {
+          x = 1;
+        })(),
+    ],
+    ["Map", () => new Map([["a", 1]])],
+    ["Date", () => new Date(0)],
+    ["array with a named key", () => Object.assign([1], { extra: true })],
+    [
+      "array with a hole",
+      () => {
+        // A hole: length 3 with only two own indices.
+        const holed: number[] = [];
+        holed[0] = 1;
+        holed[2] = 3;
+        return holed;
+      },
+    ],
+    ["array subclass", () => new (class List extends Array {})()],
+    [
+      "very deep nesting",
+      () => {
+        let nested: unknown = 1;
+        for (let index = 0; index < 100_000; index += 1) nested = [nested];
+        return nested;
+      },
+    ],
+  ];
+
+  it("throws not_canonical for every non-plain value, in canonicalJson and digest", () => {
+    for (const [label, make] of variants) {
+      expect({ label, code: codeOf(() => canonicalJson(make())) }).toEqual({
+        label,
+        code: "not_canonical",
+      });
+      expect({ label, code: codeOf(() => digest({ nested: make() })) }).toEqual({
+        label,
+        code: "not_canonical",
+      });
+    }
+  });
+
+  it("does not run a getter", () => {
+    let reads = 0;
+    const value = Object.defineProperty({}, "a", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return 1;
+      },
+    });
+    expect(codeOf(() => canonicalJson(value))).toBe("not_canonical");
+    expect(reads).toBe(0);
+  });
+
+  it("still serializes plain and null-prototype objects", () => {
+    const bare = Object.assign(Object.create(null) as object, { b: 1, a: [true, null, "x"] });
+    expect(canonicalJson(bare)).toBe('{"a":[true,null,"x"],"b":1}');
+    expect(canonicalJson({ a: undefined, b: 2 })).toBe('{"b":2}');
+  });
+});
+
+describe("timestamp range", () => {
+  const lead = human("u-lead", role("lead", everywhere));
+  const at = (now: string) =>
+    decide(policy, accessRequest(lead, "ticket:refund", { properties: { amount: 500 } }, { now }));
+
+  it("accepts the earliest instant and refuses one millisecond before it", () => {
+    expect(at("0000-01-01T00:00:00.000Z").outcome).toBe("approval_required");
+    expect(at("0000-01-01T00:30:00+01:00").reason).toBe("invalid_request");
+  });
+
+  it("formats the approval window end at the latest request time as a valid timestamp", () => {
+    const input = editablePolicyInput();
+    input.approvalRules[0]!.expiresInSeconds = 31 * 24 * 3600;
+    const longest = compilePolicy(catalog, input);
+    const request = accessRequest(
+      lead,
+      "ticket:refund",
+      { properties: { amount: 500 } },
+      { now: "9999-11-30T23:59:59.999Z" },
+    );
+    const decision = decide(longest, request);
+    expect(decision.approval?.expiresAt).toBe("9999-12-31T23:59:59.999Z");
+    // The produced value passes the timestamp schema, for example as an agent grant expiry.
+    const subject = viaAgent(lead, "bot", {
+      entries: [{ permissions: ["ticket:refund"], scope: everywhere, limits: unlimited }],
+      expiresAt: decision.approval!.expiresAt,
+    });
+    expect(decide(longest, { ...request, subject }).outcome).toBe("approval_required");
+  });
+
+  it("refuses a request time after the latest request time and a timestamp after 9999", () => {
+    expect(at("9999-12-01T00:00:00.000Z").reason).toBe("invalid_request");
+    const subject = viaAgent(lead, "bot", {
+      entries: [{ permissions: ["ticket:read"], scope: everywhere, limits: unlimited }],
+      expiresAt: "9999-12-31T23:59:59-00:01",
+    });
+    expect(decide(policy, accessRequest(subject, "ticket:read")).reason).toBe("invalid_request");
+  });
+});
+
+describe("evaluateApprovals cost bounds", () => {
+  const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
+    properties: { amount: 500 },
+  });
+  const digestValue = requestDigest(policy, request);
+  const approval = (id: string) => ({
+    approver: human(id, role("lead", everywhere)),
+    approvedAt: "2026-01-15T10:10:00.000Z",
+    requestDigest: digestValue,
+  });
+  const now = "2026-01-15T10:30:00.000Z";
+
+  it("evaluates 20 approvals", async () => {
+    const approvals = Array.from({ length: 20 }, (_, index) => approval(`u-${index}`));
+    const result = await evaluateApprovals(policy, { request, now, approvals });
+    expect(result).toMatchObject({ reason: "approved" });
+    expect(result.counted).toHaveLength(20);
+  });
+
+  it("refuses more than 20 approvals before reading any of them", async () => {
+    let reads = 0;
+    const counting = Object.defineProperty({}, "approver", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return human("u-x", role("lead", everywhere));
+      },
+    });
+    const approvals = [
+      ...Array.from({ length: 20 }, (_, index) => approval(`u-${index}`)),
+      counting,
+    ];
+    const result = await evaluateApprovals(policy, { request, now, approvals });
+    expect(result.reason).toBe("too_many_approvals");
+    expect(reads).toBe(0);
+    // Checked first: a huge request does not change the reason.
+    const huge = { ...request, resource: { ...request.resource, id: "x".repeat(10_000) } };
+    expect((await evaluateApprovals(policy, { request: huge, now, approvals })).reason).toBe(
+      "too_many_approvals",
+    );
+  });
+
+  it("refuses a request over the request bounds", async () => {
+    // About 24,000 values: over the request bounds (20,000), inside the approval input bounds.
+    const values = Array.from({ length: 90 }, (_, index) => `q${index}`);
+    const roles = Array.from({ length: 250 }, () => role("lead", within({ queue: values })));
+    const big = { ...request, subject: { ...request.subject, roles } };
+    const result = await evaluateApprovals(policy, { request: big, now, approvals: [] });
+    expect(result.reason).toBe("input_too_large");
+  });
+
+  it("refuses a whole input over the approval input bounds", async () => {
+    const junk = Array.from({ length: 1_000 }, () => ({ a: 1, b: 2, c: 3, d: 4 }));
+    const approvals = Array.from({ length: 20 }, () => junk);
+    const result = await evaluateApprovals(policy, { request, now, approvals });
+    expect(result.reason).toBe("input_too_large");
+  });
+});

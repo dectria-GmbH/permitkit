@@ -13,7 +13,7 @@ import {
   toDecisionRecord,
   type ApprovalProofVerifier,
 } from "../src/index.js";
-import { accessRequest, human, role, viaAgent } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role, viaAgent } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 const polluted: string[] = [];
@@ -43,17 +43,17 @@ describe("array holes", () => {
     const roles: unknown[] = [];
     roles.length = 1;
     const holey = { ...request, subject: { ...request.subject, roles } };
-    pollute("0", { role: "lead", scope: {} });
+    pollute("0", { role: "lead", scope: { kind: "all" } });
     expect(decide(policy, holey).outcome).toBe("deny");
   });
 
   it("does not fill a hole in the approvals from a polluted prototype", async () => {
-    const request = accessRequest(human("u-req", role("lead")), "ticket:refund", {
+    const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
       properties: { amount: 500 },
     });
     const digestValue = requestDigest(policy, request);
     const approval = (id: string) => ({
-      approver: human(id, role("lead")),
+      approver: human(id, role("lead", everywhere)),
       approvedAt: "2026-01-15T10:10:00.000Z",
       requestDigest: digestValue,
     });
@@ -68,15 +68,17 @@ describe("array holes", () => {
 describe("verifier results", () => {
   it("does not read valid or the echo from a polluted prototype", async () => {
     const input = editablePolicyInput();
-    input.approvalRules = [{ ...input.approvalRules![0]!, approvers: 1, requireProof: true }];
+    input.approvalRules = [
+      { ...input.approvalRules[0]!, approvers: 1, requireProof: true, proofTypes: ["t"] },
+    ];
     const onePolicy = compilePolicy(catalog, input);
-    const request = accessRequest(human("u-req", role("lead")), "ticket:refund", {
+    const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
       properties: { amount: 500 },
     });
     const digestValue = requestDigest(onePolicy, request);
     const approvals = [
       {
-        approver: human("u5", role("lead")),
+        approver: human("u5", role("lead", everywhere)),
         approvedAt: "2026-01-15T10:10:00.000Z",
         requestDigest: digestValue,
         proof: { type: "t", approverId: "u5", requestDigest: digestValue, payload: {} },
@@ -97,7 +99,17 @@ describe("verifier results", () => {
 
 describe("compiled policy under a polluted prototype", () => {
   it("keeps the separation-of-duties defaults and the digest", () => {
-    const minimal = { schema: 1, version: "v", roles: {} };
+    const minimal = {
+      schema: 2,
+      version: "v",
+      roles: {},
+      denies: [],
+      approvalRules: [],
+      separationOfDuties: {
+        requesterNeverApprovesSameType: false,
+        exclusiveRequestAndApproveRoles: false,
+      },
+    };
     const clean = compilePolicy(catalog, minimal);
     pollute("requesterNeverApprovesSameType", true);
     const dirty = compilePolicy(catalog, minimal);
@@ -114,7 +126,7 @@ describe("compiled policy under a polluted prototype", () => {
 
 describe("Zod error path and thenables under a polluted prototype", () => {
   it("denies instead of throwing when Zod's error options are polluted", () => {
-    const request = accessRequest(human("u-lead", role("lead")), "ticket:refund", {
+    const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket:refund", {
       properties: { amount: "x", queue: 5 },
     });
     const broken = { ...request, resource: { ...request.resource, properties: { amount: [1] } } };
@@ -129,7 +141,7 @@ describe("Zod error path and thenables under a polluted prototype", () => {
   });
 
   it("settles the approval promise when Object.prototype.then is polluted", async () => {
-    const request = accessRequest(human("u-req", role("lead")), "ticket:refund", {
+    const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
       properties: { amount: 500 },
     });
     // oxlint-disable-next-line unicorn/no-thenable
@@ -146,8 +158,10 @@ describe("Zod error path and thenables under a polluted prototype", () => {
 
 describe("agent grants and request-time checks", () => {
   it("denies a grant issued by a principal of another type with the same id", () => {
-    const humanGrant = viaAgent(human("u1", role("lead")), "bot", {
-      entries: [{ permissions: ["ticket:read"] }],
+    const humanGrant = viaAgent(human("u1", role("lead", everywhere)), "bot", {
+      entries: [
+        { permissions: ["ticket:read"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
     });
     const asService = { ...humanGrant, type: "service" as const };
     expect(decide(policy, accessRequest(asService, "ticket:read")).reason).toBe(
@@ -156,15 +170,17 @@ describe("agent grants and request-time checks", () => {
   });
 
   it("denies approvals for a request that was not approvable when it was made", async () => {
-    const subject = viaAgent(human("u-req", role("lead")), "bot", {
-      entries: [{ permissions: ["ticket:refund"] }],
+    const subject = viaAgent(human("u-req", role("lead", everywhere)), "bot", {
+      entries: [
+        { permissions: ["ticket:refund"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
       notBefore: "2026-01-15T10:05:00.000Z",
     });
     const request = accessRequest(subject, "ticket:refund", { properties: { amount: 500 } });
     expect(decide(policy, request).reason).toBe("agent_grant_not_yet_valid");
     const digestValue = requestDigest(policy, request);
     const approvals = ["u-a", "u-b"].map((id) => ({
-      approver: human(id, role("lead")),
+      approver: human(id, role("lead", everywhere)),
       approvedAt: "2026-01-15T10:10:00.000Z",
       requestDigest: digestValue,
     }));
@@ -175,7 +191,7 @@ describe("agent grants and request-time checks", () => {
 
 describe("public surface", () => {
   it("rejects a policy that compilePolicy did not return in reevaluate", () => {
-    const request = accessRequest(human("u-lead", role("lead")), "ticket:read");
+    const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket:read");
     const record = toDecisionRecord(request, decide(policy, request));
     for (const fake of [null, { version: "zz", digest: "x" }]) {
       expect(() => reevaluate(fake as never, record)).toThrow(PermitkitError);

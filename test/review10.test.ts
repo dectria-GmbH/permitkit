@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { compilePolicy, decide, evaluate, evaluateApprovals, requestDigest } from "../src/index.js";
-import { accessRequest, human, role, viaAgent } from "../src/testing/index.js";
+import { accessRequest, everywhere, human, role, viaAgent } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 afterEach(() => {
@@ -25,13 +25,15 @@ describe("accessors with a polluted Object.prototype.value", () => {
         return [];
       },
     };
-    polluteValue([{ role: "lead", scope: {} }]);
+    polluteValue([{ role: "lead", scope: { kind: "all" } }]);
     expect(decide(policy, { ...base, subject }).outcome).toBe("deny");
   });
 
   it("denies a getter on an agent grant's revokedAt", () => {
-    const subject = viaAgent(human("u-lead", role("lead")), "bot", {
-      entries: [{ permissions: ["ticket:read"] }],
+    const subject = viaAgent(human("u-lead", role("lead", everywhere)), "bot", {
+      entries: [
+        { permissions: ["ticket:read"], scope: { kind: "all" }, limits: { kind: "unlimited" } },
+      ],
     });
     const grant = {
       ...subject.act!.grant!,
@@ -47,9 +49,9 @@ describe("accessors with a polluted Object.prototype.value", () => {
   it("does not count an approval whose approver id is a getter", async () => {
     // One approver, so that only the descriptor check stands between the getter and "approved".
     const input = editablePolicyInput();
-    input.approvalRules = [{ ...input.approvalRules![0]!, approvers: 1 }];
+    input.approvalRules = [{ ...input.approvalRules[0]!, approvers: 1 }];
     const onePolicy = compilePolicy(catalog, input);
-    const request = accessRequest(human("u-alice", role("lead")), "ticket:refund", {
+    const request = accessRequest(human("u-alice", role("lead", everywhere)), "ticket:refund", {
       properties: { amount: 500 },
     });
     const digestValue = requestDigest(onePolicy, request);
@@ -59,7 +61,7 @@ describe("accessors with a polluted Object.prototype.value", () => {
         get id() {
           return id;
         },
-        roles: [{ role: "lead", scope: {} }],
+        roles: [{ role: "lead", scope: { kind: "all" } }],
       },
       approvedAt: "2026-01-15T10:10:00.000Z",
       requestDigest: digestValue,
@@ -78,8 +80,9 @@ describe("accessors with a polluted Object.prototype.value", () => {
     const grant = {
       id: "getter-scope",
       permissions: ["ticket:close"],
+      limits: { kind: "unlimited" as const },
       get scope() {
-        return { queue: ["general"] };
+        return { kind: "match" as const, properties: { queue: ["general"] } };
       },
     };
     input.roles = { ...input.roles, getter: { grants: [grant] } };
@@ -102,7 +105,7 @@ describe("accessors with a polluted Object.prototype.value", () => {
 describe("proofTypes without requireProof", () => {
   it("is rejected at compile time", () => {
     const input = editablePolicyInput();
-    input.approvalRules = [{ ...input.approvalRules![0]!, proofTypes: ["webauthn"] }];
+    input.approvalRules = [{ ...input.approvalRules[0]!, proofTypes: ["webauthn"] }];
     expect(() => compilePolicy(catalog, input)).toThrow(/not valid/);
   });
 });
@@ -119,7 +122,11 @@ describe("AuthZEN evaluate with a replaced array method", () => {
         writable: true,
       });
       response = evaluate(policy, {
-        subject: { type: "human", id: "u", properties: { roles: [{ role: "lead", scope: {} }] } },
+        subject: {
+          type: "human",
+          id: "u",
+          properties: { roles: [{ role: "lead", scope: { kind: "all" } }] },
+        },
         action: { name: "read" },
         resource: { type: "ticket", id: "t" },
         context: { now: "2026-01-15T10:00:00.000Z" },

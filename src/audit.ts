@@ -7,7 +7,7 @@ import type { AccessRequest } from "./request.js";
 
 const recordShapeSchema = z
   .object({
-    schema: z.literal("permitkit.decision/1"),
+    schema: z.literal("permitkit.decision/2"),
     policy: z.object({ version: z.string(), digest: z.string() }).strict(),
     request: z.unknown(),
     requestDigest: z.string().nullable(),
@@ -33,7 +33,7 @@ export interface ActorChainEntry {
  * the policy version and digest, and the result. The record is plain JSON.
  */
 export interface DecisionRecord {
-  readonly schema: "permitkit.decision/1";
+  readonly schema: "permitkit.decision/2";
   readonly policy: { readonly version: string; readonly digest: string };
   readonly request: AccessRequest | null;
   readonly requestDigest: string | null;
@@ -49,7 +49,7 @@ function actorChainOf(request: AccessRequest | null): ActorChainEntry[] {
   const chain: ActorChainEntry[] = [];
   if (request === null) return chain;
   chain.push({ type: request.subject.type, id: request.subject.id, grantId: null });
-  for (let actor = request.subject.act; actor !== undefined; actor = actor.act) {
+  for (let actor = request.subject.act; actor !== null; actor = actor.act) {
     chain.push({ type: "agent", id: actor.id, grantId: actor.grant?.id ?? null });
   }
   return chain;
@@ -71,7 +71,7 @@ export function toDecisionRecord(request: unknown, decision: Decision): Decision
 function buildRecord(evaluated: AccessRequest | null, decision: Decision): DecisionRecord {
   const actorChain = actorChainOf(evaluated);
   return {
-    schema: "permitkit.decision/1",
+    schema: "permitkit.decision/2",
     policy: decision.policy,
     request: evaluated,
     requestDigest: decision.requestDigest,

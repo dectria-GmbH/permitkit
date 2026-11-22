@@ -1,17 +1,19 @@
 export { defineCatalog, isCatalog } from "./catalog.js";
 export type { Catalog, CatalogDefinition, ResourceDefinition, ResourceEntry } from "./catalog.js";
 
-export { compilePolicy, isCompiledPolicy } from "./policy.js";
+export { compilePolicy, isCompiledPolicy, policySchemaVersion } from "./policy.js";
 export type {
   ApprovalRule,
   CompiledPolicy,
   CompiledRole,
   DenyRule,
+  EligibleApprovers,
   GrantRule,
   Limits,
   PolicyDocument,
   PolicyInput,
   Scope,
+  When,
 } from "./policy.js";
 
 export { maxActorDepth } from "./request.js";
