@@ -56,9 +56,15 @@ describe("accessor properties in the input", () => {
       properties: { amount: 500, queue: "other" },
     });
     const digestValue = requestDigest(withRoles, request);
+    // The test simulates a prototype-pollution bug elsewhere in the process.
+    // oxlint-disable-next-line no-extend-native
+    Object.defineProperty(Object.prototype, "scope", {
+      value: {},
+      configurable: true,
+      writable: true,
+    });
     const sneaky = {
       get role() {
-        Object.setPrototypeOf(this, { scope: {} });
         delete (this as Record<string, unknown>)["scope"];
         return "approver";
       },
