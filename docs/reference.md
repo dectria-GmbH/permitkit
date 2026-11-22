@@ -71,13 +71,14 @@ permitkit throws only for programming and configuration errors. Decisions never 
 requests, including throwing getters and revoked proxies; they deny. `catalog_invalid` is also
 thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
 
-| Code              | Thrown by                                                                             | Meaning                                              |
-| ----------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `catalog_invalid` | `defineCatalog`                                                                       | The catalogue definition is not valid. See `issues`. |
-| `policy_invalid`  | `compilePolicy`                                                                       | The policy document is not valid. See `issues`.      |
-| `policy_unknown`  | `decide`, `explain`, `evaluate`, `evaluateApprovals`, `reevaluate`, `decideAndRecord` | The policy did not come from `compilePolicy`.        |
-| `request_invalid` | `requestDigest`                                                                       | The request does not match the schema.               |
-| `not_canonical`   | `canonicalJson`, `digest`                                                             | The value has no exact JSON form.                    |
+| Code              | Thrown by                                                                             | Meaning                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `catalog_invalid` | `defineCatalog`                                                                       | The catalogue definition is not valid. See `issues`.                       |
+| `policy_invalid`  | `compilePolicy`                                                                       | The policy document is not valid. See `issues`.                            |
+| `policy_unknown`  | `decide`, `explain`, `evaluate`, `evaluateApprovals`, `reevaluate`, `decideAndRecord` | The policy did not come from `compilePolicy`.                              |
+| `request_invalid` | `requestDigest`                                                                       | The request does not match the schema.                                     |
+| `options_invalid` | `evaluateApprovals`                                                                   | The options are not `{ verifiers: [...] }`, or two verifiers share a type. |
+| `not_canonical`   | `canonicalJson`, `digest`                                                             | The value has no exact JSON form.                                          |
 
 Each `PermitkitError` has `code`, `hint` and, for validation errors, `issues` with `path`,
 `message` and `hint`.

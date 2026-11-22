@@ -64,7 +64,8 @@ export const actorSchema: z.ZodType<Actor> = z.lazy(() =>
 
 export const subjectSchema = z
   .object({
-    type: z.enum(["human", "service"]),
+    // Literals, not z.enum: Zod 3 caches enum values on the instance through a lazy property.
+    type: z.union([z.literal("human"), z.literal("service")]),
     /** One identity per human. Roles are listed here, never split over accounts. */
     id,
     roles: z.array(roleAssignmentSchema).max(256),
@@ -101,7 +102,8 @@ export const accessRequestSchema = z
   .strict()
   .superRefine((request, ctx) => {
     let depth = 0;
-    for (let actor = request.subject.act; actor !== undefined; actor = actor.act) {
+    // Walk own properties only, so a polluted Object.prototype cannot add actors.
+    for (let actor: unknown = ownAct(request.subject); actor !== undefined; actor = ownAct(actor)) {
       depth += 1;
       if (depth > maxActorDepth) {
         ctx.addIssue({
@@ -120,3 +122,8 @@ export type AgentGrantEntry = z.output<typeof agentGrantEntrySchema>;
 export type Subject = z.output<typeof subjectSchema>;
 export type AccessRequest = z.output<typeof accessRequestSchema>;
 export type Scalar = z.output<typeof scalar>;
+
+function ownAct(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || !Object.hasOwn(value, "act")) return undefined;
+  return (value as { act?: unknown }).act;
+}

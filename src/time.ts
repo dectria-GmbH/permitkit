@@ -22,7 +22,10 @@ function isCalendarInstant(value: string): boolean {
   const year = Number(value.slice(0, 4));
   const month = Number(value.slice(5, 7));
   const day = Number(value.slice(8, 10));
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  // setUTCFullYear, because Date.UTC maps the years 0 to 99 to 1900 to 1999.
+  const end = new Date(0);
+  end.setUTCFullYear(year, month, 0);
+  const daysInMonth = end.getUTCDate();
   return day <= daysInMonth && Number.isFinite(Date.parse(value));
 }
 

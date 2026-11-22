@@ -145,6 +145,7 @@ export function decideAndRecord(
 ): { decision: Decision; record: DecisionRecord } {
   const parsed = parseRequest(request);
   const evaluated = parsed.ok ? parsed.request : null;
-  const decision = decide(policy, evaluated ?? request);
+  // On a parse failure, do not read the caller's object again: decide on null, which denies.
+  const decision = decide(policy, evaluated);
   return { decision, record: buildRecord(evaluated, decision) };
 }

@@ -185,8 +185,7 @@ export async function evaluateApprovals(
   for (let actor = request.subject.act; actor !== undefined; actor = actor.act) {
     requesterIds.add(actor.id);
   }
-  const verifierList = Object.hasOwn(options, "verifiers") ? (options.verifiers ?? []) : [];
-  const verifiers = new Map(verifierList.map((verifier) => [verifier.type, verifier]));
+  const verifiers = verifierMap(options);
 
   const counted: string[] = [];
   const rejected: ApprovalRejection[] = [];
@@ -307,30 +306,62 @@ async function checkProof(
   }
   const verifier = verifiers.get(proof.type);
   if (verifier === undefined) return { reason: "proof_verifier_missing", detail: proof.type };
-  let verification: unknown;
   try {
-    verification = await verifier.verify(proof, { approverId, requestDigest: digestValue });
-  } catch (error) {
-    return {
-      reason: "proof_invalid",
-      detail: error instanceof Error ? error.message : "verifier threw",
-    };
+    const verification: unknown = await verifier.verify(proof, {
+      approverId,
+      requestDigest: digestValue,
+    });
+    // Count only the exact success shape. Anything else, also a truthy string, is a rejection.
+    if (!isRecord(verification) || verification["valid"] !== true) {
+      const reason = isRecord(verification) ? verification["reason"] : undefined;
+      return {
+        reason: "proof_invalid",
+        detail: typeof reason === "string" ? reason : "verifier did not confirm",
+      };
+    }
+    if (
+      verification["approverId"] !== approverId ||
+      verification["requestDigest"] !== digestValue
+    ) {
+      return { reason: "proof_invalid", detail: "verifier echo does not match" };
+    }
+    return null;
+  } catch {
+    // The verifier threw, or its result or error object threw when read. Never count it.
+    return { reason: "proof_invalid", detail: "verifier failed" };
   }
-  // Count only the exact success shape. Anything else, also a truthy string, is a rejection.
-  if (!isRecord(verification) || verification["valid"] !== true) {
-    const reason =
-      isRecord(verification) && typeof verification["reason"] === "string"
-        ? verification["reason"]
-        : "verifier did not confirm";
-    return { reason: "proof_invalid", detail: reason };
-  }
-  const echo = verification;
-  if (echo["approverId"] !== approverId || echo["requestDigest"] !== digestValue) {
-    return { reason: "proof_invalid", detail: "verifier echo does not match" };
-  }
-  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function failOptions(message: string): never {
+  throw new PermitkitError("options_invalid", message);
+}
+
+function isVerifier(value: unknown): value is ApprovalProofVerifier {
+  return (
+    isRecord(value) && typeof value["type"] === "string" && typeof value["verify"] === "function"
+  );
+}
+
+/**
+ * Validates the options once. Bad options are a programming error, so they throw a coded error.
+ * Two verifiers for one type are rejected, because the second would silently replace the first.
+ */
+function verifierMap(options: unknown): ReadonlyMap<string, ApprovalProofVerifier> {
+  if (!isRecord(options)) return failOptions("The options must be an object.");
+  const list: unknown = Object.hasOwn(options, "verifiers") ? options["verifiers"] : undefined;
+  if (list === undefined) return new Map();
+  if (!Array.isArray(list)) return failOptions("options.verifiers must be an array.");
+  const map = new Map<string, ApprovalProofVerifier>();
+  for (const item of list as unknown[]) {
+    if (!isVerifier(item)) {
+      return failOptions("Each verifier needs a string type and a verify function.");
+    }
+    if (map.has(item.type)) return failOptions(`Two verifiers have the type ${item.type}.`);
+    map.set(item.type, item);
+  }
+  return map;
 }

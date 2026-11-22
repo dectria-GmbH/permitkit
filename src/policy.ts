@@ -21,9 +21,17 @@ export const restrictionScopeSchema = scopeSchema.refine(
   (scope) => Object.keys(scope).length > 0,
   "An empty scope restricts nothing. Leave the field out instead.",
 );
-/** Limits: property name to an inclusive numeric maximum. */
+/** Limits: property name to an inclusive numeric range. Give `min`, `max` or both. */
+const limitSchema = z
+  .object({ min: z.number().finite().optional(), max: z.number().finite().optional() })
+  .strict()
+  .refine((limit) => limit.min !== undefined || limit.max !== undefined, "Give min, max or both.")
+  .refine(
+    (limit) => limit.min === undefined || limit.max === undefined || limit.min <= limit.max,
+    "min must not be greater than max.",
+  );
 export const limitsSchema = z
-  .record(identifier, z.object({ max: z.number().finite() }).strict())
+  .record(identifier, limitSchema)
   .refine(
     (limits) => Object.keys(limits).length > 0,
     "Empty limits restrict nothing. Leave the field out instead.",
@@ -45,7 +53,12 @@ export const roleSchema = z
   })
   .strict();
 
-export const subjectTypeSchema = z.enum(["human", "service", "agent"]);
+// Literals, not z.enum: Zod 3 caches enum values on the instance through a lazy property.
+export const subjectTypeSchema = z.union([
+  z.literal("human"),
+  z.literal("service"),
+  z.literal("agent"),
+]);
 
 export const denySchema = z
   .object({

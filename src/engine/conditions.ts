@@ -9,7 +9,11 @@ import type { Scalar } from "../request.js";
 
 export type Properties = Readonly<Record<string, Scalar>> | undefined;
 type ScopeLike = Readonly<Record<string, readonly string[]>> | undefined;
-type LimitsLike = Readonly<Record<string, { readonly max: number }>> | undefined;
+type LimitsLike =
+  | Readonly<
+      Record<string, { readonly min?: number | undefined; readonly max?: number | undefined }>
+    >
+  | undefined;
 type ThresholdLike = Readonly<Record<string, { readonly gte: number }>> | undefined;
 
 export type ScopeResult =
@@ -17,7 +21,14 @@ export type ScopeResult =
   | { ok: false; property: string; allowed: readonly string[]; actual: Scalar | undefined };
 
 export type LimitResult =
-  { ok: true } | { ok: false; property: string; max: number; actual: Scalar | undefined };
+  | { ok: true }
+  | {
+      ok: false;
+      property: string;
+      min: number | null;
+      max: number | null;
+      actual: Scalar | undefined;
+    };
 
 export function ownValue(properties: Properties, name: string): Scalar | undefined {
   if (properties === undefined || !Object.hasOwn(properties, name)) return undefined;
@@ -55,15 +66,22 @@ export function scopeTouches(scope: ScopeLike, properties: Properties): boolean 
   return true;
 }
 
-/** Limits hold if every capped property is a finite number at or below its maximum. */
+/** Limits hold if every limited property is a finite number inside its inclusive range. */
 export function limitsHold(limits: LimitsLike, properties: Properties): LimitResult {
   if (limits === undefined) return { ok: true };
   for (const name of Object.keys(limits)) {
     const limit = limits[name];
     if (limit === undefined) continue;
     const actual = ownValue(properties, name);
-    if (typeof actual !== "number" || !Number.isFinite(actual) || actual > limit.max) {
-      return { ok: false, property: name, max: limit.max, actual };
+    const min = limit.min ?? null;
+    const max = limit.max ?? null;
+    const inside =
+      typeof actual === "number" &&
+      Number.isFinite(actual) &&
+      (min === null || actual >= min) &&
+      (max === null || actual <= max);
+    if (!inside) {
+      return { ok: false, property: name, min, max, actual };
     }
   }
   return { ok: true };

@@ -107,14 +107,14 @@ denies with `policy_version_mismatch`. Pin the digest when the label alone is no
 
 Matching rules:
 
-| Element              | Rule                                                                                    |
-| -------------------- | --------------------------------------------------------------------------------------- |
-| Grant scope          | Every listed property must be present on the resource as a string and be in the list.   |
-| Assignment scope     | Same as grant scope. `scope: {}` is explicit and means everywhere.                      |
-| Limit                | The property must be a finite number at or below `max`. Missing means exceeded.         |
-| Deny rule scope      | Matches unless the property is present and outside the list. Missing counts as inside.  |
-| Approval rule `when` | Applies if any listed property is missing, not a number, or at least `gte`.             |
-| Precedence           | Deny rules win over grants. Approval rules apply only after a grant covers the request. |
+| Element              | Rule                                                                                                                        |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Grant scope          | Every listed property must be present on the resource as a string and be in the list.                                       |
+| Assignment scope     | Same as grant scope. `scope: {}` is explicit and means everywhere.                                                          |
+| Limit                | The property must be a finite number in the range `min` to `max` (both inclusive, either optional). Missing means exceeded. |
+| Deny rule scope      | Matches unless the property is present and outside the list. Missing counts as inside.                                      |
+| Approval rule `when` | Applies if any listed property is missing, not a number, or at least `gte`.                                                 |
+| Precedence           | Deny rules win over grants. Approval rules apply only after a grant covers the request.                                     |
 
 ### Subjects and agents
 
@@ -151,10 +151,15 @@ call, rebuild from your identity store, not from what a client or an earlier ste
   the request digest, so a stored request with stale roles still matches its approvals;
 - each `approver` subject (type and roles). An approval proof binds only the approver id and the
   request digest, so roles taken from the approval itself let approvers claim their own
-  eligibility.
+  eligibility;
+- each approver id from the authenticated session in which that person approved. Without
+  `requireProof`, nothing else binds the id: code that lets the requester submit "an approval by
+  someone else" lets one person satisfy the rule alone.
 
 `evaluateApprovals()` does not know whether a request already ran. Mark a request as executed
-once, in the same transaction that executes it.
+once, in the same transaction that executes it, keyed on the `requestDigest`, not on your own row
+id. Two requests with the same content and the same request time share a digest, so give each
+request a `resource.id` or a distinct request time.
 
 ### Approval proofs
 
@@ -203,13 +208,23 @@ you need tamper evidence.
 
 ### AuthZEN
 
-`evaluate(policy, request)` accepts an OpenID AuthZEN 1.0 access evaluation request
-(`subject.properties.roles`, `subject.properties.act`, `context.now`) and returns
-`{ decision, context }`. AuthZEN defines no reason fields, so `context` uses permitkit's own
+`evaluate(policy, request)` accepts an OpenID AuthZEN 1.0 access evaluation request and returns
+`{ decision, context }`. It reads `subject.type`, `subject.id`, `subject.properties.roles`,
+`subject.properties.act`, `action.name`, `resource.type`, `resource.id`, `resource.properties`,
+`context.now`, `context.policy_version` and `context.policy_digest`. `action.properties` is
+accepted and not used. Any other key gives `invalid_request`, so a misspelt actor or pin cannot
+be ignored. AuthZEN defines no reason fields, so `context` uses permitkit's own
 names: `outcome`, `reason_codes`, `rule`, `approval`, `policy_version`, `policy_digest`,
 `request_digest`.
 
 ### Input rules
+
+- Every input is trusted data from your server, not from a client: `context.now` from your clock,
+  `subject.roles` and agent grants (with `revokedAt`) from your identity store,
+  `resource.properties` from your database. permitkit decides on what you pass; a backdated
+  `now` or a client-supplied role decides wrongly.
+- Limits are ranges. A limit with only `max` accepts any smaller value, also a negative one;
+  add `min` where that matters.
 
 - Ids, role names and scope values are compared as exact strings. permitkit does not change case,
   trim spaces or normalize Unicode. Normalize ids and scope values once, where they enter your

@@ -32,37 +32,79 @@ export interface AuthZenResponse {
   };
 }
 
+const allowed = {
+  top: ["subject", "action", "resource", "context"],
+  subject: ["type", "id", "properties"],
+  subjectProperties: ["roles", "act"],
+  action: ["name", "properties"],
+  resource: ["type", "id", "properties"],
+  context: ["now", "policy_version", "policy_digest"],
+} as const;
+
+/** Own property of a plain value, never an inherited one. */
+function own(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null || !Object.hasOwn(value, key)) return undefined;
+  const item: unknown = Reflect.get(value, key);
+  return item;
+}
+
+/** True if the value is absent, or an object whose own keys are all in the list. */
+function onlyKeys(value: unknown, keys: readonly string[]): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+/**
+ * Evaluates an AuthZEN access evaluation request. Input keys that permitkit does not map are
+ * rejected with `invalid_request` instead of being ignored, so a misspelt actor or pin cannot
+ * widen access. Recognized keys: `subject.properties.roles`, `subject.properties.act`,
+ * `context.now`, `context.policy_version`, `context.policy_digest`. `action.properties` is
+ * accepted and not used.
+ */
 export function evaluate(policy: CompiledPolicy, input: AuthZenRequest): AuthZenResponse {
-  // Read the caller's object once, through the size guard, then map the plain copy.
-  const copy = boundedSnapshot(input, requestBounds);
-  const request = (
-    typeof copy === "object" && copy !== null ? copy : {}
-  ) as Partial<AuthZenRequest>;
-  const subjectProperties = request.subject?.properties ?? {};
-  const context = request.context ?? {};
-  const native = {
-    subject: {
-      type: request.subject?.type,
-      id: request.subject?.id,
-      roles: subjectProperties["roles"],
-      ...(subjectProperties["act"] === undefined ? {} : { act: subjectProperties["act"] }),
-    },
-    action: { name: request.action?.name },
-    resource: {
-      type: request.resource?.type,
-      ...(request.resource?.id === undefined ? {} : { id: request.resource.id }),
-      ...(request.resource?.properties === undefined
-        ? {}
-        : { properties: request.resource.properties }),
-    },
-    context: {
-      now: context["now"],
-      ...(context["policy_version"] === undefined
-        ? {}
-        : { policyVersion: context["policy_version"] }),
-      ...(context["policy_digest"] === undefined ? {} : { policyDigest: context["policy_digest"] }),
-    },
-  };
+  // Read the caller's object once, through the size guard. The copy has no prototype.
+  const request = boundedSnapshot(input, requestBounds);
+  const subject = own(request, "subject");
+  const subjectProperties = own(subject, "properties");
+  const action = own(request, "action");
+  const resource = own(request, "resource");
+  const context = own(request, "context");
+  const shapeOk =
+    typeof request === "object" &&
+    request !== null &&
+    onlyKeys(request, allowed.top) &&
+    onlyKeys(subject, allowed.subject) &&
+    onlyKeys(subjectProperties, allowed.subjectProperties) &&
+    onlyKeys(action, allowed.action) &&
+    onlyKeys(resource, allowed.resource) &&
+    onlyKeys(context, allowed.context);
+  const act = own(subjectProperties, "act");
+  const resourceId = own(resource, "id");
+  const resourceProperties = own(resource, "properties");
+  const policyVersion = own(context, "policy_version");
+  const policyDigest = own(context, "policy_digest");
+  const native = shapeOk
+    ? {
+        subject: {
+          type: own(subject, "type"),
+          id: own(subject, "id"),
+          roles: own(subjectProperties, "roles"),
+          ...(act === undefined ? {} : { act }),
+        },
+        action: { name: own(action, "name") },
+        resource: {
+          type: own(resource, "type"),
+          ...(resourceId === undefined ? {} : { id: resourceId }),
+          ...(resourceProperties === undefined ? {} : { properties: resourceProperties }),
+        },
+        context: {
+          now: own(context, "now"),
+          ...(policyVersion === undefined ? {} : { policyVersion }),
+          ...(policyDigest === undefined ? {} : { policyDigest }),
+        },
+      }
+    : null;
   const decision = decide(policy, native);
   return {
     decision: decision.allowed,
