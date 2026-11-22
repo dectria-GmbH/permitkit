@@ -14,7 +14,8 @@ export const reasonCodes = Object.freeze({
   limit_exceeded: "A grant includes the permission, but a limit does not cover the resource.",
   denied_by_rule: "A deny rule matches the request. Deny rules win over grants.",
   agent_grant_missing: "An agent acts, but the request carries no agent grant.",
-  agent_grant_principal_mismatch: "The agent grant belongs to another principal.",
+  agent_grant_principal_mismatch:
+    "An agent grant in the chain belongs to another principal, or a prior actor's grant names another agent.",
   agent_grant_actor_mismatch: "The agent grant was issued to another agent.",
   agent_grant_not_yet_valid: "The agent grant starts after the request time.",
   agent_grant_expired: "The agent grant expired at or before the request time.",

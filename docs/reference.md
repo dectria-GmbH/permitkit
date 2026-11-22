@@ -6,29 +6,31 @@ an unknown decision reason as a deny. The exported objects `reasonCodes`, `reaso
 
 ## Decision reasons (`decide`, `explain`, `evaluate`)
 
-| Code                             | Outcome             | Meaning                                                                    |
-| -------------------------------- | ------------------- | -------------------------------------------------------------------------- |
-| `granted`                        | `allow`             | A grant of one of the subject's roles covers the request.                  |
-| `approval_required`              | `approval_required` | A grant covers the request, and a dual-approval rule applies to it.        |
-| `invalid_request`                | `deny`              | The request does not match the schema or exceeds the size bounds.          |
-| `policy_version_mismatch`        | `deny`              | The request pins a policy version or digest that is not the loaded policy. |
-| `unknown_permission`             | `deny`              | The permission is not in the catalogue.                                    |
-| `no_grant`                       | `deny`              | No grant of the subject's roles includes the permission.                   |
-| `scope_mismatch`                 | `deny`              | A grant includes the permission, but a scope does not cover the resource.  |
-| `limit_exceeded`                 | `deny`              | A grant includes the permission, but a limit does not cover the resource.  |
-| `denied_by_rule`                 | `deny`              | A deny rule matches. Deny rules win over grants.                           |
-| `agent_grant_missing`            | `deny`              | An agent acts without a grant.                                             |
-| `agent_grant_principal_mismatch` | `deny`              | The agent grant belongs to another principal.                              |
-| `agent_grant_actor_mismatch`     | `deny`              | The agent grant was issued to another agent id.                            |
-| `agent_grant_not_yet_valid`      | `deny`              | The agent grant starts after the request time.                             |
-| `agent_grant_expired`            | `deny`              | The agent grant expired at or before the request time.                     |
-| `agent_grant_revoked`            | `deny`              | The agent grant was revoked at or before the request time.                 |
-| `agent_grant_insufficient`       | `deny`              | The agent grant does not cover the request.                                |
-| `sod_role_conflict`              | `deny`              | The subject holds both a requesting and an approving role (if configured). |
+| Code                             | Outcome             | Meaning                                                                                                 |
+| -------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `granted`                        | `allow`             | A grant of one of the subject's roles covers the request.                                               |
+| `approval_required`              | `approval_required` | A grant covers the request, and a dual-approval rule applies to it.                                     |
+| `invalid_request`                | `deny`              | The request does not match the schema or exceeds the size bounds.                                       |
+| `policy_version_mismatch`        | `deny`              | The request pins a policy version or digest that is not the loaded policy.                              |
+| `unknown_permission`             | `deny`              | The permission is not in the catalogue.                                                                 |
+| `no_grant`                       | `deny`              | No grant of the subject's roles includes the permission.                                                |
+| `scope_mismatch`                 | `deny`              | A grant includes the permission, but a scope does not cover the resource.                               |
+| `limit_exceeded`                 | `deny`              | A grant includes the permission, but a limit does not cover the resource.                               |
+| `denied_by_rule`                 | `deny`              | A deny rule matches. Deny rules win over grants.                                                        |
+| `agent_grant_missing`            | `deny`              | An agent acts without a grant.                                                                          |
+| `agent_grant_principal_mismatch` | `deny`              | An agent grant in the chain belongs to another principal, or a prior actor's grant names another agent. |
+| `agent_grant_actor_mismatch`     | `deny`              | The agent grant was issued to another agent id.                                                         |
+| `agent_grant_not_yet_valid`      | `deny`              | The agent grant starts after the request time.                                                          |
+| `agent_grant_expired`            | `deny`              | The agent grant expired at or before the request time.                                                  |
+| `agent_grant_revoked`            | `deny`              | The agent grant was revoked at or before the request time.                                              |
+| `agent_grant_insufficient`       | `deny`              | The agent grant does not cover the request.                                                             |
+| `sod_role_conflict`              | `deny`              | The subject holds both a requesting and an approving role (if configured).                              |
 
 The order of checks is: input shape, pinned policy version, catalogue, agent grant validity,
 deny rules, grants of the principal, agent grant coverage, separation of duties, approval rule.
-The first failing check gives the reason.
+The first failing check gives the reason. If the library fails internally (for example under
+polluted built-in prototypes), the result is a deny with `invalid_request`, also for a request
+that would be valid.
 
 ## Approval results (`evaluateApprovals`)
 

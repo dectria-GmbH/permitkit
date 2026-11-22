@@ -61,7 +61,11 @@ function actorChainOf(request: AccessRequest | null): ActorChainEntry[] {
  */
 export function toDecisionRecord(request: unknown, decision: Decision): DecisionRecord {
   const parsed = parseRequest(request);
-  return buildRecord(parsed.ok ? parsed.request : null, decision);
+  try {
+    return buildRecord(parsed.ok ? parsed.request : null, decision);
+  } catch {
+    return buildRecord(null, decision);
+  }
 }
 
 function buildRecord(evaluated: AccessRequest | null, decision: Decision): DecisionRecord {

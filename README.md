@@ -116,6 +116,10 @@ Matching rules:
 | Approval rule `when` | Applies if any listed property is missing, not a number, or at least `gte`.                                                 |
 | Precedence           | Deny rules win over grants. Approval rules apply only after a grant covers the request.                                     |
 
+Several properties in one scope combine with AND: a deny rule with `{ queue: ["vip"], project:
+["alpha"] }` matches only resources in both. Use separate deny rules for OR. Approval rule `when`
+conditions combine with OR, so more conditions mean more approvals.
+
 ### Subjects and agents
 
 A subject is a `human` or `service` principal with role assignments. If an agent acts, the
@@ -159,8 +163,11 @@ and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
   `proofTypes`, only those proof types count, so an approver cannot pick a weaker registered
   verifier. `proofTypes` without `requireProof` is a policy error.
 
-`evaluateApprovals()` checks the identity data you pass in; it cannot look it up. Before each
-call, rebuild from your identity store, not from what a client or an earlier step submitted:
+`evaluateApprovals()` checks the identity data you pass in; it cannot look it up. The stored
+request's `subject.id`, `subject.type` and actor chain must come from the requester's
+authenticated session at request time; a spoofed principal would turn the real requester into
+an eligible approver. Before each call, rebuild from your identity store, not from what a client
+or an earlier step submitted:
 
 - `request.subject.roles` and the current agent grant, including `revokedAt`. Role assignments
   and `revokedAt` are not part of the request digest, so a stored request with stale roles or a
@@ -266,7 +273,11 @@ code can change the behaviour of any library in the process.
 - A key set to `undefined` counts as absent, as in JSON. Watch the cases where absent widens or
   skips a check: `subject.act: undefined` (an actor lookup that failed) decides as the principal
   acting directly, so deny rules for agents do not apply; `requireProof: undefined` compiles to
-  `false`; `revokedAt`, `policyDigest` and `approverRoles` set to `undefined` count as not set.
+  `false`; an agent grant entry's `scope` or `limits` set to `undefined` gives that entry the
+  principal's full rights for its permissions; `notBefore`, `revokedAt`, `policyVersion`,
+  `policyDigest`, `approverRoles`, `proofTypes`, grant `limits` and the separation-of-duties
+  flags set to `undefined` count as not set. Agent grants usually come from database rows, so
+  map optional columns on purpose.
   Check optional values before you build a request or a policy from them.
 - For the same reason, `limits: { amount: { max: undefined } }` is an empty limit and fails
   validation, and `scope: undefined` on a grant means no scope restriction. Build policies from

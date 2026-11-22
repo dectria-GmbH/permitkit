@@ -98,6 +98,10 @@ function clone(
   state.nodes += 1;
   if (state.nodes > bounds.maxNodes || depth > bounds.maxDepth) return unusable;
   if (typeof value === "string") return value.length > bounds.maxStringLength ? unusable : value;
+  // Functions, symbols and bigints are not JSON data. Unusable, so nothing else can reach them.
+  if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+    return unusable;
+  }
   if (typeof value !== "object" || value === null) return value;
   // A proxy can describe itself as any plain object, for example one without keys, which as a
   // scope would read as "everywhere". Proxies are unusable; pass plain data.

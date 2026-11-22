@@ -116,7 +116,11 @@ export function requestDigest(policy: CompiledPolicy, request: unknown): string 
   if (!parsed.ok) {
     throw new PermitkitError("request_invalid", "requestDigest() needs a valid request.");
   }
-  return digestOfRequest(policy, parsed.request);
+  try {
+    return digestOfRequest(policy, parsed.request);
+  } catch {
+    throw new PermitkitError("request_invalid", "requestDigest() could not hash the request.");
+  }
 }
 
 export type ParsedRequest =
@@ -124,6 +128,15 @@ export type ParsedRequest =
 
 /** Size guard plus schema validation. Never throws, also not for hostile getters or proxies. */
 export function parseRequest(input: unknown): ParsedRequest {
+  try {
+    return parseRequestUnguarded(input);
+  } catch {
+    // Polluted built-in prototypes can break array methods used below. Built without them.
+    return { ok: false, issues: [{ path: "", message: "The input could not be validated." }] };
+  }
+}
+
+function parseRequestUnguarded(input: unknown): ParsedRequest {
   const snapshot = boundedSnapshot(input, requestBounds);
   if (snapshot === undefined) return { ok: false, issues: [{ path: "", message: oversized }] };
   const parsed = safeParse(accessRequestSchema, snapshot);

@@ -58,7 +58,18 @@ function serializeObject(object: object, seen: Set<object>): string {
   seen.add(object);
   try {
     if (Array.isArray(object)) {
-      return `[${object.map((item: unknown) => serialize(item, seen)).join(",")}]`;
+      // A plain array only: holes or named properties would be lost or printed as non-JSON.
+      if (Reflect.ownKeys(object).length !== object.length + 1) {
+        throw new PermitkitError(
+          "not_canonical",
+          "Arrays with holes or extra keys have no JSON form.",
+        );
+      }
+      const items: string[] = [];
+      for (let index = 0; index < object.length; index += 1) {
+        items.push(serialize(Reflect.get(object, index), seen));
+      }
+      return `[${items.join(",")}]`;
     }
     const prototype: unknown = Object.getPrototypeOf(object);
     if (prototype !== Object.prototype && prototype !== null) {
