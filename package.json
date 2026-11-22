@@ -1,14 +1,58 @@
 {
   "name": "permitkit",
-  "version": "0.0.0",
-  "description": "Authorization toolkit for TypeScript: roles, scopes, field groups and delegated agent access.",
+  "version": "0.1.0",
+  "description": "Authorization toolkit for TypeScript: roles, scopes, deny rules, dual approval and delegated agent access, as a pure and auditable decision function.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dectria-GmbH/permitkit.git"
   },
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@12.21.0",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
+    "dist",
+    "src",
+    "docs",
+    "AGENTS.md",
     "README.md",
     "LICENSE"
   ],
-  "license": "MIT"
+  "scripts": {
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "oxlint --type-aware --deny-warnings",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --maxWorkers=2",
+    "smoke": "node scripts/smoke.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build && pnpm smoke"
+  },
+  "dependencies": {
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "fast-check": "4.10.3",
+    "oxlint": "1.94.0",
+    "oxlint-tsgolint": "7.0.2007",
+    "prettier": "3.10.1",
+    "typescript": "7.0.2",
+    "vitest": "5.1.1"
+  }
 }
