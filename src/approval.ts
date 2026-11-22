@@ -82,7 +82,14 @@ export const approvalInputSchema = z
      * operator switched on requesterNeverApprovesSameType.
      */
     priorRequests: z
-      .array(z.object({ principalId: z.string().min(1), permission: z.string().min(1) }).strict())
+      .array(
+        z
+          .object({
+            principalId: z.string().min(1),
+            permission: z.string().regex(/^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$/),
+          })
+          .strict(),
+      )
       .optional(),
   })
   .strict();
@@ -253,6 +260,13 @@ async function evaluateApprovalsUnguarded(
   const sod = internal.separationOfDuties;
   if (sod.requesterNeverApprovesSameType && priorRequests === undefined) {
     return result("deny", "sod_history_missing", ruleBase);
+  }
+  // A misspelt permission in the history would match nothing and let a prior requester approve.
+  if (
+    sod.requesterNeverApprovesSameType &&
+    (priorRequests ?? []).some((prior) => !policy.catalog.isPermission(prior.permission))
+  ) {
+    return result("deny", "invalid_input", ruleBase);
   }
   const requestingRoles = new Set(
     [...internal.roles.values()]

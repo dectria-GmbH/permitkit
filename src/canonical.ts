@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { types } from "node:util";
 
 import { PermitkitError } from "./errors.js";
+import { hasInternalSlots } from "./plain.js";
 
 /**
  * Serializes a JSON value with sorted object keys and no insignificant whitespace.
@@ -95,6 +96,9 @@ function serializeObject(object: object, seen: Set<object>): string {
     }
     if (prototype !== Object.prototype && prototype !== null) {
       return notCanonical("Only plain objects have a canonical JSON form.");
+    }
+    if (hasInternalSlots(object)) {
+      return notCanonical("Built-in objects such as a Map or Date have no canonical JSON form.");
     }
     const keys = Object.keys(object);
     // Symbol and non-enumerable keys would be dropped from the output.

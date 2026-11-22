@@ -445,6 +445,53 @@ describe("range bounds", () => {
   });
 });
 
+describe("built-in objects with a swapped prototype", () => {
+  it("refuses a Map with Object.prototype as a scope instead of copying it as {}", () => {
+    const swapped = Object.setPrototypeOf(
+      new Map([["properties", { queue: ["billing"] }]]),
+      Object.prototype,
+    ) as unknown;
+    expect(decide(policy, withAssignmentScope(swapped)).reason).toBe("invalid_request");
+    const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket:read");
+    const properties = Object.setPrototypeOf(new Map([["queue", "vip"]]), Object.prototype);
+    const withMap = { ...request, resource: { ...request.resource, properties } };
+    expect(decide(policy, withMap).reason).toBe("invalid_request");
+  });
+});
+
+describe("prior request history", () => {
+  it("refuses a history entry whose permission is not in the catalogue", async () => {
+    const input = editablePolicyInput();
+    input.separationOfDuties.requesterNeverApprovesSameType = true;
+    const strict = compilePolicy(catalog, input);
+    const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
+      properties: { amount: 500 },
+    });
+    const digestValue = requestDigest(strict, request);
+    const approvals = ["u-a", "u-b"].map((id) => ({
+      approver: human(id, role("lead", everywhere)),
+      approvedAt: "2026-01-15T10:10:00.000Z",
+      requestDigest: digestValue,
+    }));
+    const base = { request, now: "2026-01-15T10:30:00.000Z", approvals };
+    const exact = await evaluateApprovals(strict, {
+      ...base,
+      priorRequests: [{ principalId: "u-a", permission: "ticket:refund" }],
+    });
+    expect(exact.rejected[0]?.reason).toBe("sod_prior_request");
+    for (const permission of ["ticket:refunds", "Ticket:refund", "refund"]) {
+      const result = await evaluateApprovals(strict, {
+        ...base,
+        priorRequests: [{ principalId: "u-a", permission }],
+      });
+      expect({ permission, reason: result.reason }).toEqual({
+        permission,
+        reason: "invalid_input",
+      });
+    }
+  });
+});
+
 describe("explicit everywhere: deny scopes stay deny-biased", () => {
   it("counts a missing or non-string property as inside a deny match scope", () => {
     const support = human("u-s", role("support", everywhere));
@@ -574,6 +621,11 @@ describe("canonicalJson refuses non-plain data with a coded error", () => {
       },
     ],
     ["array subclass", () => new (class List extends Array {})()],
+    [
+      "Map with Object.prototype",
+      () => Object.setPrototypeOf(new Map([["a", 1]]), Object.prototype),
+    ],
+    ["Date with Object.prototype", () => Object.setPrototypeOf(new Date(0), Object.prototype)],
     [
       "very deep nesting",
       () => {

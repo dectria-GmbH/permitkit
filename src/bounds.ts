@@ -1,5 +1,7 @@
 import { types } from "node:util";
 
+import { hasInternalSlots } from "./plain.js";
+
 /**
  * Size guard that runs before schema validation. Zod 3 parses every item of an array even when
  * the array is longer than its `max()`, and keeps one issue per failing item, so a huge input
@@ -182,6 +184,8 @@ function clone(
     return items;
   }
   if (prototype !== Object.prototype && prototype !== null) return unusable;
+  // A Map or Date with a swapped prototype has no own keys and would copy as `{}`.
+  if (hasInternalSlots(value)) return unusable;
   const keys = Object.keys(value);
   if (keys.length > bounds.maxArrayLength) {
     state.tooLarge = true;
