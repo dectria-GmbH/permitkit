@@ -2,7 +2,7 @@
 
 A code never changes its meaning once released. New codes can appear in a minor release. Treat
 an unknown decision reason as a deny. The exported objects `reasonCodes`, `reasonHints`,
-`approvalRejectionCodes` and `approvalReasonCodes` hold the same texts at run time.
+`approvalRejectionCodes` and `approvalReasonCodes` hold a short text for each of these codes at run time.
 
 ## Decision reasons (`decide`, `explain`, `evaluate`)
 
@@ -43,7 +43,7 @@ that would be valid.
 | `requester_denied`               | `deny`    | The requester no longer holds the permission. See `requesterDecision`.        |
 | `not_approvable_at_request_time` | `deny`    | At its request time, the request was not `approval_required` under this rule. |
 | `sod_history_missing`            | `deny`    | The prior-request check is on, but the input has no `priorRequests`.          |
-| `too_many_approvals`             | `deny`    | The input holds more than 20 approvals. Checked before any other work.        |
+| `too_many_approvals`             | `deny`    | The input holds more than 20 approvals. Checked before the input is read.     |
 | `input_too_large`                | `deny`    | The request or the whole input exceeds the size bounds below.                 |
 | `invalid_input`                  | `deny`    | The input does not match the schema, is not plain data, or is inconsistent.   |
 
@@ -103,7 +103,7 @@ Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Audit records: 300,000 values, and the request inside meets the request
 bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.
 
-`evaluateApprovals` bounds its cost before any other work, in this order:
+`evaluateApprovals` checks its options, then bounds its cost before it reads the input, in this order:
 
 1. At most 20 approvals (`too_many_approvals`). The count is read from the array length, without
    reading any approval. The largest rule needs 10 approvers.

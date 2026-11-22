@@ -27,7 +27,7 @@ afterEach(() => {
   for (const key of polluted.splice(0)) delete (Object.prototype as Record<string, unknown>)[key];
 });
 
-describe("keys set to undefined count as absent", () => {
+describe("bounds set to undefined", () => {
   it("rejects a limit of { max: undefined } in a policy and in an agent grant", () => {
     const input = editablePolicyInput();
     input.roles["support"]!.grants[1]!.limits = {

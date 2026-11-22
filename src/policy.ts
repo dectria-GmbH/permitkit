@@ -70,9 +70,13 @@ const limitSchema = z
   .object({ min: z.number().finite().optional(), max: z.number().finite().optional() })
   .strict()
   // Own keys only: Zod's output object has a prototype, and an inherited `max` must not count.
+  // A key set to undefined does not count either: `{ min: 0, max: undefined }` is refused, not
+  // read as "no maximum".
   .refine(
-    (limit) => Object.hasOwn(limit, "min") || Object.hasOwn(limit, "max"),
-    "Give min, max or both.",
+    (limit) =>
+      Object.values(limit).every((bound) => typeof bound === "number") &&
+      (Object.hasOwn(limit, "min") || Object.hasOwn(limit, "max")),
+    "Give min, max or both, as numbers. A bound set to undefined is refused.",
   )
   .refine((limit) => {
     const min = Object.hasOwn(limit, "min") ? limit.min : undefined;

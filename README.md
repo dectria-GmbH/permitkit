@@ -319,9 +319,11 @@ code can change the behaviour of any library in the process.
 
 ### Input rules
 
-- A key set to `undefined` counts as absent, as in JSON. No absent field widens access: see
-  [Design choices](#design-choices). `limits: { kind: "range", properties: { amount: { max:
-undefined } } }` is an empty limit and fails validation.
+- A key set to `undefined` counts as absent only in an optional field, for example
+  `resource.id` or `description`. In a required field, and as a value inside a scope, limit or
+  threshold record, it is refused. So a match scope with `project: undefined` or a range with
+  `max: undefined` fails validation instead of losing a condition. No absent field widens access:
+  see [Design choices](#design-choices).
 - Agent grants usually come from database rows. Map every column on purpose: a nullable
   `revoked_at` column maps to `revokedAt: row.revoked_at ?? null`, never to a missing key.
 - Zod drops a `__proto__` key in `resource.properties`. It cannot be a scope or limit name, but
@@ -365,28 +367,29 @@ for any of them: the wide case is a value of its own, `{ kind: "all" }`, `{ kind
 
 What absence means after this rule:
 
-| Field                                                         | Absent, empty, `null` or malformed                                      |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Grant, assignment, agent grant `scope`                        | Refused                                                                 |
-| Grant and agent grant `limits`                                | Refused                                                                 |
-| Deny rule `scope`                                             | Refused                                                                 |
-| Approval rule `when`                                          | Refused                                                                 |
-| Approval rule `eligibleApprovers`                             | Refused                                                                 |
-| `requireProof`; `proofTypes` when `requireProof` is true      | Refused                                                                 |
-| `denies`, `approvalRules`, `separationOfDuties` and its flags | Refused                                                                 |
-| `subject.act`, actor `act`, actor `grant`                     | Refused (`null` is the explicit "none")                                 |
-| Agent grant `notBefore`, `revokedAt`                          | Refused (`null` is the explicit "not set")                              |
-| A property inside a match scope, on the resource              | Narrows: the grant does not match                                       |
-| A property inside a deny match scope, on the resource         | Narrows: counts as inside, the deny rule matches                        |
-| A property in a `range` limit, on the resource                | Narrows: the limit counts as exceeded                                   |
-| A property in a `threshold`, on the resource                  | Narrows: the approval rule applies                                      |
-| `resource.properties`                                         | Narrows: as if every property were missing                              |
-| Deny rule `roles`, `subjectTypes`                             | Narrows: the deny rule applies to everyone                              |
-| `priorRequests` with `requesterNeverApprovesSameType`         | Narrows: `sod_history_missing`                                          |
-| An approval `proof` with `requireProof`                       | Narrows: `proof_missing`                                                |
-| Prior actor `grant: null`                                     | No effect: prior actors grant nothing                                   |
-| `context.policyVersion`, `context.policyDigest`               | No pin: the loaded policy decides, which still grants only what it says |
-| `resource.id`, `description`                                  | No effect on the decision                                               |
+| Field                                                             | Absent, empty, `null` or malformed                                      |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Grant, assignment, agent grant `scope`                            | Refused                                                                 |
+| Grant and agent grant `limits`                                    | Refused                                                                 |
+| A key set to `undefined` inside a match scope, range or threshold | Refused, never a dropped condition                                      |
+| Deny rule `scope`                                                 | Refused                                                                 |
+| Approval rule `when`                                              | Refused                                                                 |
+| Approval rule `eligibleApprovers`                                 | Refused                                                                 |
+| `requireProof`; `proofTypes` when `requireProof` is true          | Refused                                                                 |
+| `denies`, `approvalRules`, `separationOfDuties` and its flags     | Refused                                                                 |
+| `subject.act`, actor `act`, actor `grant`                         | Refused (`null` is the explicit "none")                                 |
+| Agent grant `notBefore`, `revokedAt`                              | Refused (`null` is the explicit "not set")                              |
+| A property inside a match scope, on the resource                  | Narrows: the grant does not match                                       |
+| A property inside a deny match scope, on the resource             | Narrows: counts as inside, the deny rule matches                        |
+| A property in a `range` limit, on the resource                    | Narrows: the limit counts as exceeded                                   |
+| A property in a `threshold`, on the resource                      | Narrows: the approval rule applies                                      |
+| `resource.properties`                                             | Narrows: as if every property were missing                              |
+| Deny rule `roles`, `subjectTypes`                                 | Narrows: the deny rule applies to everyone                              |
+| `priorRequests` with `requesterNeverApprovesSameType`             | Narrows: `sod_history_missing`                                          |
+| An approval `proof` with `requireProof`                           | Narrows: `proof_missing`                                                |
+| Prior actor `grant: null`                                         | No effect: prior actors grant nothing                                   |
+| `context.policyVersion`, `context.policyDigest`                   | No pin: the loaded policy decides, which still grants only what it says |
+| `resource.id`, `description`                                      | No effect on the decision                                               |
 
 ### Own rule engine
 

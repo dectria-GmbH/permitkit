@@ -197,10 +197,11 @@ function clone(
     }
     const property = dataValue(value, key);
     if (property === unusable) return unusable;
-    // JSON has no undefined. A key set to undefined counts as absent, so `{ max: undefined }`
-    // is the empty limit `{}` and fails validation instead of passing an own-key check.
-    if (property === undefined) continue;
-    const item = clone(property, depth + 1, bounds, state);
+    // A key set to undefined stays an own key with the value undefined. Dropping it would remove
+    // one condition from an AND-combined record (a match scope, a range, a threshold), and the
+    // rest of the record would match more widely. The schema refuses undefined in every record
+    // value and every required field; only optional fields read it as absent.
+    const item = property === undefined ? undefined : clone(property, depth + 1, bounds, state);
     if (item === unusable) return unusable;
     // defineProperty keeps a key named __proto__ as data instead of changing the prototype.
     Object.defineProperty(result, key, {

@@ -11,5 +11,5 @@
 - Gates: `pnpm check` runs typecheck, lint, format check, tests, build and the import smoke test.
 - The only runtime dependency is Zod 3. Do not add another one.
 - Absence never widens access. Never add a schema default or an optional field whose absence
-  means "everywhere", "no limit" or "no check"; the wide case is an explicit `kind` value. See
+  means "everywhere", "no limit" or "no deny rules"; the wide case is an explicit `kind` value. See
   "Design choices" in `README.md`.

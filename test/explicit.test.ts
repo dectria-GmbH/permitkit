@@ -274,6 +274,120 @@ describe("explicit everywhere: policy documents", () => {
   });
 });
 
+/** A lead with a role assignment whose scope is not type-checked. */
+function leadWithScope(scope: unknown) {
+  return human("u-lead", { role: "lead", scope } as never);
+}
+
+describe("a key set to undefined inside an AND-combined record", () => {
+  it("refuses it in a policy grant scope, range and threshold instead of dropping a condition", () => {
+    const changes: [string, (input: Input) => void][] = [
+      [
+        "grant match scope",
+        (input) =>
+          set(input.roles["auditor"]!.grants[0]!, "scope", {
+            kind: "match",
+            properties: { project: ["alpha"], queue: undefined },
+          }),
+      ],
+      [
+        "range bound",
+        (input) =>
+          set(input.roles["support"]!.grants[1]!, "limits", {
+            kind: "range",
+            properties: { amount: { min: 0, max: undefined } },
+          }),
+      ],
+      [
+        "range property",
+        (input) =>
+          set(input.roles["support"]!.grants[1]!, "limits", {
+            kind: "range",
+            properties: { amount: { max: 500 }, other: undefined },
+          }),
+      ],
+      [
+        "threshold property",
+        (input) =>
+          set(input.approvalRules[0]!, "when", {
+            kind: "threshold",
+            properties: { amount: { gte: 100 }, other: undefined },
+          }),
+      ],
+      [
+        "deny match scope",
+        (input) =>
+          set(input.denies[1]!, "scope", {
+            kind: "match",
+            properties: { queue: ["vip"], project: undefined },
+          }),
+      ],
+    ];
+    for (const [label, change] of changes) {
+      const input = editablePolicyInput();
+      change(input);
+      expect({ label, code: codeOf(() => compilePolicy(catalog, input)) }).toEqual({
+        label,
+        code: "policy_invalid",
+      });
+    }
+  });
+
+  it("refuses it in an assignment scope, an agent grant entry and an approver scope", async () => {
+    const narrow = { kind: "match", properties: { queue: ["billing"], project: undefined } };
+    const resource = { properties: { queue: "billing", project: "other" } };
+    expect(
+      decide(policy, accessRequest(leadWithScope(narrow), "ticket:read", resource)).reason,
+    ).toBe("invalid_request");
+    const agent = viaAgent(human("u-lead", role("lead", everywhere)), "bot", {
+      entries: [
+        { permissions: ["ticket:read"], scope: narrow as never, limits: unlimited },
+        {
+          permissions: ["ticket:refund"],
+          scope: everywhere,
+          limits: { kind: "range", properties: { amount: { min: 0, max: undefined } } } as never,
+        },
+      ],
+    });
+    expect(decide(policy, accessRequest(agent, "ticket:read", resource)).reason).toBe(
+      "invalid_request",
+    );
+
+    const input = editablePolicyInput();
+    input.approvalRules[0]!.eligibleApprovers = { kind: "roles", roles: ["approver"] };
+    const withRoles = compilePolicy(catalog, input);
+    const request = accessRequest(human("u-req", role("lead", everywhere)), "ticket:refund", {
+      properties: { amount: 500, queue: "billing", project: "other" },
+    });
+    const digestValue = requestDigest(withRoles, request);
+    const approvals = ["u-a", "u-b"].map((id) => ({
+      approver: human(id, { role: "approver", scope: narrow } as never),
+      approvedAt: "2026-01-15T10:10:00.000Z",
+      requestDigest: digestValue,
+    }));
+    const result = await evaluateApprovals(withRoles, {
+      request,
+      now: "2026-01-15T10:30:00.000Z",
+      approvals,
+    });
+    expect(result.counted).toEqual([]);
+    expect(result.rejected.map((item) => item.reason)).toEqual([
+      "approval_invalid",
+      "approval_invalid",
+    ]);
+  });
+
+  it("still reads undefined as absent in an optional field", () => {
+    const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket:read");
+    const withUndefined = {
+      ...request,
+      resource: { ...request.resource, id: undefined },
+      context: { ...request.context, policyVersion: undefined },
+    };
+    expect(decide(policy, withUndefined).outcome).toBe("allow");
+  });
+});
+
 describe("explicit everywhere: deny scopes stay deny-biased", () => {
   it("counts a missing or non-string property as inside a deny match scope", () => {
     const support = human("u-s", role("support", everywhere));
