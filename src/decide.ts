@@ -83,13 +83,13 @@ export interface Explanation {
  * Deny by default: without a covering grant the outcome is `deny`.
  */
 export function decide(policy: CompiledPolicy, request: unknown): Decision {
-  return run(policy, request, undefined);
+  return guarded(policy, () => run(policy, request, undefined));
 }
 
 /** Like decide(), plus every evaluation step and a fix hint for the reason code. */
 export function explain(policy: CompiledPolicy, request: unknown): Explanation {
   const steps: TraceStep[] = [];
-  const decision = run(policy, request, steps);
+  const decision = guarded(policy, () => run(policy, request, steps));
   return { decision, hint: reasonHints[decision.reason], steps };
 }
 
@@ -263,7 +263,9 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
       const grant = prior.grant;
       if (
         grant !== undefined &&
-        (grant.principalId !== request.subject.id || grant.principalType !== request.subject.type)
+        (grant.principalId !== request.subject.id ||
+          grant.principalType !== request.subject.type ||
+          grant.agentId !== prior.id)
       ) {
         return deny("agent_grant_principal_mismatch", requestDigestValue);
       }
@@ -410,4 +412,26 @@ function agentGrantValidity(actor: Actor, principal: Subject, now: number): Reas
   }
   if (!(instant(grant.expiresAt) > now)) return "agent_grant_expired";
   return null;
+}
+
+/**
+ * Runs a decision and turns any failure that is not a PermitkitError into a deny. Data-valued
+ * pollution of built-in prototypes can make library internals throw; the result must still be a
+ * deny, built here without array methods that such pollution can break.
+ */
+function guarded(policy: CompiledPolicy, evaluate: () => Decision): Decision {
+  try {
+    return evaluate();
+  } catch (error) {
+    if (error instanceof PermitkitError) throw error;
+    return {
+      outcome: "deny",
+      allowed: false,
+      reason: "invalid_request",
+      rule: null,
+      approval: null,
+      policy: { version: policy.version, digest: policy.digest },
+      requestDigest: null,
+    };
+  }
 }

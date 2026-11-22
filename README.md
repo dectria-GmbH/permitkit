@@ -121,7 +121,8 @@ Matching rules:
 A subject is a `human` or `service` principal with role assignments. If an agent acts, the
 request carries the agent as `subject.act`, in the RFC 8693 `act` shape; nested `act` values are
 prior actors. They do not grant rights. If a prior actor carries a grant, that grant must come
-from the same principal, or the request is denied with `agent_grant_principal_mismatch`. Prior
+from the same principal and name that prior actor as its agent, or the request is denied with
+`agent_grant_principal_mismatch`. Prior
 actors are part of the request digest and the
 audit record, and their ids cannot approve the request. The current actor must hold a grant that
 the principal issued (`principalId` and `principalType`) to this agent (`agentId`), that is
@@ -252,7 +253,8 @@ names: `outcome`, `reason_codes`, `rule`, `approval`, `policy_version`, `policy_
 permitkit treats every input as possibly hostile data: wrong types, objects that are not plain
 data (a `Map`, a `Date`, a class instance, non-enumerable or symbol keys, getters and setters),
 proxies, array
-holes, huge values, and data-valued pollution of `Object.prototype` from a bug elsewhere in the process.
+holes, huge values, and data-valued pollution of `Object.prototype` from a bug elsewhere in the
+process. Data-valued pollution of `Array.prototype` also gives a deny, but is tested less.
 Such input gives a deny, never an exception from a decision function. Proxies count as not plain
 data, also reactive ones from UI state libraries: pass a plain copy. Code that runs in your
 process with its own functions (a replaced `Array.prototype.map`, a function on
@@ -261,9 +263,16 @@ code can change the behaviour of any library in the process.
 
 ### Input rules
 
-- A key set to `undefined` counts as absent, as in JSON. `limits: { amount: { max: undefined } }`
-  is therefore an empty limit and fails validation, and `scope: undefined` on a grant means no
-  scope restriction. Build policies from validated configuration, not from optional values.
+- A key set to `undefined` counts as absent, as in JSON. Watch the cases where absent widens or
+  skips a check: `subject.act: undefined` (an actor lookup that failed) decides as the principal
+  acting directly, so deny rules for agents do not apply; `requireProof: undefined` compiles to
+  `false`; `revokedAt`, `policyDigest` and `approverRoles` set to `undefined` count as not set.
+  Check optional values before you build a request or a policy from them.
+- For the same reason, `limits: { amount: { max: undefined } }` is an empty limit and fails
+  validation, and `scope: undefined` on a grant means no scope restriction. Build policies from
+  validated configuration, not from optional values.
+- Zod drops a `__proto__` key in `resource.properties`. It cannot be a scope or limit name, but
+  two requests that differ only in it share a request digest.
 - A service principal is its own identity. If a person triggers a service action, model the
   person as the principal and the service as the actor, or the person can approve their own
   request through the service.

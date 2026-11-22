@@ -120,6 +120,31 @@ export async function evaluateApprovals(
   input: unknown,
   options: ApprovalOptions = {},
 ): Promise<ApprovalDecision> {
+  try {
+    return await evaluateApprovalsUnguarded(policy, input, options);
+  } catch (error) {
+    if (error instanceof PermitkitError) throw error;
+    // Internals can fail under polluted built-in prototypes. Deny, built without array methods.
+    return Object.assign(emptyDecision(), {
+      outcome: "deny" as const,
+      allowed: false,
+      reason: "invalid_input" as const,
+      ruleId: null,
+      required: 0,
+      counted: [],
+      rejected: [],
+      requesterDecision: null,
+      policy: { version: policy.version, digest: policy.digest },
+      requestDigest: null,
+    });
+  }
+}
+
+async function evaluateApprovalsUnguarded(
+  policy: CompiledPolicy,
+  input: unknown,
+  options: ApprovalOptions,
+): Promise<ApprovalDecision> {
   const internal = internalsOf(policy);
   if (internal === undefined) {
     throw new PermitkitError(
@@ -219,7 +244,8 @@ export async function evaluateApprovals(
 
   const counted: string[] = [];
   const rejected: ApprovalRejection[] = [];
-  for (const [index, raw] of data.approvals.entries()) {
+  for (let index = 0; index < data.approvals.length; index += 1) {
+    const raw = data.approvals[index];
     const parsedApproval = safeParse(approvalSchema, raw);
     if (!parsedApproval.success) {
       rejected.push({ index, approverId: null, reason: "approval_invalid" });
@@ -413,8 +439,9 @@ function proofRejection(reason: ApprovalRejectionCode, detail?: string): ProofRe
  */
 function verifierMap(options: unknown): ReadonlyMap<string, BoundVerifier> {
   if (!isRecord(options)) return failOptions("The options must be an object.");
-  const unknownKeys = Object.keys(options).filter((key) => key !== "verifiers");
-  if (unknownKeys.length > 0) return failOptions(`Unknown option: ${unknownKeys.join(", ")}.`);
+  for (const key of Object.keys(options)) {
+    if (key !== "verifiers") return failOptions(`Unknown option: ${key}.`);
+  }
   const list: unknown = Object.hasOwn(options, "verifiers") ? options["verifiers"] : undefined;
   if (list === undefined) return new Map();
   if (!Array.isArray(list)) return failOptions("options.verifiers must be an array.");

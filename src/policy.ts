@@ -307,7 +307,9 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
     });
   };
 
-  for (const [roleName, role] of Object.entries(document.roles)) {
+  for (const roleName of Object.keys(document.roles)) {
+    const role = document.roles[roleName];
+    if (role === undefined) continue;
     role.grants.forEach((grant, index) => {
       const path = `roles.${roleName}.grants.${index}`;
       claimId(grant.id, path);

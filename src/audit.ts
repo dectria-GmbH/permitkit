@@ -102,6 +102,16 @@ export function reevaluate(policy: CompiledPolicy, record: DecisionRecord): Reev
   if (!isCompiledPolicy(policy)) {
     throw new PermitkitError("policy_unknown", "reevaluate() needs a policy from compilePolicy().");
   }
+  try {
+    return reevaluateChecked(policy, record);
+  } catch (error) {
+    if (error instanceof PermitkitError && error.code === "policy_unknown") throw error;
+    // Internals can fail under polluted built-in prototypes; such a record cannot be replayed.
+    return { status: "not_replayable" };
+  }
+}
+
+function reevaluateChecked(policy: CompiledPolicy, record: DecisionRecord): ReevaluationResult {
   const loaded = { version: policy.version, digest: policy.digest };
   const shape = safeParse(recordShapeSchema, boundedSnapshot(record, wrapperBounds));
   if (!shape.success) return { status: "not_replayable" };
@@ -149,8 +159,14 @@ export function decideAndRecord(
   policy: CompiledPolicy,
   request: unknown,
 ): { decision: Decision; record: DecisionRecord } {
-  const parsed = parseRequest(request);
-  const evaluated = parsed.ok ? parsed.request : null;
+  let evaluated: AccessRequest | null = null;
+  try {
+    const parsed = parseRequest(request);
+    evaluated = parsed.ok ? parsed.request : null;
+  } catch {
+    // Treat an input that cannot be read as invalid; decide(policy, null) denies.
+    evaluated = null;
+  }
   // On a parse failure, do not read the caller's object again: decide on null, which denies.
   const decision = decide(policy, evaluated);
   return { decision, record: buildRecord(evaluated, decision) };

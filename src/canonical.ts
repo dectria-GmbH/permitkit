@@ -64,11 +64,12 @@ function serializeObject(object: object, seen: Set<object>): string {
     if (prototype !== Object.prototype && prototype !== null) {
       throw new PermitkitError("not_canonical", "Only plain objects have a canonical JSON form.");
     }
-    const entries: [string, unknown][] = Object.entries(object);
-    const members = entries
-      .filter(([, item]) => item !== undefined)
-      .toSorted(([left], [right]) => compareText(left, right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${serialize(item, seen)}`);
+    // Keys plus index access, no [key, value] destructuring (see detach in bounds.ts).
+    const members: string[] = [];
+    for (const key of Object.keys(object).toSorted(compareText)) {
+      const item: unknown = Reflect.get(object, key);
+      if (item !== undefined) members.push(`${JSON.stringify(key)}:${serialize(item, seen)}`);
+    }
     return `{${members.join(",")}}`;
   } finally {
     seen.delete(object);

@@ -57,7 +57,10 @@ export function detach<T>(value: T): T {
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   if (Array.isArray(value)) return value.map((item: unknown) => detach(item)) as T;
   const result: Record<string, unknown> = Object.create(null);
-  for (const [key, item] of Object.entries(value)) {
+  // Keys plus index access, no [key, value] destructuring: closing a destructured iterator reads
+  // `return` through the prototype chain, which a polluted Object.prototype supplies.
+  for (const key of Object.keys(value)) {
+    const item: unknown = Reflect.get(value, key);
     Object.defineProperty(result, key, {
       value: detach(item),
       enumerable: true,
