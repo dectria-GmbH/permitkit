@@ -62,8 +62,8 @@ export function defineCatalog(definition: CatalogDefinition): Catalog {
     }
     const lists = {
       actions: [...entry.actions],
-      scopes: [...(entry.scopes ?? [])],
-      limits: [...(entry.limits ?? [])],
+      scopes: [...((Object.hasOwn(entry, "scopes") ? entry.scopes : undefined) ?? [])],
+      limits: [...((Object.hasOwn(entry, "limits") ? entry.limits : undefined) ?? [])],
     };
     for (const [key, list] of Object.entries(lists)) {
       const seen = new Set<string>();

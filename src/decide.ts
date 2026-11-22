@@ -1,4 +1,4 @@
-import { boundedSnapshot, requestBounds } from "./bounds.js";
+import { boundedSnapshot, detach, requestBounds } from "./bounds.js";
 import { digest } from "./canonical.js";
 import {
   limitsHold,
@@ -120,7 +120,7 @@ export function parseRequest(input: unknown): ParsedRequest {
   const snapshot = boundedSnapshot(input, requestBounds);
   if (snapshot === undefined) return { ok: false, issues: [{ path: "", message: oversized }] };
   const parsed = accessRequestSchema.safeParse(snapshot);
-  if (parsed.success) return { ok: true, request: parsed.data };
+  if (parsed.success) return { ok: true, request: detach(parsed.data) };
   return {
     ok: false,
     issues: parsed.error.issues.map((item) => ({
@@ -216,7 +216,10 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   const now = instant(request.context.now);
 
   const pinned = request.context.policyVersion ?? null;
-  const versionOk = pinned === null || pinned === policy.version;
+  const pinnedDigest = request.context.policyDigest ?? null;
+  const versionOk =
+    (pinned === null || pinned === policy.version) &&
+    (pinnedDigest === null || pinnedDigest === policy.digest);
   trace?.push({ step: "policy_version", ok: versionOk, pinned, loaded: policy.version });
   if (!versionOk) return deny("policy_version_mismatch", requestDigestValue);
 

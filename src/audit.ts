@@ -53,9 +53,16 @@ function actorChainOf(request: AccessRequest | null): ActorChainEntry[] {
   return chain;
 }
 
+/**
+ * Builds the audit record for a decision. Pass the same plain data that was decided; if the
+ * object has getters, use decideAndRecord() so both read one copy.
+ */
 export function toDecisionRecord(request: unknown, decision: Decision): DecisionRecord {
   const parsed = parseRequest(request);
-  const evaluated = parsed.ok ? parsed.request : null;
+  return buildRecord(parsed.ok ? parsed.request : null, decision);
+}
+
+function buildRecord(evaluated: AccessRequest | null, decision: Decision): DecisionRecord {
   const actorChain = actorChainOf(evaluated);
   return {
     schema: "permitkit.decision/1",
@@ -101,22 +108,43 @@ export function reevaluate(policy: CompiledPolicy, record: DecisionRecord): Reev
   const parsed = parseRequest(stored.request);
   if (!parsed.ok) return { status: "not_replayable" };
   const decision = decide(policy, parsed.request);
-  const same =
-    canonicalJson({
-      outcome: decision.outcome,
-      reason: decision.reason,
-      rule: decision.rule,
-      approval: decision.approval,
-      requestDigest: decision.requestDigest,
-      actorChain: actorChainOf(parsed.request),
-    }) ===
-    canonicalJson({
-      outcome: stored.outcome,
-      reason: stored.reason,
-      rule: stored.rule,
-      approval: stored.approval,
-      requestDigest: stored.requestDigest,
-      actorChain: stored.actorChain,
-    });
+  let same: boolean;
+  try {
+    same =
+      canonicalJson({
+        outcome: decision.outcome,
+        reason: decision.reason,
+        rule: decision.rule,
+        approval: decision.approval,
+        requestDigest: decision.requestDigest,
+        actorChain: actorChainOf(parsed.request),
+      }) ===
+      canonicalJson({
+        outcome: stored.outcome,
+        reason: stored.reason,
+        rule: stored.rule,
+        approval: stored.approval,
+        requestDigest: stored.requestDigest,
+        actorChain: stored.actorChain,
+      });
+  } catch {
+    // The stored record holds values without a JSON form, so it cannot match a decision.
+    return { status: "not_replayable" };
+  }
   return { status: same ? "reproduced" : "diverged", decision };
+}
+
+/**
+ * Decides and builds the audit record from the same validated copy of the request. Prefer this
+ * over decide() plus toDecisionRecord(): the record then holds exactly the request that was
+ * decided, even if the caller's object changes between two reads.
+ */
+export function decideAndRecord(
+  policy: CompiledPolicy,
+  request: unknown,
+): { decision: Decision; record: DecisionRecord } {
+  const parsed = parseRequest(request);
+  const evaluated = parsed.ok ? parsed.request : null;
+  const decision = decide(policy, evaluated ?? request);
+  return { decision, record: buildRecord(evaluated, decision) };
 }

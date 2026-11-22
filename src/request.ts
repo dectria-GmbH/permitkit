@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { limitsSchema, scopeSchema } from "./policy.js";
+import { limitsSchema, restrictionScopeSchema, scopeSchema } from "./policy.js";
 import { timestampSchema } from "./time.js";
 
 const id = z.string().min(1).max(256);
@@ -21,7 +21,7 @@ export const roleAssignmentSchema = z
 export const agentGrantEntrySchema = z
   .object({
     permissions: z.array(z.string().min(1)).min(1),
-    scope: scopeSchema.optional(),
+    scope: restrictionScopeSchema.optional(),
     limits: limitsSchema.optional(),
   })
   .strict();
@@ -88,8 +88,13 @@ export const accessRequestSchema = z
       .object({
         /** Evaluation time. permitkit never reads the clock, so decisions are reproducible. */
         now: timestamp,
-        /** If set, the decision denies unless the loaded policy has this version. */
+        /** If set, the decision denies unless the loaded policy has this version label. */
         policyVersion: z.string().min(1).max(128).optional(),
+        /** If set, the decision denies unless the loaded policy has this digest. */
+        policyDigest: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .optional(),
       })
       .strict(),
   })

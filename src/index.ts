@@ -51,7 +51,7 @@ export type {
 export { evaluate } from "./authzen.js";
 export type { AuthZenRequest, AuthZenResponse } from "./authzen.js";
 
-export { reevaluate, toDecisionRecord } from "./audit.js";
+export { decideAndRecord, reevaluate, toDecisionRecord } from "./audit.js";
 export type { ActorChainEntry, DecisionRecord, ReevaluationResult } from "./audit.js";
 
 export { canonicalJson, digest } from "./canonical.js";

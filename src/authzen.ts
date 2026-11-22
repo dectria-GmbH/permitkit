@@ -60,6 +60,7 @@ export function evaluate(policy: CompiledPolicy, input: AuthZenRequest): AuthZen
       ...(context["policy_version"] === undefined
         ? {}
         : { policyVersion: context["policy_version"] }),
+      ...(context["policy_digest"] === undefined ? {} : { policyDigest: context["policy_digest"] }),
     },
   };
   const decision = decide(policy, native);

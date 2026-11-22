@@ -43,10 +43,10 @@ describe("input size bounds", () => {
     expect(() => compilePolicy(catalog, input)).toThrow(PermitkitError);
   });
 
-  it("keeps a __proto__ key as data and does not change the prototype", () => {
+  it("keeps a __proto__ key as data and copies into a null-prototype object", () => {
     const raw: unknown = JSON.parse('{"__proto__": {"polluted": true}, "queue": "a"}');
     const copy = boundedSnapshot(raw, requestBounds) as Record<string, unknown>;
-    expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(copy)).toBeNull();
     expect(Object.hasOwn(copy, "__proto__")).toBe(true);
     expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
   });

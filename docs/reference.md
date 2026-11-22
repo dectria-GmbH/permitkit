@@ -11,7 +11,7 @@ an unknown decision reason as a deny. The exported objects `reasonCodes`, `reaso
 | `granted`                        | `allow`             | A grant of one of the subject's roles covers the request.                  |
 | `approval_required`              | `approval_required` | A grant covers the request, and a dual-approval rule applies to it.        |
 | `invalid_request`                | `deny`              | The request does not match the schema or exceeds the size bounds.          |
-| `policy_version_mismatch`        | `deny`              | The request pins a policy version that is not the loaded policy.           |
+| `policy_version_mismatch`        | `deny`              | The request pins a policy version or digest that is not the loaded policy. |
 | `unknown_permission`             | `deny`              | The permission is not in the catalogue.                                    |
 | `no_grant`                       | `deny`              | No grant of the subject's roles includes the permission.                   |
 | `scope_mismatch`                 | `deny`              | A grant includes the permission, but a scope does not cover the resource.  |
@@ -71,13 +71,13 @@ permitkit throws only for programming and configuration errors. Decisions never 
 requests, including throwing getters and revoked proxies; they deny. `catalog_invalid` is also
 thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
 
-| Code              | Thrown by                                | Meaning                                              |
-| ----------------- | ---------------------------------------- | ---------------------------------------------------- |
-| `catalog_invalid` | `defineCatalog`                          | The catalogue definition is not valid. See `issues`. |
-| `policy_invalid`  | `compilePolicy`                          | The policy document is not valid. See `issues`.      |
-| `policy_unknown`  | `decide`, `explain`, `evaluateApprovals` | The policy did not come from `compilePolicy`.        |
-| `request_invalid` | `requestDigest`                          | The request does not match the schema.               |
-| `not_canonical`   | `canonicalJson`, `digest`                | The value has no exact JSON form.                    |
+| Code              | Thrown by                                                                             | Meaning                                              |
+| ----------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `catalog_invalid` | `defineCatalog`                                                                       | The catalogue definition is not valid. See `issues`. |
+| `policy_invalid`  | `compilePolicy`                                                                       | The policy document is not valid. See `issues`.      |
+| `policy_unknown`  | `decide`, `explain`, `evaluate`, `evaluateApprovals`, `reevaluate`, `decideAndRecord` | The policy did not come from `compilePolicy`.        |
+| `request_invalid` | `requestDigest`                                                                       | The request does not match the schema.               |
+| `not_canonical`   | `canonicalJson`, `digest`                                                             | The value has no exact JSON form.                    |
 
 Each `PermitkitError` has `code`, `hint` and, for validation errors, `issues` with `path`,
 `message` and `hint`.

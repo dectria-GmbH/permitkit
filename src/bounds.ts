@@ -32,6 +32,29 @@ export const policyBounds: InputBounds = Object.freeze({
 const tooLarge = Symbol("tooLarge");
 
 /**
+ * Deep copy of validated data into objects without a prototype. permitkit reads optional
+ * fields with plain property access; on a null-prototype object an absent field is undefined,
+ * so a polluted Object.prototype cannot supply a value.
+ */
+export function detach<T>(value: T): T {
+  if (typeof value !== "object" || value === null) return value;
+  // The copy has the same structure as the input, so the type parameter still holds.
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+  if (Array.isArray(value)) return value.map((item: unknown) => detach(item)) as T;
+  const result: Record<string, unknown> = Object.create(null);
+  for (const [key, item] of Object.entries(value)) {
+    Object.defineProperty(result, key, {
+      value: detach(item),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+  return result as T;
+}
+
+/**
  * A plain copy of the value, or `undefined` if the value exceeds the bounds or cannot be read. Arrays and objects
  * become plain arrays and objects with own enumerable string keys. Other values stay as they are,
  * so the schema still rejects functions, symbols and similar values.
@@ -70,7 +93,8 @@ function clone(
   }
   const keys = Object.keys(value);
   if (keys.length > bounds.maxArrayLength) return tooLarge;
-  const result: Record<string, unknown> = {};
+  // A null prototype: a missing key reads as undefined even if Object.prototype was polluted.
+  const result: Record<string, unknown> = Object.create(null);
   for (const key of keys) {
     if (key.length > bounds.maxStringLength) return tooLarge;
     const property: unknown = Reflect.get(value, key);

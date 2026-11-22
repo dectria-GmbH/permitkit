@@ -101,7 +101,9 @@ that names a permission, scope property or limit property that the catalogue doe
 A policy document has `schema: 1`, a `version` label, `roles`, `denies`, `approvalRules` and
 `separationOfDuties`. Unknown keys are rejected everywhere, so a typo fails validation instead of
 being ignored. `compilePolicy()` returns a frozen policy with a digest over the catalogue and the
-normalized document. Only compiled policies are accepted by `decide()`.
+normalized document. Only compiled policies are accepted by `decide()`. A request can pin
+`context.policyVersion` (a label) and `context.policyDigest` (the exact content); a mismatch
+denies with `policy_version_mismatch`. Pin the digest when the label alone is not enough.
 
 Matching rules:
 
@@ -142,6 +144,15 @@ and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
 - a deny rule for the permission that matches the approver excludes the approval;
 - with `requireProof`, each approval needs a proof that a registered verifier accepts.
 
+`evaluateApprovals()` checks the identity data you pass in; it cannot look it up. Before each
+call, rebuild from your identity store, not from what a client or an earlier step submitted:
+
+- `request.subject.roles` and the current agent grant, including `revokedAt`. Neither is part of
+  the request digest, so a stored request with stale roles still matches its approvals;
+- each `approver` subject (type and roles). An approval proof binds only the approver id and the
+  request digest, so roles taken from the approval itself let approvers claim their own
+  eligibility.
+
 `evaluateApprovals()` does not know whether a request already ran. Mark a request as executed
 once, in the same transaction that executes it.
 
@@ -179,11 +190,13 @@ The operator switches these settings in the policy:
 ### Audit and re-evaluation
 
 ```ts
-const record = toDecisionRecord(request, decision); // plain JSON, write it to your audit log
+const { decision, record } = decideAndRecord(policy, request); // record is plain JSON
 reevaluate(policy, record); // "reproduced" | "diverged" | "policy_mismatch" | "not_replayable"
 ```
 
-`reevaluate()` refuses to run under a policy with another version or digest. Keep every policy
+`decideAndRecord()` reads the request once, so the record holds exactly what was decided.
+`toDecisionRecord(request, decision)` builds a record for an existing decision; pass it the same
+plain data. `reevaluate()` refuses to run under a policy with another version or digest. Keep every policy
 version that produced decisions. It checks consistency, not integrity: the digests are not keyed,
 so whoever can write the log can write a consistent forged record. Sign or chain the audit log if
 you need tamper evidence.

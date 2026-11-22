@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { boundedSnapshot, policyBounds } from "./bounds.js";
+import { boundedSnapshot, detach, policyBounds } from "./bounds.js";
 import { compareText, digest } from "./canonical.js";
 import { isCatalog, type Catalog } from "./catalog.js";
 import { PermitkitError, type PolicyIssue } from "./errors.js";
@@ -16,14 +16,24 @@ const permissionName = z
 
 /** Scope: property name to the list of allowed string values. An absent property is not restricted. */
 export const scopeSchema = z.record(identifier, z.array(z.string().min(1)).min(1).max(1000));
+/** A scope on a grant or deny rule. It must restrict something; leave it out for "everywhere". */
+export const restrictionScopeSchema = scopeSchema.refine(
+  (scope) => Object.keys(scope).length > 0,
+  "An empty scope restricts nothing. Leave the field out instead.",
+);
 /** Limits: property name to an inclusive numeric maximum. */
-export const limitsSchema = z.record(identifier, z.object({ max: z.number().finite() }).strict());
+export const limitsSchema = z
+  .record(identifier, z.object({ max: z.number().finite() }).strict())
+  .refine(
+    (limits) => Object.keys(limits).length > 0,
+    "Empty limits restrict nothing. Leave the field out instead.",
+  );
 
 export const grantSchema = z
   .object({
     id: identifier,
     permissions: z.array(permissionName).min(1),
-    scope: scopeSchema.optional(),
+    scope: restrictionScopeSchema.optional(),
     limits: limitsSchema.optional(),
   })
   .strict();
@@ -47,7 +57,7 @@ export const denySchema = z
     /** The rule applies only to these subject types. `agent` means an agent acts. Absent: all. */
     subjectTypes: z.array(subjectTypeSchema).min(1).optional(),
     /** The rule applies only to resources inside this scope. A missing property counts as inside. */
-    scope: scopeSchema.optional(),
+    scope: restrictionScopeSchema.optional(),
   })
   .strict();
 
@@ -60,7 +70,10 @@ export const approvalRuleSchema = z
      * The rule applies if any listed numeric property is at least `gte`, or is missing.
      * Absent: the rule always applies.
      */
-    when: z.record(identifier, z.object({ gte: z.number().finite() }).strict()).optional(),
+    when: z
+      .record(identifier, z.object({ gte: z.number().finite() }).strict())
+      .refine((when) => Object.keys(when).length > 0, "Leave out an empty when.")
+      .optional(),
     /** Number of distinct approvers besides the requester. */
     approvers: z.number().int().min(1).max(10),
     /** Each approver must hold one of these roles in a scope that covers the resource. */
@@ -175,7 +188,7 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
     }));
     throw new PermitkitError("policy_invalid", "The policy document is not valid.", issues);
   }
-  const document = parsed.data;
+  const document = detach(parsed.data);
   const issues = checkReferences(catalog, document);
   if (issues.length > 0) {
     throw new PermitkitError("policy_invalid", "The policy document is not valid.", issues);

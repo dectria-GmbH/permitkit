@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { boundedSnapshot, requestBounds } from "./bounds.js";
+import { boundedSnapshot, detach, requestBounds } from "./bounds.js";
 import { decide, denyRuleMatches, permissionOf, requestDigest, type Decision } from "./decide.js";
 import { scopeCovers } from "./engine/conditions.js";
 import { PermitkitError } from "./errors.js";
@@ -147,7 +147,8 @@ export async function evaluateApprovals(
   if (snapshot === undefined) return result("deny", "invalid_input");
   const parsed = approvalInputSchema.safeParse(snapshot);
   if (!parsed.success) return result("deny", "invalid_input");
-  const { request, now: nowText, priorRequests } = parsed.data;
+  const data = detach(parsed.data);
+  const { request, now: nowText, priorRequests } = data;
   const now = instant(nowText);
   const requestedAt = instant(request.context.now);
   // Written so that an unreadable time fails the check.
@@ -184,17 +185,18 @@ export async function evaluateApprovals(
   for (let actor = request.subject.act; actor !== undefined; actor = actor.act) {
     requesterIds.add(actor.id);
   }
-  const verifiers = new Map((options.verifiers ?? []).map((verifier) => [verifier.type, verifier]));
+  const verifierList = Object.hasOwn(options, "verifiers") ? (options.verifiers ?? []) : [];
+  const verifiers = new Map(verifierList.map((verifier) => [verifier.type, verifier]));
 
   const counted: string[] = [];
   const rejected: ApprovalRejection[] = [];
-  for (const [index, raw] of parsed.data.approvals.entries()) {
+  for (const [index, raw] of data.approvals.entries()) {
     const parsedApproval = approvalSchema.safeParse(raw);
     if (!parsedApproval.success) {
       rejected.push({ index, approverId: null, reason: "approval_invalid" });
       continue;
     }
-    const approval = parsedApproval.data;
+    const approval = detach(parsedApproval.data);
     const approver = approval.approver;
     const reject = (reason: ApprovalRejectionCode, detail?: string) => {
       rejected.push({ index, approverId: approver.id, reason, ...(detail ? { detail } : {}) });
@@ -305,7 +307,7 @@ async function checkProof(
   }
   const verifier = verifiers.get(proof.type);
   if (verifier === undefined) return { reason: "proof_verifier_missing", detail: proof.type };
-  let verification: ProofVerification;
+  let verification: unknown;
   try {
     verification = await verifier.verify(proof, { approverId, requestDigest: digestValue });
   } catch (error) {
@@ -314,11 +316,21 @@ async function checkProof(
       detail: error instanceof Error ? error.message : "verifier threw",
     };
   }
-  if (!verification.valid) {
-    return { reason: "proof_invalid", detail: verification.reason };
+  // Count only the exact success shape. Anything else, also a truthy string, is a rejection.
+  if (!isRecord(verification) || verification["valid"] !== true) {
+    const reason =
+      isRecord(verification) && typeof verification["reason"] === "string"
+        ? verification["reason"]
+        : "verifier did not confirm";
+    return { reason: "proof_invalid", detail: reason };
   }
-  if (verification.approverId !== approverId || verification.requestDigest !== digestValue) {
+  const echo = verification;
+  if (echo["approverId"] !== approverId || echo["requestDigest"] !== digestValue) {
     return { reason: "proof_invalid", detail: "verifier echo does not match" };
   }
   return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
