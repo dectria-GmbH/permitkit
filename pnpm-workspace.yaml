@@ -1,0 +1,6 @@
+# Zod 3 has no release that fixes GHSA-mrhx-c7xc-m3w5 (memory use when a large array fails
+# validation). permitkit copies every input through a size guard before Zod sees it, see
+# src/bounds.ts and test/bounds.test.ts. Remove this entry when the library moves off Zod 3.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-mrhx-c7xc-m3w5
