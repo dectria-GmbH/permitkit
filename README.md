@@ -112,7 +112,7 @@ Matching rules:
 | Grant scope          | Every listed property must be present on the resource as a string and be in the list.                                       |
 | Assignment scope     | Same as grant scope. `scope: {}` is explicit and means everywhere.                                                          |
 | Limit                | The property must be a finite number in the range `min` to `max` (both inclusive, either optional). Missing means exceeded. |
-| Deny rule scope      | Matches unless the property is present and outside the list. Missing counts as inside.                                      |
+| Deny rule scope      | Matches unless the property is a string outside the list. Missing or non-string values count as inside.                     |
 | Approval rule `when` | Applies if any listed property is missing, not a number, or at least `gte`.                                                 |
 | Precedence           | Deny rules win over grants. Approval rules apply only after a grant covers the request.                                     |
 
@@ -121,9 +121,11 @@ Matching rules:
 A subject is a `human` or `service` principal with role assignments. If an agent acts, the
 request carries the agent as `subject.act`, in the RFC 8693 `act` shape; nested `act` values are
 prior actors and are logged, not used for the decision. The current actor must hold a grant that
-the principal issued (`principalId`) to this agent (`agentId`), that is inside its validity
-window, and that covers the permission, scope and limits of the request. Deny rules with `subjectTypes: ["agent"]` apply when
-an agent acts.
+the principal issued (`principalId` and `principalType`) to this agent (`agentId`), that is
+inside its validity window (`notBefore` inclusive, `expiresAt` and `revokedAt` exclusive), and
+that covers the permission, scope and limits of the request. Deny rules with
+`subjectTypes: ["agent"]` apply when an agent acts; rules with `["human"]` or `["service"]` match
+the principal's type, also when an agent acts for it.
 
 ### Dual approval
 
@@ -131,14 +133,15 @@ If a grant covers the request and an approval rule applies, the outcome is `appr
 with the rule id, the number of approvers and the end of the approval window. Store the request
 and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
 
-- the requester must still hold the permission at evaluation time;
+- the request was `approval_required` under the same rule at its request time, and the requester
+  still holds the permission at evaluation time;
 - each approver is a human principal acting directly, not through an agent;
 - the requester never counts: neither the principal nor any agent id in its actor chain;
 - each approver counts once;
 - each approval names the request digest, which covers principal, each actor with the content
   of its grant, action, resource, request time and policy version, so an approval cannot move
   to another request or survive a policy change;
-- approvals count only inside the window;
+- approvals count only inside the window, both ends inclusive;
 - with `approverRoles`, the approver must hold one of those roles in a scope that covers the
   resource; without it, the approver must hold the permission itself;
 - a deny rule for the permission that matches the approver excludes the approval;
@@ -154,7 +157,10 @@ call, rebuild from your identity store, not from what a client or an earlier ste
   eligibility;
 - each approver id from the authenticated session in which that person approved. Without
   `requireProof`, nothing else binds the id: code that lets the requester submit "an approval by
-  someone else" lets one person satisfy the rule alone.
+  someone else" lets one person satisfy the rule alone;
+- each `approvedAt` from your server clock when the approval arrives. A proof does not cover the
+  time, and the request digest is predictable, so a client-supplied time could place an approval
+  inside the window after the fact.
 
 `evaluateApprovals()` does not know whether a request already ran. Mark a request as executed
 once, in the same transaction that executes it, keyed on the `requestDigest`, not on your own row

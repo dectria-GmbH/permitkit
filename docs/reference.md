@@ -32,15 +32,16 @@ The first failing check gives the reason.
 
 ## Approval results (`evaluateApprovals`)
 
-| Code                      | Outcome   | Meaning                                                                      |
-| ------------------------- | --------- | ---------------------------------------------------------------------------- |
-| `approved`                | `allow`   | Enough distinct, eligible approvals exist.                                   |
-| `approvals_pending`       | `pending` | Fewer eligible approvals exist than the rule requires.                       |
-| `approval_window_expired` | `deny`    | The approval window closed before the evaluation time.                       |
-| `approval_not_required`   | `allow`   | No approval rule applies to the request.                                     |
-| `requester_denied`        | `deny`    | The requester no longer holds the permission. See `requesterDecision`.       |
-| `sod_history_missing`     | `deny`    | The prior-request check is on, but the input has no `priorRequests`.         |
-| `invalid_input`           | `deny`    | The input does not match the schema, exceeds the bounds, or is inconsistent. |
+| Code                             | Outcome   | Meaning                                                                       |
+| -------------------------------- | --------- | ----------------------------------------------------------------------------- |
+| `approved`                       | `allow`   | Enough distinct, eligible approvals exist.                                    |
+| `approvals_pending`              | `pending` | Fewer eligible approvals exist than the rule requires.                        |
+| `approval_window_expired`        | `deny`    | The approval window closed before the evaluation time.                        |
+| `approval_not_required`          | `allow`   | No approval rule applies to the request.                                      |
+| `requester_denied`               | `deny`    | The requester no longer holds the permission. See `requesterDecision`.        |
+| `not_approvable_at_request_time` | `deny`    | At its request time, the request was not `approval_required` under this rule. |
+| `sod_history_missing`            | `deny`    | The prior-request check is on, but the input has no `priorRequests`.          |
+| `invalid_input`                  | `deny`    | The input does not match the schema, exceeds the bounds, or is inconsistent.  |
 
 ## Approval rejections (`ApprovalDecision.rejected`)
 

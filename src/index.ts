@@ -1,7 +1,7 @@
 export { defineCatalog, isCatalog } from "./catalog.js";
 export type { Catalog, CatalogDefinition, ResourceDefinition, ResourceEntry } from "./catalog.js";
 
-export { compilePolicy, isCompiledPolicy, policySchema } from "./policy.js";
+export { compilePolicy, isCompiledPolicy } from "./policy.js";
 export type {
   ApprovalRule,
   CompiledPolicy,
@@ -14,7 +14,7 @@ export type {
   Scope,
 } from "./policy.js";
 
-export { accessRequestSchema, maxActorDepth } from "./request.js";
+export { maxActorDepth } from "./request.js";
 export type {
   AccessRequest,
   Actor,

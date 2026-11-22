@@ -44,6 +44,7 @@ export function viaAgent(principal: Subject, agentId: string, options: AgentGran
   const grant: AgentGrant = {
     id: options.id ?? `grant-${agentId}`,
     principalId: principal.id,
+    principalType: principal.type,
     agentId,
     entries: options.entries,
     expiresAt: options.expiresAt ?? "2099-01-01T00:00:00.000Z",

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { boundedSnapshot, detach, requestBounds } from "./bounds.js";
 import { decide, denyRuleMatches, permissionOf, requestDigest, type Decision } from "./decide.js";
 import { scopeCovers } from "./engine/conditions.js";
+import { safeParse } from "./parse.js";
 import { PermitkitError } from "./errors.js";
 import { internalsOf, type CompiledPolicy } from "./policy.js";
 import type { ApprovalReasonCode, ApprovalRejectionCode } from "./reasons.js";
@@ -129,23 +130,26 @@ export async function evaluateApprovals(
     outcome: ApprovalDecision["outcome"],
     reason: ApprovalReasonCode,
     rest: Partial<ApprovalDecision> = {},
-  ): ApprovalDecision => ({
-    outcome,
-    allowed: outcome === "allow",
-    reason,
-    ruleId: null,
-    required: 0,
-    counted: [],
-    rejected: [],
-    requesterDecision: null,
-    policy: policyRef,
-    requestDigest: null,
-    ...rest,
-  });
+  ): ApprovalDecision =>
+    // A null prototype: an inherited `then` on Object.prototype must not turn the result into a
+    // thenable, which would keep the returned promise pending forever.
+    Object.assign(emptyDecision(), {
+      outcome,
+      allowed: outcome === "allow",
+      reason,
+      ruleId: null,
+      required: 0,
+      counted: [],
+      rejected: [],
+      requesterDecision: null,
+      policy: policyRef,
+      requestDigest: null,
+      ...rest,
+    });
 
   const snapshot = boundedSnapshot(input, requestBounds);
   if (snapshot === undefined) return result("deny", "invalid_input");
-  const parsed = approvalInputSchema.safeParse(snapshot);
+  const parsed = safeParse(approvalInputSchema, snapshot);
   if (!parsed.success) return result("deny", "invalid_input");
   const data = detach(parsed.data);
   const { request, now: nowText, priorRequests } = data;
@@ -162,6 +166,14 @@ export async function evaluateApprovals(
   const base = { requesterDecision, requestDigest: digestValue };
   if (requesterDecision.outcome === "deny") return result("deny", "requester_denied", base);
   if (requesterDecision.outcome === "allow") return result("allow", "approval_not_required", base);
+  // The request must also have been a valid approval request when it was made.
+  const requestTimeDecision = decide(policy, request);
+  if (
+    requestTimeDecision.outcome !== "approval_required" ||
+    requestTimeDecision.approval?.ruleId !== requesterDecision.approval?.ruleId
+  ) {
+    return result("deny", "not_approvable_at_request_time", base);
+  }
 
   const permission = permissionOf(request);
   const rule = internal.approvalRules.get(permission);
@@ -185,12 +197,19 @@ export async function evaluateApprovals(
   for (let actor = request.subject.act; actor !== undefined; actor = actor.act) {
     requesterIds.add(actor.id);
   }
-  const verifiers = verifierMap(options);
+  let verifiers: ReadonlyMap<string, ApprovalProofVerifier>;
+  try {
+    verifiers = verifierMap(options);
+  } catch (error) {
+    if (error instanceof PermitkitError) throw error;
+    // A hostile options object (proxy, throwing getter) is still a programming error.
+    throw new PermitkitError("options_invalid", "The options could not be read.");
+  }
 
   const counted: string[] = [];
   const rejected: ApprovalRejection[] = [];
   for (const [index, raw] of data.approvals.entries()) {
-    const parsedApproval = approvalSchema.safeParse(raw);
+    const parsedApproval = safeParse(approvalSchema, raw);
     if (!parsedApproval.success) {
       rejected.push({ index, approverId: null, reason: "approval_invalid" });
       continue;
@@ -312,16 +331,17 @@ async function checkProof(
       requestDigest: digestValue,
     });
     // Count only the exact success shape. Anything else, also a truthy string, is a rejection.
-    if (!isRecord(verification) || verification["valid"] !== true) {
-      const reason = isRecord(verification) ? verification["reason"] : undefined;
+    // Own properties only: an inherited `valid` or echo must never count.
+    if (ownValue(verification, "valid") !== true) {
+      const reason = ownValue(verification, "reason");
       return {
         reason: "proof_invalid",
         detail: typeof reason === "string" ? reason : "verifier did not confirm",
       };
     }
     if (
-      verification["approverId"] !== approverId ||
-      verification["requestDigest"] !== digestValue
+      ownValue(verification, "approverId") !== approverId ||
+      ownValue(verification, "requestDigest") !== digestValue
     ) {
       return { reason: "proof_invalid", detail: "verifier echo does not match" };
     }
@@ -364,4 +384,14 @@ function verifierMap(options: unknown): ReadonlyMap<string, ApprovalProofVerifie
     map.set(item.type, item);
   }
   return map;
+}
+
+function ownValue(value: unknown, key: string): unknown {
+  if (!isRecord(value) || !Object.hasOwn(value, key)) return undefined;
+  return value[key];
+}
+
+function emptyDecision(): ApprovalDecision {
+  const empty: ApprovalDecision = Object.create(null);
+  return empty;
 }

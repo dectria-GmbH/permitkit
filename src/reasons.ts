@@ -2,7 +2,7 @@
  * Stable reason codes. A code never changes its meaning once released. New codes may be added
  * in a minor release, so consumers must treat an unknown code as a deny.
  */
-export const reasonCodes = {
+export const reasonCodes = Object.freeze({
   granted: "A grant of one of the subject's roles covers the request.",
   approval_required: "A grant covers the request, but a dual-approval rule applies to it.",
   invalid_request: "The request does not match the request schema.",
@@ -21,11 +21,11 @@ export const reasonCodes = {
   agent_grant_insufficient: "The agent grant does not cover the request.",
   sod_role_conflict:
     "Separation of duties: the subject holds both a requesting and an approving role for this permission.",
-} as const;
+} as const);
 
 export type ReasonCode = keyof typeof reasonCodes;
 
-export const reasonHints: Record<ReasonCode, string> = {
+export const reasonHints: Record<ReasonCode, string> = Object.freeze({
   granted: "No action needed.",
   approval_required:
     "Record the request with its requestDigest and collect approvals, then call evaluateApprovals.",
@@ -49,10 +49,10 @@ export const reasonHints: Record<ReasonCode, string> = {
     "Ask the principal to extend the grant, within the principal's own rights.",
   sod_role_conflict:
     "Remove either the requesting or the approving role from the subject, or change the operator's separation-of-duties setting.",
-};
+});
 
 /** Reasons why one approval does not count toward a dual-approval rule. */
-export const approvalRejectionCodes = {
+export const approvalRejectionCodes = Object.freeze({
   approval_invalid: "The approval does not match the approval schema.",
   approver_not_human: "Only a human principal can approve.",
   approver_is_delegated: "An approval given through an agent does not count.",
@@ -72,20 +72,22 @@ export const approvalRejectionCodes = {
   proof_mismatch: "The proof names another approver or another request digest.",
   proof_verifier_missing: "No verifier is registered for the proof type.",
   proof_invalid: "The verifier rejected the proof.",
-} as const;
+} as const);
 
 export type ApprovalRejectionCode = keyof typeof approvalRejectionCodes;
 
 /** Reasons for the overall result of evaluateApprovals. */
-export const approvalReasonCodes = {
+export const approvalReasonCodes = Object.freeze({
   approved: "Enough distinct, eligible approvals exist.",
   approvals_pending: "Fewer eligible approvals exist than the rule requires.",
   approval_window_expired: "The approval window closed before the evaluation time.",
   approval_not_required: "No dual-approval rule applies; the request decision is allow.",
   requester_denied: "The requester no longer holds the permission. Read requesterDecision.",
+  not_approvable_at_request_time:
+    "At its request time, the request was not an approval_required decision under this rule.",
   sod_history_missing:
     "The operator requires the prior-request check, but the input has no priorRequests.",
   invalid_input: "The approval input does not match the schema.",
-} as const;
+} as const);
 
 export type ApprovalReasonCode = keyof typeof approvalReasonCodes;

@@ -20,7 +20,7 @@ const errorHints: Record<ErrorCode, string> = {
   not_canonical:
     "Pass only JSON values: plain objects, arrays, strings, finite numbers, booleans, null.",
   options_invalid: "Pass options as { verifiers: [...] } with one verifier per proof type.",
-  request_invalid: "Validate the request with accessRequestSchema, or read explain() issues.",
+  request_invalid: "Validate the request with parseRequest(), or read explain() issues.",
   policy_unknown:
     "Pass a policy that compilePolicy returned in this process. Do not build policy objects by hand.",
 };

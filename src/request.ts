@@ -34,6 +34,8 @@ export const agentGrantSchema = z
   .object({
     id,
     principalId: id,
+    /** The type of the issuing principal. Ids of humans and services may overlap. */
+    principalType: z.union([z.literal("human"), z.literal("service")]),
     /** The agent this grant is for. Only an actor with this id can use it. */
     agentId: id,
     entries: z.array(agentGrantEntrySchema).min(1),

@@ -85,6 +85,8 @@ function clone(
     if (length > bounds.maxArrayLength) return tooLarge;
     const items: unknown[] = [];
     for (let index = 0; index < length; index += 1) {
+      // A hole would read from Array.prototype or Object.prototype. Treat it as unreadable.
+      if (!Object.hasOwn(value, index)) return tooLarge;
       const item = clone((value as unknown[])[index], depth + 1, bounds, state);
       if (item === tooLarge) return tooLarge;
       items.push(item);

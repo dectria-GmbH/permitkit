@@ -165,6 +165,7 @@ describe("properties", () => {
               grant: {
                 id: "g",
                 principalId: grant.samePrincipal ? request.subject.id : "someone-else",
+                principalType: request.subject.type,
                 agentId: grant.sameAgent ? "agent-1" : "agent-2",
                 entries: grant.entries,
                 expiresAt: grant.expiresAt,

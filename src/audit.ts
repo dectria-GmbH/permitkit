@@ -18,7 +18,9 @@ const recordShapeSchema = z
     approval: z.unknown(),
   })
   .strict();
-import type { CompiledPolicy } from "./policy.js";
+import { PermitkitError } from "./errors.js";
+import { safeParse } from "./parse.js";
+import { isCompiledPolicy, type CompiledPolicy } from "./policy.js";
 
 export interface ActorChainEntry {
   readonly type: "human" | "service" | "agent";
@@ -97,8 +99,11 @@ export type ReevaluationResult =
  * records in the audit log.
  */
 export function reevaluate(policy: CompiledPolicy, record: DecisionRecord): ReevaluationResult {
+  if (!isCompiledPolicy(policy)) {
+    throw new PermitkitError("policy_unknown", "reevaluate() needs a policy from compilePolicy().");
+  }
   const loaded = { version: policy.version, digest: policy.digest };
-  const shape = recordShapeSchema.safeParse(boundedSnapshot(record, requestBounds));
+  const shape = safeParse(recordShapeSchema, boundedSnapshot(record, requestBounds));
   if (!shape.success) return { status: "not_replayable" };
   const stored = shape.data;
   if (stored.policy.version !== loaded.version || stored.policy.digest !== loaded.digest) {

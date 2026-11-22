@@ -1,4 +1,5 @@
 import { boundedSnapshot, detach, requestBounds } from "./bounds.js";
+import { safeParse } from "./parse.js";
 import { digest } from "./canonical.js";
 import {
   limitsHold,
@@ -119,7 +120,7 @@ export type ParsedRequest =
 export function parseRequest(input: unknown): ParsedRequest {
   const snapshot = boundedSnapshot(input, requestBounds);
   if (snapshot === undefined) return { ok: false, issues: [{ path: "", message: oversized }] };
-  const parsed = accessRequestSchema.safeParse(snapshot);
+  const parsed = safeParse(accessRequestSchema, snapshot);
   if (parsed.success) return { ok: true, request: detach(parsed.data) };
   return {
     ok: false,
@@ -160,6 +161,7 @@ function digestOfRequest(policy: CompiledPolicy, request: AccessRequest): string
           : {
               id: grant.id,
               principalId: grant.principalId,
+              principalType: grant.principalType,
               agentId: grant.agentId,
               entries: grant.entries,
               notBefore: grant.notBefore === undefined ? null : utc(grant.notBefore),
@@ -368,7 +370,9 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
 function agentGrantValidity(actor: Actor, principal: Subject, now: number): ReasonCode | null {
   const grant = actor.grant;
   if (grant === undefined) return "agent_grant_missing";
-  if (grant.principalId !== principal.id) return "agent_grant_principal_mismatch";
+  if (grant.principalId !== principal.id || grant.principalType !== principal.type) {
+    return "agent_grant_principal_mismatch";
+  }
   if (grant.agentId !== actor.id) return "agent_grant_actor_mismatch";
   if (grant.revokedAt !== undefined && !(instant(grant.revokedAt) > now)) {
     return "agent_grant_revoked";

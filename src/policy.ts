@@ -4,6 +4,7 @@ import { boundedSnapshot, detach, policyBounds } from "./bounds.js";
 import { compareText, digest } from "./canonical.js";
 import { isCatalog, type Catalog } from "./catalog.js";
 import { PermitkitError, type PolicyIssue } from "./errors.js";
+import { safeParse } from "./parse.js";
 
 const identifier = z
   .string()
@@ -120,7 +121,8 @@ export const policySchema = z
     roles: z.record(identifier, roleSchema),
     denies: z.array(denySchema).default([]),
     approvalRules: z.array(approvalRuleSchema).default([]),
-    separationOfDuties: separationOfDutiesSchema.default({}),
+    // The default is a null-prototype object, so Zod cannot read inherited flags into it.
+    separationOfDuties: separationOfDutiesSchema.default(nullObject),
   })
   .strict();
 
@@ -192,7 +194,7 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
       },
     ]);
   }
-  const parsed = policySchema.safeParse(snapshot);
+  const parsed = safeParse(policySchema, snapshot);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((item) => ({
       path: item.path.join("."),
@@ -261,7 +263,7 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
         });
         return;
       }
-      for (const name of Object.keys(properties.scope ?? {})) {
+      for (const name of Object.keys(ownObject(properties, "scope"))) {
         if (!resource.scopes.includes(name)) {
           issues.push({
             path: `${path}.scope.${name}`,
@@ -270,7 +272,7 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
           });
         }
       }
-      for (const name of Object.keys(properties.limits ?? {})) {
+      for (const name of Object.keys(ownObject(properties, "limits"))) {
         if (!resource.limits.includes(name)) {
           issues.push({
             path: `${path}.limits.${name}`,
@@ -351,4 +353,14 @@ function deepFreeze(value: unknown): void {
   if (typeof value !== "object" || value === null || Object.isFrozen(value)) return;
   Object.freeze(value);
   for (const item of Object.values(value)) deepFreeze(item);
+}
+
+function ownObject(value: object, key: string): object {
+  const item: unknown = Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined;
+  return typeof item === "object" && item !== null ? item : {};
+}
+
+function nullObject(): Record<string, never> {
+  const empty: Record<string, never> = Object.create(null);
+  return empty;
 }
