@@ -33,13 +33,13 @@ describe("bounds set to undefined", () => {
     input.roles["support"]!.grants[1]!.limits = {
       kind: "range",
       properties: { amount: { max: undefined } },
-    };
+    } as never;
     expect(() => compilePolicy(catalog, input)).toThrow(/not valid/);
     const subject = viaAgent(human("u-lead", role("lead", everywhere)), "bot", {
       entries: [
         {
           permissions: ["ticket:refund"],
-          limits: { kind: "range", properties: { amount: { max: undefined } } },
+          limits: { kind: "range", properties: { amount: { max: undefined } } } as never,
           scope: { kind: "all" },
         },
       ],

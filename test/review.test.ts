@@ -140,7 +140,7 @@ describe("agent grants are bound to the agent", () => {
       entries: [
         {
           permissions: ["ticket:refund"],
-          limits: { kind: "range", properties: { amount: { max: 10 } } },
+          limits: { kind: "range", properties: { amount: { min: null, max: 10 } } },
           scope: { kind: "all" },
         },
       ],

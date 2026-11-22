@@ -65,24 +65,21 @@ export const scopeSchema = explicit(
   ],
 );
 
-/** An inclusive numeric range. Give `min`, `max` or both. */
+/**
+ * An inclusive numeric range. Both bounds are required: a number, or `null` for "no bound on
+ * this side". A lost bound is refused, never read as open. At least one bound is a number.
+ */
 const limitSchema = z
-  .object({ min: z.number().finite().optional(), max: z.number().finite().optional() })
+  .object({ min: z.number().finite().nullable(), max: z.number().finite().nullable() })
   .strict()
-  // Own keys only: Zod's output object has a prototype, and an inherited `max` must not count.
-  // A key set to undefined does not count either: `{ min: 0, max: undefined }` is refused, not
-  // read as "no maximum".
   .refine(
-    (limit) =>
-      Object.values(limit).every((bound) => typeof bound === "number") &&
-      (Object.hasOwn(limit, "min") || Object.hasOwn(limit, "max")),
-    "Give min, max or both, as numbers. A bound set to undefined is refused.",
+    (limit) => limit.min !== null || limit.max !== null,
+    "Give at least one bound as a number. Both bounds null restrict nothing.",
   )
-  .refine((limit) => {
-    const min = Object.hasOwn(limit, "min") ? limit.min : undefined;
-    const max = Object.hasOwn(limit, "max") ? limit.max : undefined;
-    return min === undefined || max === undefined || min <= max;
-  }, "min must not be greater than max.");
+  .refine(
+    (limit) => limit.min === null || limit.max === null || limit.min <= limit.max,
+    "min must not be greater than max.",
+  );
 
 /**
  * Numeric limits of a grant or agent grant entry. `{ kind: "unlimited" }` is the only way to
@@ -90,7 +87,7 @@ const limitSchema = z
  */
 export const limitsSchema = explicit(
   "limits",
-  '{ kind: "unlimited" } or { kind: "range", properties: { <property>: { min, max } } }',
+  '{ kind: "unlimited" } or { kind: "range", properties: { <property>: { min, max } } } with each bound a number or null',
   [
     z.object({ kind: z.literal("unlimited") }).strict(),
     z

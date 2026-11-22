@@ -44,7 +44,7 @@ describe("agents acting for a principal", () => {
       entries: [
         {
           permissions: ["ticket:refund"],
-          limits: { kind: "range", properties: { amount: { max: 20 } } },
+          limits: { kind: "range", properties: { amount: { min: null, max: 20 } } },
           scope: { kind: "all" },
         },
       ],

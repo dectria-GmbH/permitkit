@@ -18,7 +18,7 @@ type LimitsLike =
   | {
       readonly kind: "range";
       readonly properties: Readonly<
-        Record<string, { readonly min?: number | undefined; readonly max?: number | undefined }>
+        Record<string, { readonly min: number | null; readonly max: number | null }>
       >;
     };
 type WhenLike =
@@ -112,8 +112,13 @@ export function limitsHold(limits: LimitsLike, properties: Properties): LimitRes
     const limit = listed[name];
     if (limit === undefined) return unknownLimits;
     const actual = ownValue(properties, name);
-    const min = limit.min ?? null;
-    const max = limit.max ?? null;
+    const min: unknown = limit.min;
+    const max: unknown = limit.max;
+    // Each bound is a number or null, and one of them is a number. Anything else holds for
+    // nothing, so a lost bound never reads as open.
+    const minOk = min === null || typeof min === "number";
+    const maxOk = max === null || typeof max === "number";
+    if (!minOk || !maxOk || (min === null && max === null)) return unknownLimits;
     const inside =
       typeof actual === "number" &&
       Number.isFinite(actual) &&

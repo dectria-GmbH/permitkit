@@ -55,7 +55,7 @@ describe("AuthZEN evaluate", () => {
       expect(evaluate(policy, request).decision).toBe(false);
     }
     for (const request of [noContext, emptyContext]) {
-      expect(evaluate(policy, request).context.reason_codes).toEqual(["invalid_request"]);
+      expect(evaluate(policy, request as never).context.reason_codes).toEqual(["invalid_request"]);
     }
   });
 

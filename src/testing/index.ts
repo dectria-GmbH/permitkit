@@ -34,7 +34,9 @@ export function within(properties: Record<string, string[]>): Scope {
 export const unlimited: Limits = Object.freeze({ kind: "unlimited" });
 
 /** A range limit over the given properties. */
-export function range(properties: Record<string, { min?: number; max?: number }>): Limits {
+export function range(
+  properties: Record<string, { min: number | null; max: number | null }>,
+): Limits {
   return { kind: "range", properties };
 }
 

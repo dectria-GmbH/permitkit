@@ -65,7 +65,7 @@ const policy = compilePolicy(catalog, {
           id: "support-refund",
           permissions: ["ticket:refund"],
           scope: { kind: "all" },
-          limits: { kind: "range", properties: { amount: { max: 500 } } },
+          limits: { kind: "range", properties: { amount: { min: null, max: 500 } } },
         },
       ],
     },
@@ -134,15 +134,15 @@ denies with `policy_version_mismatch`. Pin the digest when the label alone is no
 
 Shapes:
 
-| Field                            | Accepted values                                                                                     |
-| -------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `scope`                          | `{ kind: "all" }` or `{ kind: "match", properties: { queue: ["billing"] } }`                        |
-| `limits`                         | `{ kind: "unlimited" }` or `{ kind: "range", properties: { amount: { min: 0, max: 500 } } }`        |
-| `when` (approval rule)           | `{ kind: "always" }` or `{ kind: "threshold", properties: { amount: { gte: 100 } } }`               |
-| `eligibleApprovers`              | `{ kind: "roles", roles: ["approver"] }` or `{ kind: "permission" }`                                |
-| `requireProof`, `proofTypes`     | `requireProof: true` with `proofTypes: ["webauthn"]`, or `requireProof: false` without `proofTypes` |
-| `notBefore`, `revokedAt` (grant) | A timestamp, or `null` for "no start bound" and "not revoked"                                       |
-| `act` (subject, actor)           | An actor, or `null` for "no agent acts"                                                             |
+| Field                            | Accepted values                                                                                                             |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `scope`                          | `{ kind: "all" }` or `{ kind: "match", properties: { queue: ["billing"] } }`                                                |
+| `limits`                         | `{ kind: "unlimited" }` or `{ kind: "range", properties: { amount: { min: 0, max: 500 } } }`; each bound a number or `null` |
+| `when` (approval rule)           | `{ kind: "always" }` or `{ kind: "threshold", properties: { amount: { gte: 100 } } }`                                       |
+| `eligibleApprovers`              | `{ kind: "roles", roles: ["approver"] }` or `{ kind: "permission" }`                                                        |
+| `requireProof`, `proofTypes`     | `requireProof: true` with `proofTypes: ["webauthn"]`, or `requireProof: false` without `proofTypes`                         |
+| `notBefore`, `revokedAt` (grant) | A timestamp, or `null` for "no start bound" and "not revoked"                                                               |
+| `act` (subject, actor)           | An actor, or `null` for "no agent acts"                                                                                     |
 
 Matching rules:
 
@@ -322,8 +322,9 @@ code can change the behaviour of any library in the process.
 - A key set to `undefined` counts as absent only in an optional field, for example
   `resource.id` or `description`. In a required field, and as a value inside a scope, limit or
   threshold record, it is refused. So a match scope with `project: undefined` or a range with
-  `max: undefined` fails validation instead of losing a condition. No absent field widens access:
-  see [Design choices](#design-choices).
+  `max: undefined` fails validation instead of losing a condition. See
+  [Design choices](#design-choices) for what absence means per field, and for the one case that
+  permitkit cannot detect.
 - Agent grants usually come from database rows. Map every column on purpose: a nullable
   `revoked_at` column maps to `revokedAt: row.revoked_at ?? null`, never to a missing key.
 - Zod drops a `__proto__` key in `resource.properties`. It cannot be a scope or limit name, but
@@ -335,8 +336,8 @@ code can change the behaviour of any library in the process.
   `subject.roles` and agent grants (with `revokedAt`) from your identity store,
   `resource.properties` from your database. permitkit decides on what you pass; a backdated
   `now` or a client-supplied role decides wrongly.
-- Limits are ranges. A limit with only `max` accepts any smaller value, also a negative one;
-  add `min` where that matters.
+- Limits are ranges. Each bound is required: a number, or `null` for an open side. A range with
+  `min: null` accepts any smaller value, also a negative one; give `min` where that matters.
 
 - Ids, role names and scope values are compared as exact strings. permitkit does not change case,
   trim spaces or normalize Unicode. Normalize ids and scope values once, where they enter your
@@ -372,11 +373,12 @@ What absence means after this rule:
 | Grant, assignment, agent grant `scope`                            | Refused                                                                 |
 | Grant and agent grant `limits`                                    | Refused                                                                 |
 | A key set to `undefined` inside a match scope, range or threshold | Refused, never a dropped condition                                      |
+| A range bound `min` or `max`                                      | Refused (`null` is the explicit open side)                              |
 | Deny rule `scope`                                                 | Refused                                                                 |
 | Approval rule `when`                                              | Refused                                                                 |
 | Approval rule `eligibleApprovers`                                 | Refused                                                                 |
 | `requireProof`; `proofTypes` when `requireProof` is true          | Refused                                                                 |
-| `denies`, `approvalRules`, `separationOfDuties` and its flags     | Refused                                                                 |
+| `denies`, `approvalRules`, `separationOfDuties` and its flags     | Missing: refused. An empty list means no rules, as written              |
 | `subject.act`, actor `act`, actor `grant`                         | Refused (`null` is the explicit "none")                                 |
 | Agent grant `notBefore`, `revokedAt`                              | Refused (`null` is the explicit "not set")                              |
 | A property inside a match scope, on the resource                  | Narrows: the grant does not match                                       |
@@ -390,6 +392,13 @@ What absence means after this rule:
 | Prior actor `grant: null`                                         | No effect: prior actors grant nothing                                   |
 | `context.policyVersion`, `context.policyDigest`                   | No pin: the loaded policy decides, which still grants only what it says |
 | `resource.id`, `description`                                      | No effect on the decision                                               |
+
+One case cannot be detected. A match scope and a threshold are open records: they list the
+properties they restrict. A property key that was never listed and one that was lost on its way
+(for example `{ queue: [...] }` built from a row whose `project` column was not read) look the
+same, and the scope then restricts one property less. The same holds for a deny rule or an
+approval rule that is left out of `denies` or `approvalRules`. Build scopes and rule lists from
+complete data, and review policy changes as diffs.
 
 ### Own rule engine
 
@@ -419,7 +428,9 @@ assertDecision(policy, accessRequest(human("u1", role("support", everywhere)), "
 ```
 
 The builders never default a scope or a limit: `role()` needs `everywhere` or `within(...)`, and
-agent grant entries need `unlimited` or `range(...)`.
+agent grant entries need `unlimited` or `range(...)`. Their time defaults are for tests only:
+`viaAgent()` grants run until 2099 and set `notBefore` and `revokedAt` to `null` unless given, so
+never build production grants with it.
 
 `permissionMatrix()` decides a set of subjects against a set of cases and returns a sorted table.
 Commit it as a snapshot, so that every policy change shows up as a reviewable diff.

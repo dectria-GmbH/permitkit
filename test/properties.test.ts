@@ -37,7 +37,9 @@ const scopeArb: fc.Arbitrary<Scope> = fc.oneof(
 const limitsArb: fc.Arbitrary<Limits> = fc.oneof(
   fc.constant<Limits>({ kind: "unlimited" }),
   fc
-    .record({ amount: fc.record({ max: fc.integer({ min: 0, max: 100 }) }) })
+    .record({
+      amount: fc.record({ min: fc.constant(null), max: fc.integer({ min: 0, max: 100 }) }),
+    })
     .map((properties): Limits => ({ kind: "range", properties })),
 );
 const withoutUndefined = <T extends object>(value: T): T =>

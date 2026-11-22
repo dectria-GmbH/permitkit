@@ -32,7 +32,7 @@ const pollution: Record<(typeof pollutionKeys)[number], unknown> = {
   roles: ["nobody"],
   subjectTypes: ["service"],
   scope: { queue: ["billing"] },
-  limits: { amount: { max: 1e300 } },
+  limits: { amount: { min: null, max: 1e300 } },
   when: { amount: { gte: 1e300 } },
   approverRoles: ["ghost"],
   properties: { queue: "billing", amount: 0 },

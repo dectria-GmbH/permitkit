@@ -24,7 +24,7 @@ export const policyInput = {
         {
           id: "support-refund",
           permissions: ["ticket:refund"],
-          limits: { kind: "range", properties: { amount: { max: 500 } } },
+          limits: { kind: "range", properties: { amount: { min: null, max: 500 } } },
           scope: { kind: "all" },
         },
       ],

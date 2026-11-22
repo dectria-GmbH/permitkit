@@ -119,7 +119,7 @@ describe("compiled policy under a polluted prototype", () => {
 
   it("does not read scope or limits names from a polluted prototype", () => {
     pollute("scope", { injected: ["a"] });
-    pollute("limits", { injected: { max: 1 } });
+    pollute("limits", { injected: { min: null, max: 1 } });
     expect(compilePolicy(catalog, editablePolicyInput()).digest).toBe(policy.digest);
   });
 });

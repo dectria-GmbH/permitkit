@@ -19,7 +19,8 @@ export interface AuthZenRequest {
   subject: { type: string; id: string; properties?: Record<string, unknown> };
   action: { name: string; properties?: Record<string, unknown> };
   resource: { type: string; id?: string; properties?: Record<string, unknown> };
-  context?: Record<string, unknown>;
+  /** Required: `context.now` carries the evaluation time. */
+  context: Record<string, unknown>;
 }
 
 /**

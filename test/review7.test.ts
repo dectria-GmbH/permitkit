@@ -21,7 +21,10 @@ afterEach(() => {
 describe("limits under a polluted prototype", () => {
   it("rejects an empty limit in a policy even when max is inherited", () => {
     const input = editablePolicyInput();
-    input.roles["support"]!.grants[1]!.limits = { kind: "range", properties: { amount: {} } };
+    input.roles["support"]!.grants[1]!.limits = {
+      kind: "range",
+      properties: { amount: {} },
+    } as never;
     pollute("max", 0);
     expect(() => compilePolicy(catalog, input)).toThrow(/not valid/);
   });
@@ -31,7 +34,7 @@ describe("limits under a polluted prototype", () => {
       entries: [
         {
           permissions: ["ticket:refund"],
-          limits: { kind: "range", properties: { amount: {} } },
+          limits: { kind: "range", properties: { amount: {} } } as never,
           scope: { kind: "all" },
         },
       ],

@@ -69,7 +69,7 @@ describe("policy validation", () => {
     input.roles["auditor"]!.grants[0]!.scope = { kind: "match", properties: { queue: ["x"] } };
     input.roles["support"]!.grants[1]!.limits = {
       kind: "range",
-      properties: { weight: { max: 1 } },
+      properties: { weight: { min: null, max: 1 } },
     };
     const paths = issuesOf(() => compilePolicy(catalog, input)).map((item) => item.path);
     expect(paths).toContain("roles.auditor.grants.0.scope.properties.queue");
@@ -141,7 +141,7 @@ describe("compiled policy", () => {
     const input = editablePolicyInput();
     input.roles["support"]!.grants[1]!.limits = {
       kind: "range",
-      properties: { amount: { max: 501 } },
+      properties: { amount: { min: null, max: 501 } },
     };
     expect(compilePolicy(catalog, input).digest).not.toBe(policy.digest);
   });

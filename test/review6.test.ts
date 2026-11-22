@@ -108,7 +108,7 @@ describe("non-plain scopes never read as everywhere", () => {
       permissions = ["ticket:refund"];
       scope = { kind: "all" as const };
       get limits() {
-        return { kind: "range" as const, properties: { amount: { max: 10 } } };
+        return { kind: "range" as const, properties: { amount: { min: null, max: 10 } } };
       }
     }
     const variants: ((input: ReturnType<typeof editablePolicyInput>) => void)[] = [

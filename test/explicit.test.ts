@@ -139,7 +139,13 @@ describe("explicit everywhere: agent grant entries", () => {
   });
 
   it("refuses missing, empty or null entry limits", () => {
-    for (const limits of [undefined, {}, null, { amount: { max: 5 } }, { kind: "range" }]) {
+    for (const limits of [
+      undefined,
+      {},
+      null,
+      { amount: { min: null, max: 5 } },
+      { kind: "range" },
+    ]) {
       const fields: Record<string, unknown> = { scope: everywhere };
       if (limits !== undefined) fields["limits"] = limits;
       const reason = decide(policy, accessRequest(entry(fields), "ticket:read")).reason;
@@ -303,7 +309,7 @@ describe("a key set to undefined inside an AND-combined record", () => {
         (input) =>
           set(input.roles["support"]!.grants[1]!, "limits", {
             kind: "range",
-            properties: { amount: { max: 500 }, other: undefined },
+            properties: { amount: { min: null, max: 500 }, other: undefined },
           }),
       ],
       [
@@ -385,6 +391,57 @@ describe("a key set to undefined inside an AND-combined record", () => {
       context: { ...request.context, policyVersion: undefined },
     };
     expect(decide(policy, withUndefined).outcome).toBe("allow");
+  });
+});
+
+describe("range bounds", () => {
+  it("refuses a range with a missing bound or two null bounds", () => {
+    for (const amount of [{ min: 0 }, { max: 500 }, { min: null, max: null }, {}]) {
+      const input = editablePolicyInput();
+      input.roles["support"]!.grants[1]!.limits = {
+        kind: "range",
+        properties: { amount },
+      } as never;
+      expect({ amount, code: codeOf(() => compilePolicy(catalog, input)) }).toEqual({
+        amount,
+        code: "policy_invalid",
+      });
+      const subject = viaAgent(human("u-lead", role("lead", everywhere)), "bot", {
+        entries: [
+          {
+            permissions: ["ticket:refund"],
+            scope: everywhere,
+            limits: { kind: "range", properties: { amount } } as never,
+          },
+        ],
+      });
+      const request = accessRequest(subject, "ticket:refund", { properties: { amount: 50 } });
+      expect({ amount, reason: decide(policy, request).reason }).toEqual({
+        amount,
+        reason: "invalid_request",
+      });
+    }
+  });
+
+  it("reads null as an open side", () => {
+    const input = editablePolicyInput();
+    input.roles["support"]!.grants[1]!.limits = {
+      kind: "range",
+      properties: { amount: { min: 0, max: null } },
+    };
+    const open = compilePolicy(catalog, input);
+    const support = human("u-s", role("support", everywhere));
+    const big = accessRequest(support, "ticket:refund", { properties: { amount: 99 } });
+    expect(decide(open, big).outcome).toBe("allow");
+    const negative = accessRequest(support, "ticket:refund", { properties: { amount: -1 } });
+    expect(decide(open, negative).reason).toBe("limit_exceeded");
+  });
+
+  it("holds for nothing in the engine with a missing bound or two null bounds", () => {
+    const missing = { kind: "range", properties: { amount: { min: 0 } } } as never;
+    expect(limitsHold(missing, { amount: 1e12 }).ok).toBe(false);
+    const open = { kind: "range", properties: { amount: { min: null, max: null } } } as never;
+    expect(limitsHold(open, { amount: 1e12 }).ok).toBe(false);
   });
 });
 
