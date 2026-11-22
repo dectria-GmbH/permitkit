@@ -45,10 +45,14 @@ describe("accessors with a polluted Object.prototype.value", () => {
   });
 
   it("does not count an approval whose approver id is a getter", async () => {
+    // One approver, so that only the descriptor check stands between the getter and "approved".
+    const input = editablePolicyInput();
+    input.approvalRules = [{ ...input.approvalRules![0]!, approvers: 1 }];
+    const onePolicy = compilePolicy(catalog, input);
     const request = accessRequest(human("u-alice", role("lead")), "ticket:refund", {
       properties: { amount: 500 },
     });
-    const digestValue = requestDigest(policy, request);
+    const digestValue = requestDigest(onePolicy, request);
     const approval = (id: string) => ({
       approver: {
         type: "human",
@@ -61,10 +65,10 @@ describe("accessors with a polluted Object.prototype.value", () => {
       requestDigest: digestValue,
     });
     polluteValue("mallory");
-    const result = await evaluateApprovals(policy, {
+    const result = await evaluateApprovals(onePolicy, {
       request,
       now: "2026-01-15T10:30:00.000Z",
-      approvals: [approval("u-alice"), approval("u-alice")],
+      approvals: [approval("u-alice")],
     });
     expect(result.outcome).not.toBe("allow");
   });
