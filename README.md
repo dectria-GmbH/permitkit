@@ -146,15 +146,15 @@ Shapes:
 
 Matching rules:
 
-| Element              | Rule                                                                                                                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Grant scope          | `all` covers every resource. `match`: every listed property must be present on the resource as a string and be in the list.                            |
-| Assignment scope     | Same as grant scope.                                                                                                                                   |
-| Agent grant scope    | Same as grant scope.                                                                                                                                   |
-| Limits               | `unlimited` holds always. `range`: the property must be a finite number from `min` to `max` (both inclusive, either optional). Missing means exceeded. |
-| Deny rule scope      | `all` matches every resource. `match`: matches unless the property is a string outside the list. Missing or non-string values count as inside.         |
-| Approval rule `when` | `always` applies always. `threshold`: applies if any listed property is missing, not a number, or at least `gte`.                                      |
-| Precedence           | Deny rules win over grants. Approval rules apply only after a grant covers the request.                                                                |
+| Element              | Rule                                                                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Grant scope          | `all` covers every resource. `match`: every listed property must be present on the resource as a string and be in the list.                                   |
+| Assignment scope     | Same as grant scope.                                                                                                                                          |
+| Agent grant scope    | Same as grant scope.                                                                                                                                          |
+| Limits               | `unlimited` holds always. `range`: the property must be a finite number from `min` to `max` (both inclusive; `null` is an open side). Missing means exceeded. |
+| Deny rule scope      | `all` matches every resource. `match`: matches unless the property is a string outside the list. Missing or non-string values count as inside.                |
+| Approval rule `when` | `always` applies always. `threshold`: applies if any listed property is missing, not a number, or at least `gte`.                                             |
+| Precedence           | Deny rules win over grants. Approval rules apply only after a grant covers the request.                                                                       |
 
 Several properties in one match scope combine with AND: a deny rule with
 `{ kind: "match", properties: { queue: ["vip"], project: ["alpha"] } }` matches only resources in
@@ -323,8 +323,8 @@ code can change the behaviour of any library in the process.
   `resource.id` or `description`. In a required field, and as a value inside a scope, limit or
   threshold record, it is refused. So a match scope with `project: undefined` or a range with
   `max: undefined` fails validation instead of losing a condition. See
-  [Design choices](#design-choices) for what absence means per field, and for the one case that
-  permitkit cannot detect.
+  [Design choices](#design-choices) for what absence means per field, and for the content of
+  lists and records that permitkit cannot check.
 - Agent grants usually come from database rows. Map every column on purpose: a nullable
   `revoked_at` column maps to `revokedAt: row.revoked_at ?? null`, never to a missing key.
 - Zod drops a `__proto__` key in `resource.properties`. It cannot be a scope or limit name, but
@@ -393,12 +393,24 @@ What absence means after this rule:
 | `context.policyVersion`, `context.policyDigest`                   | No pin: the loaded policy decides, which still grants only what it says |
 | `resource.id`, `description`                                      | No effect on the decision                                               |
 
-One case cannot be detected. A match scope and a threshold are open records: they list the
-properties they restrict. A property key that was never listed and one that was lost on its way
-(for example `{ queue: [...] }` built from a row whose `project` column was not read) look the
-same, and the scope then restricts one property less. The same holds for a deny rule or an
-approval rule that is left out of `denies` or `approvalRules`. Build scopes and rule lists from
-complete data, and review policy changes as diffs.
+What permitkit cannot check is the content of a list or an open record. It refuses a field that
+is missing, `undefined`, `null` or empty, but it cannot know that an item is missing from a list
+that is still well-formed. Each of these looks the same as data that was never written, and
+each widens access when it is lost on its way:
+
+- a property key left out of a match scope, a range or a threshold (for example
+  `{ queue: [...] }` built from a row whose `project` column was not read);
+- a deny rule left out of `denies`, an approval rule left out of `approvalRules`, and one item
+  left out of a deny rule's `permissions`, `roles`, `subjectTypes` or scope values;
+- a role assignment left out of `subject.roles` or `approver.roles`, when a deny rule or
+  `exclusiveRequestAndApproveRoles` keys on that role;
+- an entry left out of `priorRequests`.
+
+A role name that the policy does not define grants nothing and is skipped, so a misspelt role
+also escapes a deny rule that names the correct one. permitkit does not refuse unknown role
+names, because a consumer may assign a role before the policy that defines it is rolled out.
+Build these lists from complete data, normalize role names where they enter your system, and
+review policy changes as diffs.
 
 ### Own rule engine
 
