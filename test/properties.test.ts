@@ -199,15 +199,26 @@ describe("properties", () => {
         policyArb,
         requestArb(principalArb),
         fc.constantFrom("u1", "u2", "u3"),
-        fc.array(fc.array(assignmentArb, { maxLength: 3 }), { minLength: 1, maxLength: 4 }),
+        // "same" reuses the requester's roles, so many approvers are eligible peers.
+        fc.array(
+          fc.oneof(fc.constant("same" as const), fc.array(assignmentArb, { maxLength: 3 })),
+          {
+            minLength: 2,
+            maxLength: 4,
+          },
+        ),
         async (input, request, approverId, roleSets) => {
           const compiled = compilePolicy(catalog, input);
           const digestValue = requestDigest(compiled, request);
           const result = await evaluateApprovals(compiled, {
             request,
             now: "2026-01-15T10:30:00.000Z",
-            approvals: roleSets.map((roles) => ({
-              approver: { type: "human", id: approverId, roles },
+            approvals: roleSets.map((choice) => ({
+              approver: {
+                type: "human",
+                id: approverId,
+                roles: choice === "same" ? request.subject.roles : choice,
+              },
               approvedAt: "2026-01-15T10:10:00.000Z",
               requestDigest: digestValue,
             })),
