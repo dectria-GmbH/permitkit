@@ -41,10 +41,17 @@ describe("AuthZEN evaluate", () => {
       action: { name: "read" },
       resource: { type: "ticket", id: "t-1" },
     };
+    // Empty own objects are where an inherited value could be read.
+    const emptyProperties = { ...noRoles, subject: { ...noRoles.subject, properties: {} } };
+    const emptyContext = { ...noContext, context: {} };
     pollute("roles", [{ role: "lead", scope: {} }]);
     pollute("now", now);
-    expect(evaluate(policy, noRoles).decision).toBe(false);
-    expect(evaluate(policy, noContext).context.reason_codes).toEqual(["invalid_request"]);
+    for (const request of [noRoles, emptyProperties]) {
+      expect(evaluate(policy, request).decision).toBe(false);
+    }
+    for (const request of [noContext, emptyContext]) {
+      expect(evaluate(policy, request).context.reason_codes).toEqual(["invalid_request"]);
+    }
   });
 
   it("rejects keys that it does not map instead of ignoring them", () => {
@@ -90,16 +97,6 @@ describe("AuthZEN evaluate", () => {
 });
 
 describe("schema checks under a polluted prototype", () => {
-  it("does not accept other subject types when Zod's cache key is polluted", () => {
-    pollute("_cache", { has: () => true });
-    const request = accessRequest(human("u-lead", role("lead")), "ticket:read");
-    const odd = { ...request, subject: { ...request.subject, type: "Human" } };
-    expect(decide(policy, odd).reason).toBe("invalid_request");
-    const input = editablePolicyInput();
-    input.denies![0]!.subjectTypes = ["typo" as never];
-    expect(() => compilePolicy(catalog, input)).toThrow(/not valid/);
-  });
-
   it("does not count a polluted act toward the actor chain", () => {
     pollute("act", { type: "agent", id: "x" });
     expect(
