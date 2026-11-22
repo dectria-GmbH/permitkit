@@ -6,7 +6,8 @@ export const reasonCodes = Object.freeze({
   granted: "A grant of one of the subject's roles covers the request.",
   approval_required: "A grant covers the request, but a dual-approval rule applies to it.",
   invalid_request: "The request does not match the request schema.",
-  policy_version_mismatch: "The request pins a policy version that is not the loaded policy.",
+  policy_version_mismatch:
+    "The request pins a policy version or digest that does not match the loaded policy.",
   unknown_permission: "The permission is not in the catalogue.",
   no_grant: "No grant of the subject's roles includes the permission.",
   scope_mismatch: "A grant includes the permission, but its scope does not cover the resource.",
@@ -16,8 +17,8 @@ export const reasonCodes = Object.freeze({
   agent_grant_principal_mismatch: "The agent grant belongs to another principal.",
   agent_grant_actor_mismatch: "The agent grant was issued to another agent.",
   agent_grant_not_yet_valid: "The agent grant starts after the request time.",
-  agent_grant_expired: "The agent grant expired before the request time.",
-  agent_grant_revoked: "The agent grant was revoked before the request time.",
+  agent_grant_expired: "The agent grant expired at or before the request time.",
+  agent_grant_revoked: "The agent grant was revoked at or before the request time.",
   agent_grant_insufficient: "The agent grant does not cover the request.",
   sod_role_conflict:
     "Separation of duties: the subject holds both a requesting and an approving role for this permission.",

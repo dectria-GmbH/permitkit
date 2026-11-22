@@ -106,6 +106,12 @@ export function permissionOf(request: Pick<AccessRequest, "action" | "resource">
  * Throws PermitkitError `request_invalid` if the request does not match the schema.
  */
 export function requestDigest(policy: CompiledPolicy, request: unknown): string {
+  if (internalsOf(policy) === undefined) {
+    throw new PermitkitError(
+      "policy_unknown",
+      "requestDigest() needs a policy from compilePolicy().",
+    );
+  }
   const parsed = parseRequest(request);
   if (!parsed.ok) {
     throw new PermitkitError("request_invalid", "requestDigest() needs a valid request.");

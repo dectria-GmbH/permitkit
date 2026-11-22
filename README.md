@@ -120,7 +120,8 @@ Matching rules:
 
 A subject is a `human` or `service` principal with role assignments. If an agent acts, the
 request carries the agent as `subject.act`, in the RFC 8693 `act` shape; nested `act` values are
-prior actors and are logged, not used for the decision. The current actor must hold a grant that
+prior actors. They do not grant or limit rights, but they are part of the request digest and the
+audit record, and their ids cannot approve the request. The current actor must hold a grant that
 the principal issued (`principalId` and `principalType`) to this agent (`agentId`), that is
 inside its validity window (`notBefore` inclusive, `expiresAt` and `revokedAt` exclusive), and
 that covers the permission, scope and limits of the request. Deny rules with
@@ -142,8 +143,10 @@ and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
   of its grant, action, resource, request time and policy version, so an approval cannot move
   to another request or survive a policy change;
 - approvals count only inside the window, both ends inclusive;
-- with `approverRoles`, the approver must hold one of those roles in a scope that covers the
-  resource; without it, the approver must hold the permission itself;
+- with `approverRoles`, the approver must hold one of those roles with an assignment scope that
+  covers the resource. Only the assignment scope counts, not the scope of the role's grants, so
+  use dedicated approver roles with `grants: []`. Without `approverRoles`, the approver must hold
+  the permission itself;
 - a deny rule for the permission that matches the approver excludes the approval;
 - with `requireProof`, each approval needs a proof that a registered verifier accepts.
 
@@ -177,16 +180,22 @@ WebAuthn:
 const verifier: ApprovalProofVerifier = {
   type: "webauthn",
   async verify(proof, expected) {
-    // Check that proof.payload is a valid assertion by expected.approverId's credential
-    // over expected.requestDigest. Then echo both values.
-    return { valid: true, approverId: expected.approverId, requestDigest: expected.requestDigest };
+    // Your WebAuthn library checks the signature against the approver's stored credentials.
+    const credentials = await loadCredentials(expected.approverId);
+    const assertion = await verifyAssertion(proof.payload, credentials, { timeoutMs: 5000 });
+    if (!assertion.ok) return { valid: false, reason: assertion.error };
+    // Return what the signature covers. Never copy the values from `expected`.
+    return { valid: true, approverId: assertion.userId, requestDigest: assertion.challenge };
   },
 };
 await evaluateApprovals(policy, input, { verifiers: [verifier] });
 ```
 
-permitkit checks that the proof names the approver and the digest before it calls the verifier,
-and checks the echoed values after.
+`loadCredentials` and `verifyAssertion` stand for your own code. permitkit checks that the proof
+names the approver and the digest before it calls the verifier, and compares the returned values
+after. That comparison only protects you if the verifier returns the values from the verified
+evidence: a verifier that echoes `expected` lets a valid assertion for one request pass for
+another. permitkit waits for the verifier's promise, so give the verifier its own timeout.
 
 ### Separation of duties
 
@@ -222,6 +231,15 @@ accepted and not used. Any other key gives `invalid_request`, so a misspelt acto
 be ignored. AuthZEN defines no reason fields, so `context` uses permitkit's own
 names: `outcome`, `reason_codes`, `rule`, `approval`, `policy_version`, `policy_digest`,
 `request_digest`.
+
+### Threat model
+
+permitkit treats every input as possibly hostile data: wrong types, getters, proxies, array holes,
+huge values, and data-valued pollution of `Object.prototype` from a bug elsewhere in the process.
+Such input gives a deny, never an exception from a decision function. Code that runs in your
+process with its own functions (a replaced `Array.prototype.map`, a function on
+`Object.prototype.then`) is not covered. permitkit hardens the paths it knows about, but such
+code can change the behaviour of any library in the process.
 
 ### Input rules
 

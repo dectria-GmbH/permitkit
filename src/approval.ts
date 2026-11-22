@@ -34,10 +34,12 @@ export type ProofVerification =
   | { readonly valid: false; readonly reason: string };
 
 /**
- * Verifies one proof type. A verifier must check that the proof was made by `expected.approverId`
- * over `expected.requestDigest`, and must echo both values on success. permitkit compares the
- * echo with what it expects, so a verifier that checks only the signature cannot pass a proof
- * that was made for another request.
+ * Verifies one proof type. On success, a verifier returns the approver id and the request digest
+ * that the verified evidence itself covers: for a WebAuthn assertion, the owner of the credential
+ * and the signed challenge. permitkit compares these with what it expects. Never copy them from
+ * `expected`; that turns the comparison into a no-op, and a valid assertion for one request then
+ * passes for another. `expected` is for lookups, for example to load the approver's credentials.
+ * The verifier should also time out on its own: permitkit waits for its promise.
  */
 export interface ApprovalProofVerifier {
   readonly type: string;
@@ -125,6 +127,15 @@ export async function evaluateApprovals(
       "evaluateApprovals() needs a policy from compilePolicy().",
     );
   }
+  // Options are checked first, so bad options fail on every path, not only on proof checks.
+  let verifiers: ReadonlyMap<string, BoundVerifier>;
+  try {
+    verifiers = verifierMap(options);
+  } catch (error) {
+    if (error instanceof PermitkitError) throw error;
+    // A hostile options object (proxy, throwing getter) is still a programming error.
+    throw new PermitkitError("options_invalid", "The options could not be read.");
+  }
   const policyRef = { version: policy.version, digest: policy.digest };
   const result = (
     outcome: ApprovalDecision["outcome"],
@@ -196,14 +207,6 @@ export async function evaluateApprovals(
   const requesterIds = new Set<string>([request.subject.id]);
   for (let actor = request.subject.act; actor !== undefined; actor = actor.act) {
     requesterIds.add(actor.id);
-  }
-  let verifiers: ReadonlyMap<string, ApprovalProofVerifier>;
-  try {
-    verifiers = verifierMap(options);
-  } catch (error) {
-    if (error instanceof PermitkitError) throw error;
-    // A hostile options object (proxy, throwing getter) is still a programming error.
-    throw new PermitkitError("options_invalid", "The options could not be read.");
   }
 
   const counted: string[] = [];
@@ -298,9 +301,9 @@ export async function evaluateApprovals(
       continue;
     }
     if (rule.requireProof) {
-      const proofRejection = await checkProof(approval, approver.id, digestValue, verifiers);
-      if (proofRejection !== null) {
-        reject(proofRejection.reason, proofRejection.detail);
+      const rejection = await checkProof(approval, approver.id, digestValue, verifiers);
+      if (rejection !== null) {
+        reject(rejection.reason, rejection.detail);
         continue;
       }
     }
@@ -316,15 +319,15 @@ async function checkProof(
   approval: Approval,
   approverId: string,
   digestValue: string,
-  verifiers: ReadonlyMap<string, ApprovalProofVerifier>,
-): Promise<{ reason: ApprovalRejectionCode; detail?: string } | null> {
+  verifiers: ReadonlyMap<string, BoundVerifier>,
+): Promise<ProofRejection | null> {
   const proof = approval.proof;
-  if (proof === undefined) return { reason: "proof_missing" };
+  if (proof === undefined) return proofRejection("proof_missing");
   if (proof.approverId !== approverId || proof.requestDigest !== digestValue) {
-    return { reason: "proof_mismatch" };
+    return proofRejection("proof_mismatch");
   }
   const verifier = verifiers.get(proof.type);
-  if (verifier === undefined) return { reason: "proof_verifier_missing", detail: proof.type };
+  if (verifier === undefined) return proofRejection("proof_verifier_missing", proof.type);
   try {
     const verification: unknown = await verifier.verify(proof, {
       approverId,
@@ -334,21 +337,21 @@ async function checkProof(
     // Own properties only: an inherited `valid` or echo must never count.
     if (ownValue(verification, "valid") !== true) {
       const reason = ownValue(verification, "reason");
-      return {
-        reason: "proof_invalid",
-        detail: typeof reason === "string" ? reason : "verifier did not confirm",
-      };
+      return proofRejection(
+        "proof_invalid",
+        typeof reason === "string" ? reason : "verifier did not confirm",
+      );
     }
     if (
       ownValue(verification, "approverId") !== approverId ||
       ownValue(verification, "requestDigest") !== digestValue
     ) {
-      return { reason: "proof_invalid", detail: "verifier echo does not match" };
+      return proofRejection("proof_invalid", "verifier echo does not match");
     }
     return null;
   } catch {
     // The verifier threw, or its result or error object threw when read. Never count it.
-    return { reason: "proof_invalid", detail: "verifier failed" };
+    return proofRejection("proof_invalid", "verifier failed");
   }
 }
 
@@ -360,28 +363,55 @@ function failOptions(message: string): never {
   throw new PermitkitError("options_invalid", message);
 }
 
-function isVerifier(value: unknown): value is ApprovalProofVerifier {
-  return (
-    isRecord(value) && typeof value["type"] === "string" && typeof value["verify"] === "function"
-  );
+interface VerifierExpectation {
+  readonly approverId: string;
+  readonly requestDigest: string;
+}
+
+/** A verifier as permitkit stores it: type and verify read once, result not trusted. */
+interface BoundVerifier {
+  readonly type: string;
+  verify(proof: ApprovalProof, expected: VerifierExpectation): unknown;
+}
+
+interface ProofRejection {
+  readonly reason: ApprovalRejectionCode;
+  readonly detail?: string;
+}
+
+/**
+ * A rejection without a prototype. checkProof is async: a plain object would inherit a
+ * polluted Object.prototype.then and be resolved as a thenable, which could turn a rejection
+ * into null, and null means "counted".
+ */
+function proofRejection(reason: ApprovalRejectionCode, detail?: string): ProofRejection {
+  const value: ProofRejection = Object.create(null);
+  return Object.assign(value, detail === undefined ? { reason } : { reason, detail });
 }
 
 /**
  * Validates the options once. Bad options are a programming error, so they throw a coded error.
  * Two verifiers for one type are rejected, because the second would silently replace the first.
  */
-function verifierMap(options: unknown): ReadonlyMap<string, ApprovalProofVerifier> {
+function verifierMap(options: unknown): ReadonlyMap<string, BoundVerifier> {
   if (!isRecord(options)) return failOptions("The options must be an object.");
+  const unknownKeys = Object.keys(options).filter((key) => key !== "verifiers");
+  if (unknownKeys.length > 0) return failOptions(`Unknown option: ${unknownKeys.join(", ")}.`);
   const list: unknown = Object.hasOwn(options, "verifiers") ? options["verifiers"] : undefined;
   if (list === undefined) return new Map();
   if (!Array.isArray(list)) return failOptions("options.verifiers must be an array.");
-  const map = new Map<string, ApprovalProofVerifier>();
+  const map = new Map<string, BoundVerifier>();
   for (const item of list as unknown[]) {
-    if (!isVerifier(item)) {
-      return failOptions("Each verifier needs a string type and a verify function.");
+    // Read type and verify once, from own properties, and keep the values read.
+    const type = ownValue(item, "type");
+    const verify = ownValue(item, "verify");
+    if (typeof type !== "string" || typeof verify !== "function") {
+      return failOptions("Each verifier needs an own string type and an own verify function.");
     }
-    if (map.has(item.type)) return failOptions(`Two verifiers have the type ${item.type}.`);
-    map.set(item.type, item);
+    if (map.has(type)) return failOptions(`Two verifiers have the type ${type}.`);
+    const bound = (proof: ApprovalProof, expected: VerifierExpectation): unknown =>
+      Reflect.apply(verify, item, [proof, expected]);
+    map.set(type, Object.freeze({ type, verify: bound }));
   }
   return map;
 }
