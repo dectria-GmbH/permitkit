@@ -28,7 +28,8 @@ need the policy, through functions that are the only write path for the runtime 
   example `current_setting('app.principal_id')`, set by the authentication layer per
   transaction), never from an argument. It rejects the requester, every agent id in the
   requester's actor chain, a second approval by the same id, and an approval after the window
-  end. It sets `approved_at` from the database clock.
+  end. It sets `approved_at` from the database clock. It rejects approvals from a session in which
+  an agent acts, unless the approval carries a verified user-presence proof.
 - `authz_execute` runs in the transaction that performs the action. It checks the count of
   distinct approvers, the window, and that `executed_at` is null, then sets it. This gives single
   use, which permitkit cannot give.

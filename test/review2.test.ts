@@ -128,7 +128,7 @@ describe("a polluted Object.prototype does not change decisions", () => {
 });
 
 describe("audit records", () => {
-  it("records exactly the request that was decided", () => {
+  it("records exactly the request that was decided, and never runs getters", () => {
     let reads = 0;
     const request = accessRequest(human("u-lead", role("lead")), "ticket:read");
     const shifting = {
@@ -139,9 +139,12 @@ describe("audit records", () => {
       },
     };
     const { decision, record } = decideAndRecord(policy, shifting);
-    expect(decision.outcome).toBe("allow");
-    expect(record.request?.action.name).toBe("read");
-    expect(reevaluate(policy, record).status).toBe("reproduced");
+    expect(decision.reason).toBe("invalid_request");
+    expect(record.request).toBeNull();
+    expect(reads).toBe(0);
+    const plain = decideAndRecord(policy, request);
+    expect(plain.record.request?.action.name).toBe("read");
+    expect(reevaluate(policy, plain.record).status).toBe("reproduced");
   });
 
   it("reports a record with non-JSON values as not replayable", () => {

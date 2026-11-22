@@ -1,6 +1,7 @@
 /**
  * Test helpers for code that uses permitkit. They throw plain errors, so they work with any
- * test runner. Nothing here is needed at run time.
+ * test runner. Nothing here is needed at run time, and the defaults are for tests only:
+ * `role(name)` has the scope `{}` (everywhere), and `accessRequest` uses the fixed `fixedNow`.
  */
 
 import { compareText } from "../canonical.js";

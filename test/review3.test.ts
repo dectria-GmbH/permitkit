@@ -119,7 +119,8 @@ describe("decideAndRecord", () => {
     const { decision, record } = decideAndRecord(policy, flipping);
     expect(decision.reason).toBe("invalid_request");
     expect(record.request).toBeNull();
-    expect(reads).toBe(1);
+    // Getters are rejected without being run, so there is no first read either.
+    expect(reads).toBe(0);
   });
 });
 

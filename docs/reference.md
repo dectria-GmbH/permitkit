@@ -88,7 +88,8 @@ Each `PermitkitError` has `code`, `hint` and, for validation errors, `issues` wi
 
 Before schema validation, every input is copied through a size guard (`src/bounds.ts`). Input
 that is not plain data (objects other than plain objects and arrays, hidden keys, holes) is
-unusable as a whole and gives a deny.
+unusable as a whole and gives a deny. Getters and setters count as not plain data; the guard reads
+data properties only, so no caller code runs during the copy.
 Requests and approval inputs: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters. The
 guard exists because Zod 3 validates every item of an oversized array and keeps one issue per

@@ -157,11 +157,24 @@ export interface CompiledPolicy {
   readonly document: PolicyDocument;
 }
 
+/** A read-only view of a map. A Map itself cannot be frozen. */
+export interface Lookup<V> {
+  get(key: string): V | undefined;
+  values(): IterableIterator<V>;
+}
+
+function lookup<V>(map: Map<string, V>): Lookup<V> {
+  return Object.freeze({
+    get: (key: string) => map.get(key),
+    values: () => map.values(),
+  });
+}
+
 /** Lookup tables built from the frozen document. Not exported from the package. */
 export interface PolicyInternals {
-  readonly roles: ReadonlyMap<string, CompiledRole>;
+  readonly roles: Lookup<CompiledRole>;
   readonly denies: readonly DenyRule[];
-  readonly approvalRules: ReadonlyMap<string, ApprovalRule>;
+  readonly approvalRules: Lookup<ApprovalRule>;
   readonly separationOfDuties: PolicyDocument["separationOfDuties"];
 }
 
@@ -231,12 +244,15 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
     catalog,
     document,
   });
-  internals.set(policy, {
-    roles,
-    denies: document.denies,
-    approvalRules,
-    separationOfDuties: document.separationOfDuties,
-  });
+  internals.set(
+    policy,
+    Object.freeze({
+      roles: lookup(roles),
+      denies: document.denies,
+      approvalRules: lookup(approvalRules),
+      separationOfDuties: document.separationOfDuties,
+    }),
+  );
   return policy;
 }
 

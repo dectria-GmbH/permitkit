@@ -261,7 +261,7 @@ describe("determinism", () => {
     expect(first.approval?.expiresAt).toBe(new Date(Date.parse(fixedNow) + 3600_000).toISOString());
   });
 
-  it("evaluates a snapshot of the request, not live getters", () => {
+  it("rejects getters without running them", () => {
     let reads = 0;
     const properties = {
       get queue() {
@@ -271,7 +271,7 @@ describe("determinism", () => {
     };
     const request = accessRequest(support, "ticket:close");
     const decision = decide(policy, { ...request, resource: { type: "ticket", properties } });
-    expect(decision.outcome).toBe("allow");
-    expect(reads).toBe(1);
+    expect(decision.reason).toBe("invalid_request");
+    expect(reads).toBe(0);
   });
 });

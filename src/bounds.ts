@@ -100,9 +100,10 @@ function clone(
     if (Reflect.ownKeys(value).length !== length + 1) return unusable;
     const items: unknown[] = [];
     for (let index = 0; index < length; index += 1) {
-      // A hole would read from Array.prototype or Object.prototype. Treat it as unreadable.
-      if (!Object.hasOwn(value, index)) return unusable;
-      const item = clone((value as unknown[])[index], depth + 1, bounds, state);
+      // A hole or an accessor is not plain data. Data properties only, so no caller code runs.
+      const property = dataValue(value, String(index));
+      if (property === unusable) return unusable;
+      const item = clone(property, depth + 1, bounds, state);
       if (item === unusable) return unusable;
       items.push(item);
     }
@@ -116,7 +117,8 @@ function clone(
   const result: Record<string, unknown> = Object.create(null);
   for (const key of keys) {
     if (key.length > bounds.maxStringLength) return unusable;
-    const property: unknown = Reflect.get(value, key);
+    const property = dataValue(value, key);
+    if (property === unusable) return unusable;
     const item = clone(property, depth + 1, bounds, state);
     if (item === unusable) return unusable;
     // defineProperty keeps a key named __proto__ as data instead of changing the prototype.
@@ -127,5 +129,20 @@ function clone(
       configurable: true,
     });
   }
+  // Nothing can change the object during the copy, because only data properties were read.
+  // Check the prototype again anyway, as a guard against future changes to this function.
+  if (Object.getPrototypeOf(value) !== prototype) return unusable;
   return result;
+}
+
+/**
+ * The value of an own data property. Accessors (getters, setters) and missing properties are
+ * unusable: a getter is caller code that can change the object, for example delete a later key so
+ * that an inherited value is read in its place.
+ */
+function dataValue(value: object, key: string): unknown {
+  const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined || !("value" in descriptor)) return unusable;
+  const item: unknown = descriptor.value;
+  return item;
 }

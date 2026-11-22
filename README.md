@@ -134,9 +134,12 @@ If a grant covers the request and an approval rule applies, the outcome is `appr
 with the rule id, the number of approvers and the end of the approval window. Store the request
 and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
 
-- the request was `approval_required` under the same rule at its request time, and the requester
-  still holds the permission at evaluation time. If no approval rule applies at evaluation time,
-  the result is `allow` with `approval_not_required`, the same as `decide()` at that time;
+- evaluated with the roles and grants you pass, the request is `approval_required` under the
+  same rule at its request time, and the requester holds the permission at evaluation time. Both
+  checks use the roles you pass, so they cannot see the roles the requester had back then. To
+  bind to those, keep the decision record from the request time and compare it. If no approval
+  rule applies at evaluation time, the result is `allow` with `approval_not_required`, the same
+  as `decide()` at that time;
 - each approver is a human principal acting directly, not through an agent;
 - the requester never counts: neither the principal nor any agent id in its actor chain;
 - each approver counts once;
@@ -160,6 +163,10 @@ call, rebuild from your identity store, not from what a client or an earlier ste
 - each `approver` subject (type and roles). An approval proof binds only the approver id and the
   request digest, so roles taken from the approval itself let approvers claim their own
   eligibility;
+- each approver's session actor chain as `approver.act`, if an agent acted in that session. An
+  identity store does not know this, but the session does. Without it, an agent that acts for
+  both the requester and the approver can complete both sides. If your session layer cannot
+  tell, set `requireProof` with a user-presence proof such as WebAuthn;
 - each approver id from the authenticated session in which that person approved. Without
   `requireProof`, nothing else binds the id: code that lets the requester submit "an approval by
   someone else" lets one person satisfy the rule alone;
@@ -239,7 +246,8 @@ names: `outcome`, `reason_codes`, `rule`, `approval`, `policy_version`, `policy_
 ### Threat model
 
 permitkit treats every input as possibly hostile data: wrong types, objects that are not plain
-data (a `Map`, a `Date`, a class instance, non-enumerable or symbol keys), getters, proxies, array
+data (a `Map`, a `Date`, a class instance, non-enumerable or symbol keys, getters and setters),
+proxies, array
 holes, huge values, and data-valued pollution of `Object.prototype` from a bug elsewhere in the process.
 Such input gives a deny, never an exception from a decision function. Proxies count as not plain
 data, also reactive ones from UI state libraries: pass a plain copy. Code that runs in your
