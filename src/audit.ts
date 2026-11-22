@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { boundedSnapshot, requestBounds } from "./bounds.js";
+import { boundedSnapshot, detach, wrapperBounds } from "./bounds.js";
 import { canonicalJson } from "./canonical.js";
 import { decide, parseRequest, type Decision } from "./decide.js";
 import type { AccessRequest } from "./request.js";
@@ -103,9 +103,10 @@ export function reevaluate(policy: CompiledPolicy, record: DecisionRecord): Reev
     throw new PermitkitError("policy_unknown", "reevaluate() needs a policy from compilePolicy().");
   }
   const loaded = { version: policy.version, digest: policy.digest };
-  const shape = safeParse(recordShapeSchema, boundedSnapshot(record, requestBounds));
+  const shape = safeParse(recordShapeSchema, boundedSnapshot(record, wrapperBounds));
   if (!shape.success) return { status: "not_replayable" };
-  const stored = shape.data;
+  // detach: a missing key must read as undefined, never as an inherited value.
+  const stored = detach(shape.data);
   if (stored.policy.version !== loaded.version || stored.policy.digest !== loaded.digest) {
     return { status: "policy_mismatch", expected: stored.policy, loaded };
   }

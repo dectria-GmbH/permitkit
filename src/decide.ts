@@ -246,6 +246,17 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
       grantId: actor.grant?.id ?? null,
     });
     if (reason !== null) return deny(reason, requestDigestValue);
+    // A chain acts for one principal. A prior actor's grant from someone else would hide that
+    // person behind the request, where the requester exclusion of dual approval cannot see them.
+    for (let prior = actor.act; prior !== undefined; prior = prior.act) {
+      const grant = prior.grant;
+      if (
+        grant !== undefined &&
+        (grant.principalId !== request.subject.id || grant.principalType !== request.subject.type)
+      ) {
+        return deny("agent_grant_principal_mismatch", requestDigestValue);
+      }
+    }
   }
 
   const properties = request.resource.properties;

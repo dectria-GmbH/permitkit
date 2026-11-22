@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { boundedSnapshot, detach, requestBounds } from "./bounds.js";
+import { boundedSnapshot, detach, requestBounds, wrapperBounds } from "./bounds.js";
 import { decide, denyRuleMatches, permissionOf, requestDigest, type Decision } from "./decide.js";
 import { scopeCovers } from "./engine/conditions.js";
 import { safeParse } from "./parse.js";
@@ -158,7 +158,15 @@ export async function evaluateApprovals(
       ...rest,
     });
 
-  const snapshot = boundedSnapshot(input, requestBounds);
+  const snapshot = boundedSnapshot(input, wrapperBounds);
+  // The request inside must meet the same bounds as a request passed to decide().
+  const requestPart: unknown =
+    typeof snapshot === "object" && snapshot !== null && Object.hasOwn(snapshot, "request")
+      ? Reflect.get(snapshot, "request")
+      : undefined;
+  if (snapshot !== undefined && boundedSnapshot(requestPart, requestBounds) === undefined) {
+    return result("deny", "invalid_input");
+  }
   if (snapshot === undefined) return result("deny", "invalid_input");
   const parsed = safeParse(approvalInputSchema, snapshot);
   if (!parsed.success) return result("deny", "invalid_input");
@@ -301,7 +309,13 @@ export async function evaluateApprovals(
       continue;
     }
     if (rule.requireProof) {
-      const rejection = await checkProof(approval, approver.id, digestValue, verifiers);
+      const rejection = await checkProof(
+        approval,
+        approver.id,
+        digestValue,
+        verifiers,
+        rule.proofTypes,
+      );
       if (rejection !== null) {
         reject(rejection.reason, rejection.detail);
         continue;
@@ -320,9 +334,13 @@ async function checkProof(
   approverId: string,
   digestValue: string,
   verifiers: ReadonlyMap<string, BoundVerifier>,
+  proofTypes: readonly string[] | undefined,
 ): Promise<ProofRejection | null> {
   const proof = approval.proof;
   if (proof === undefined) return proofRejection("proof_missing");
+  if (proofTypes !== undefined && !proofTypes.includes(proof.type)) {
+    return proofRejection("proof_type_not_allowed", proof.type);
+  }
   if (proof.approverId !== approverId || proof.requestDigest !== digestValue) {
     return proofRejection("proof_mismatch");
   }

@@ -70,6 +70,7 @@ export const approvalRejectionCodes = Object.freeze({
   sod_role_conflict: "Separation of duties: the approver also holds a requesting role.",
   sod_prior_request: "Separation of duties: the approver requested an action of this type before.",
   proof_missing: "The rule requires an approval proof and the approval has none.",
+  proof_type_not_allowed: "The rule does not accept this proof type.",
   proof_mismatch: "The proof names another approver or another request digest.",
   proof_verifier_missing: "No verifier is registered for the proof type.",
   proof_invalid: "The verifier rejected the proof.",

@@ -24,6 +24,18 @@ export const requestBounds: InputBounds = Object.freeze({
 });
 
 /** Bounds for policy documents, which are larger but come from the operator. */
+/**
+ * Bounds for inputs that wrap a request: approval inputs and audit records. The request inside
+ * is checked again with requestBounds, so a request at the limit can still be approved or
+ * replayed.
+ */
+export const wrapperBounds: InputBounds = Object.freeze({
+  maxDepth: 24,
+  maxNodes: 300_000,
+  maxArrayLength: 1_000,
+  maxStringLength: 4_096,
+});
+
 export const policyBounds: InputBounds = Object.freeze({
   maxDepth: 24,
   maxNodes: 500_000,
@@ -119,6 +131,9 @@ function clone(
     if (key.length > bounds.maxStringLength) return unusable;
     const property = dataValue(value, key);
     if (property === unusable) return unusable;
+    // JSON has no undefined. A key set to undefined counts as absent, so `{ max: undefined }`
+    // is the empty limit `{}` and fails validation instead of passing an own-key check.
+    if (property === undefined) continue;
     const item = clone(property, depth + 1, bounds, state);
     if (item === unusable) return unusable;
     // defineProperty keeps a key named __proto__ as data instead of changing the prototype.

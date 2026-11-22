@@ -120,7 +120,9 @@ Matching rules:
 
 A subject is a `human` or `service` principal with role assignments. If an agent acts, the
 request carries the agent as `subject.act`, in the RFC 8693 `act` shape; nested `act` values are
-prior actors. They do not grant or limit rights, but they are part of the request digest and the
+prior actors. They do not grant rights. If a prior actor carries a grant, that grant must come
+from the same principal, or the request is denied with `agent_grant_principal_mismatch`. Prior
+actors are part of the request digest and the
 audit record, and their ids cannot approve the request. The current actor must hold a grant that
 the principal issued (`principalId` and `principalType`) to this agent (`agentId`), that is
 inside its validity window (`notBefore` inclusive, `expiresAt` and `revokedAt` exclusive), and
@@ -152,7 +154,9 @@ and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
   use dedicated approver roles with `grants: []`. Without `approverRoles`, the approver must hold
   the permission itself;
 - a deny rule for the permission that matches the approver excludes the approval;
-- with `requireProof`, each approval needs a proof that a registered verifier accepts.
+- with `requireProof`, each approval needs a proof that a registered verifier accepts; with
+  `proofTypes`, only those proof types count, so an approver cannot pick a weaker registered
+  verifier.
 
 `evaluateApprovals()` checks the identity data you pass in; it cannot look it up. Before each
 call, rebuild from your identity store, not from what a client or an earlier step submitted:
@@ -257,6 +261,12 @@ code can change the behaviour of any library in the process.
 
 ### Input rules
 
+- A key set to `undefined` counts as absent, as in JSON. `limits: { amount: { max: undefined } }`
+  is therefore an empty limit and fails validation, and `scope: undefined` on a grant means no
+  scope restriction. Build policies from validated configuration, not from optional values.
+- A service principal is its own identity. If a person triggers a service action, model the
+  person as the principal and the service as the actor, or the person can approve their own
+  request through the service.
 - Every input is trusted data from your server, not from a client: `context.now` from your clock,
   `subject.roles` and agent grants (with `revokedAt`) from your identity store,
   `resource.properties` from your database. permitkit decides on what you pass; a backdated

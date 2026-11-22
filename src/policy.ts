@@ -105,6 +105,8 @@ export const approvalRuleSchema = z
       .max(31 * 24 * 3600),
     /** Each approval must carry a proof that a registered verifier accepts. */
     requireProof: z.boolean().default(false),
+    /** With requireProof: the proof types that count. Absent: any registered type. */
+    proofTypes: z.array(z.string().min(1).max(64)).min(1).optional(),
   })
   .strict();
 

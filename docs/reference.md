@@ -62,6 +62,7 @@ The first failing check gives the reason.
 | `sod_role_conflict`        | The approver also holds a requesting role (if configured).            |
 | `sod_prior_request`        | The approver requested an action of this type before (if configured). |
 | `proof_missing`            | The rule requires a proof and the approval has none.                  |
+| `proof_type_not_allowed`   | The rule's `proofTypes` do not include the proof's type.              |
 | `proof_mismatch`           | The proof names another approver or another request digest.           |
 | `proof_verifier_missing`   | No verifier is registered for the proof type.                         |
 | `proof_invalid`            | The verifier rejected the proof, threw, or echoed other values.       |
@@ -91,6 +92,7 @@ that is not plain data (objects other than plain objects and arrays, hidden keys
 unusable as a whole and gives a deny. Getters and setters count as not plain data; the guard reads
 data properties only, so no caller code runs during the copy.
 Requests and approval inputs: depth 24, 20,000 values, 1,000 items per array or object, 4,096
-characters per string. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters. The
+characters per string. Approval inputs and audit records: 300,000 values, and the request inside
+meets the request bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters. The
 guard exists because Zod 3 validates every item of an oversized array and keeps one issue per
 failing item (GHSA-mrhx-c7xc-m3w5, no fix in Zod 3).
