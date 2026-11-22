@@ -56,12 +56,22 @@ export function defineCatalog(definition: CatalogDefinition): Catalog {
       issues.push(issue(type, "Resource type name is not valid."));
       continue;
     }
-    if (entry === undefined || !Array.isArray(entry.actions) || entry.actions.length === 0) {
+    if (typeof entry !== "object" || entry === null) {
+      issues.push(issue(type, "A resource type needs a definition object."));
+      continue;
+    }
+    const actions: unknown = Object.hasOwn(entry, "actions") ? entry.actions : undefined;
+    if (!Array.isArray(actions) || actions.length === 0) {
       issues.push(issue(`${type}.actions`, "A resource type needs at least one action."));
       continue;
     }
+    const actionNames = actions.filter((name): name is string => typeof name === "string");
+    if (actionNames.length !== actions.length) {
+      issues.push(issue(`${type}.actions`, "Every action name must be a string."));
+      continue;
+    }
     const lists = {
-      actions: [...entry.actions],
+      actions: actionNames,
       scopes: [...((Object.hasOwn(entry, "scopes") ? entry.scopes : undefined) ?? [])],
       limits: [...((Object.hasOwn(entry, "limits") ? entry.limits : undefined) ?? [])],
     };

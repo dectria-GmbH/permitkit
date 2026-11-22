@@ -29,7 +29,8 @@ export const policyBounds: InputBounds = Object.freeze({
   maxStringLength: 4_096,
 });
 
-const tooLarge = Symbol("tooLarge");
+/** Marks input that exceeds the bounds, cannot be read, or is not plain data. */
+const unusable = Symbol("unusable");
 
 /**
  * Deep copy of validated data into objects without a prototype. permitkit reads optional
@@ -55,7 +56,8 @@ export function detach<T>(value: T): T {
 }
 
 /**
- * A plain copy of the value, or `undefined` if the value exceeds the bounds or cannot be read. Arrays and objects
+ * A plain copy of the value, or `undefined` if the value exceeds the bounds, cannot be read, or
+ * holds anything but plain objects, arrays and primitives. Arrays and objects
  * become plain arrays and objects with own enumerable string keys. Other values stay as they are,
  * so the schema still rejects functions, symbols and similar values.
  */
@@ -63,7 +65,7 @@ export function boundedSnapshot(value: unknown, bounds: InputBounds): unknown {
   const state = { nodes: 0 };
   try {
     const copy = clone(value, 0, bounds, state);
-    return copy === tooLarge ? undefined : copy;
+    return copy === unusable ? undefined : copy;
   } catch {
     // A throwing getter or a revoked proxy: treat the input as unusable.
     return undefined;
@@ -77,31 +79,41 @@ function clone(
   state: { nodes: number },
 ): unknown {
   state.nodes += 1;
-  if (state.nodes > bounds.maxNodes || depth > bounds.maxDepth) return tooLarge;
-  if (typeof value === "string") return value.length > bounds.maxStringLength ? tooLarge : value;
+  if (state.nodes > bounds.maxNodes || depth > bounds.maxDepth) return unusable;
+  if (typeof value === "string") return value.length > bounds.maxStringLength ? unusable : value;
   if (typeof value !== "object" || value === null) return value;
+  // Only plain data is copied. A Map, a Date, a class instance or hidden keys (non-enumerable or
+  // symbol) would lose data in the copy, and a lost scope reads as "everywhere". Such input is
+  // unusable as a whole.
+  const prototype: unknown = Object.getPrototypeOf(value);
   if (Array.isArray(value)) {
+    if (prototype !== Array.prototype) return unusable;
     const length: number = value.length;
-    if (length > bounds.maxArrayLength) return tooLarge;
+    if (length > bounds.maxArrayLength) return unusable;
+    // Own keys of a plain array are its indices plus "length". Fewer means holes, more means
+    // named or symbol properties.
+    if (Reflect.ownKeys(value).length !== length + 1) return unusable;
     const items: unknown[] = [];
     for (let index = 0; index < length; index += 1) {
       // A hole would read from Array.prototype or Object.prototype. Treat it as unreadable.
-      if (!Object.hasOwn(value, index)) return tooLarge;
+      if (!Object.hasOwn(value, index)) return unusable;
       const item = clone((value as unknown[])[index], depth + 1, bounds, state);
-      if (item === tooLarge) return tooLarge;
+      if (item === unusable) return unusable;
       items.push(item);
     }
     return items;
   }
+  if (prototype !== Object.prototype && prototype !== null) return unusable;
   const keys = Object.keys(value);
-  if (keys.length > bounds.maxArrayLength) return tooLarge;
+  if (keys.length > bounds.maxArrayLength) return unusable;
+  if (Reflect.ownKeys(value).length !== keys.length) return unusable;
   // A null prototype: a missing key reads as undefined even if Object.prototype was polluted.
   const result: Record<string, unknown> = Object.create(null);
   for (const key of keys) {
-    if (key.length > bounds.maxStringLength) return tooLarge;
+    if (key.length > bounds.maxStringLength) return unusable;
     const property: unknown = Reflect.get(value, key);
     const item = clone(property, depth + 1, bounds, state);
-    if (item === tooLarge) return tooLarge;
+    if (item === unusable) return unusable;
     // defineProperty keeps a key named __proto__ as data instead of changing the prototype.
     Object.defineProperty(result, key, {
       value: item,

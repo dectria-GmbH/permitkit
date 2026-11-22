@@ -135,7 +135,8 @@ with the rule id, the number of approvers and the end of the approval window. St
 and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
 
 - the request was `approval_required` under the same rule at its request time, and the requester
-  still holds the permission at evaluation time;
+  still holds the permission at evaluation time. If no approval rule applies at evaluation time,
+  the result is `allow` with `approval_not_required`, the same as `decide()` at that time;
 - each approver is a human principal acting directly, not through an agent;
 - the requester never counts: neither the principal nor any agent id in its actor chain;
 - each approver counts once;
@@ -191,7 +192,9 @@ const verifier: ApprovalProofVerifier = {
 await evaluateApprovals(policy, input, { verifiers: [verifier] });
 ```
 
-`loadCredentials` and `verifyAssertion` stand for your own code. permitkit checks that the proof
+`loadCredentials` and `verifyAssertion` stand for your own code. The proof `payload` must be
+plain JSON (for example base64url strings), within the size bounds; binary objects such as a
+`Uint8Array` make the whole input unusable. permitkit checks that the proof
 names the approver and the digest before it calls the verifier, and compares the returned values
 after. That comparison only protects you if the verifier returns the values from the verified
 evidence: a verifier that echoes `expected` lets a valid assertion for one request pass for
@@ -234,8 +237,9 @@ names: `outcome`, `reason_codes`, `rule`, `approval`, `policy_version`, `policy_
 
 ### Threat model
 
-permitkit treats every input as possibly hostile data: wrong types, getters, proxies, array holes,
-huge values, and data-valued pollution of `Object.prototype` from a bug elsewhere in the process.
+permitkit treats every input as possibly hostile data: wrong types, objects that are not plain
+data (a `Map`, a `Date`, a class instance, non-enumerable or symbol keys), getters, proxies, array
+holes, huge values, and data-valued pollution of `Object.prototype` from a bug elsewhere in the process.
 Such input gives a deny, never an exception from a decision function. Code that runs in your
 process with its own functions (a replaced `Array.prototype.map`, a function on
 `Object.prototype.then`) is not covered. permitkit hardens the paths it knows about, but such
