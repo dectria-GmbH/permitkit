@@ -1,0 +1,14 @@
+{
+  "name": "permitkit",
+  "version": "0.0.0",
+  "description": "Authorization toolkit for TypeScript: roles, scopes, field groups and delegated agent access.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dectria-GmbH/permitkit.git"
+  },
+  "files": [
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT"
+}
