@@ -156,7 +156,10 @@ const agentGrantArb = fc.record({
   sameAgent: fc.boolean(),
 });
 
-describe("properties", () => {
+// Property runs take several seconds on a slow CI runner; the default 5 s timeout is too short.
+const propertyTimeout = { timeout: 60_000 };
+
+describe("properties", propertyTimeout, () => {
   it("adding a deny never widens access", () => {
     fc.assert(
       fc.property(policyArb, denyArb, requestArb(principalArb), (input, extraDeny, request) => {
@@ -434,7 +437,7 @@ const matchRequestArb = fc
     ),
   );
 
-describe("explicit scope properties", () => {
+describe("explicit scope properties", propertyTimeout, () => {
   const agentArb = fc.option(fc.array(grantArb, { minLength: 1, maxLength: 3 }), {
     nil: undefined,
   });
