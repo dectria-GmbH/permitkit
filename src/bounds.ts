@@ -23,7 +23,6 @@ export const requestBounds: InputBounds = Object.freeze({
   maxStringLength: 4_096,
 });
 
-/** Bounds for policy documents, which are larger but come from the operator. */
 /**
  * Bounds for inputs that wrap a request: approval inputs and audit records. The request inside
  * is checked again with requestBounds, so a request at the limit can still be approved or
@@ -36,6 +35,7 @@ export const wrapperBounds: InputBounds = Object.freeze({
   maxStringLength: 4_096,
 });
 
+/** Bounds for policy documents, which are larger but come from the operator. */
 export const policyBounds: InputBounds = Object.freeze({
   maxDepth: 24,
   maxNodes: 500_000,
@@ -157,7 +157,9 @@ function clone(
  */
 function dataValue(value: object, key: string): unknown {
   const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
-  if (descriptor === undefined || !("value" in descriptor)) return unusable;
+  // Object.hasOwn, not `in`: a descriptor is a plain object, and `in` would also find a polluted
+  // Object.prototype.value on an accessor descriptor.
+  if (descriptor === undefined || !Object.hasOwn(descriptor, "value")) return unusable;
   const item: unknown = descriptor.value;
   return item;
 }

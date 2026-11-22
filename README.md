@@ -156,7 +156,7 @@ and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
 - a deny rule for the permission that matches the approver excludes the approval;
 - with `requireProof`, each approval needs a proof that a registered verifier accepts; with
   `proofTypes`, only those proof types count, so an approver cannot pick a weaker registered
-  verifier.
+  verifier. `proofTypes` without `requireProof` is a policy error.
 
 `evaluateApprovals()` checks the identity data you pass in; it cannot look it up. Before each
 call, rebuild from your identity store, not from what a client or an earlier step submitted:

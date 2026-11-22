@@ -1,5 +1,12 @@
 import { boundedSnapshot, requestBounds } from "./bounds.js";
-import { decide, type ApprovalRequirement, type MatchedRule, type Outcome } from "./decide.js";
+import { PermitkitError } from "./errors.js";
+import {
+  decide,
+  type Decision,
+  type ApprovalRequirement,
+  type MatchedRule,
+  type Outcome,
+} from "./decide.js";
 import type { CompiledPolicy } from "./policy.js";
 import type { ReasonCode } from "./reasons.js";
 
@@ -63,6 +70,16 @@ function onlyKeys(value: unknown, keys: readonly string[]): boolean {
  * accepted and not used.
  */
 export function evaluate(policy: CompiledPolicy, input: AuthZenRequest): AuthZenResponse {
+  try {
+    return evaluateUnsafe(policy, input);
+  } catch (error) {
+    // Programming errors (a policy from elsewhere) still throw. Anything else denies.
+    if (error instanceof PermitkitError) throw error;
+    return responseOf(decide(policy, null));
+  }
+}
+
+function evaluateUnsafe(policy: CompiledPolicy, input: AuthZenRequest): AuthZenResponse {
   // Read the caller's object once, through the size guard. The copy has no prototype.
   const request = boundedSnapshot(input, requestBounds);
   const subject = own(request, "subject");
@@ -105,7 +122,10 @@ export function evaluate(policy: CompiledPolicy, input: AuthZenRequest): AuthZen
         },
       }
     : null;
-  const decision = decide(policy, native);
+  return responseOf(decide(policy, native));
+}
+
+function responseOf(decision: Decision): AuthZenResponse {
   return {
     decision: decision.allowed,
     context: {

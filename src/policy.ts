@@ -358,6 +358,13 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
         });
       }
     });
+    if (rule.proofTypes !== undefined && !rule.requireProof) {
+      issues.push({
+        path: `${path}.proofTypes`,
+        message: "proofTypes has no effect without requireProof.",
+        hint: "Set requireProof: true, or remove proofTypes.",
+      });
+    }
     if (document.separationOfDuties.exclusiveRequestAndApproveRoles && !rule.approverRoles) {
       issues.push({
         path: `${path}.approverRoles`,

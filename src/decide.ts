@@ -144,15 +144,26 @@ export function denyRuleMatches(
   permission: string,
   properties: Readonly<Record<string, Scalar>> | undefined,
 ): boolean {
-  const types = new Set<string>([subject.type]);
-  if (subject.act !== undefined) types.add("agent");
-  const held = new Set(subject.roles.map((assignment) => assignment.role));
+  if (!rule.permissions.includes(permission) || !scopeTouches(rule.scope, properties)) return false;
+  const { types, held } = factsOf(subject);
   return (
-    rule.permissions.includes(permission) &&
     (rule.roles === undefined || rule.roles.some((role) => held.has(role))) &&
-    (rule.subjectTypes === undefined || rule.subjectTypes.some((type) => types.has(type))) &&
-    scopeTouches(rule.scope, properties)
+    (rule.subjectTypes === undefined || rule.subjectTypes.some((type) => types.has(type)))
   );
+}
+
+const subjectFacts = new WeakMap<Subject, { types: Set<string>; held: Set<string> }>();
+
+/** Subject types and held roles, computed once per validated subject object. */
+function factsOf(subject: Subject): { types: Set<string>; held: Set<string> } {
+  let facts = subjectFacts.get(subject);
+  if (facts === undefined) {
+    const types = new Set<string>([subject.type]);
+    if (subject.act !== undefined) types.add("agent");
+    facts = { types, held: new Set(subject.roles.map((assignment) => assignment.role)) };
+    subjectFacts.set(subject, facts);
+  }
+  return facts;
 }
 
 function digestOfRequest(policy: CompiledPolicy, request: AccessRequest): string {
