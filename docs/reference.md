@@ -76,9 +76,13 @@ that would be valid.
 permitkit throws only for programming and configuration errors. Decisions never throw for bad
 requests, including throwing getters and revoked proxies; they deny. `catalog_invalid` is also
 thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
-`canonicalJson` and `digest` throw `not_canonical`, never a raw error: for proxies, objects other
-than plain objects and arrays, symbol or non-enumerable keys, getters and setters (which are not
-run), array holes and named array properties, and input too deep to walk.
+`canonicalJson` and `digest` throw `not_canonical`, never a raw error: for proxies, objects
+whose prototype is not `Object.prototype`, `null` or `Array.prototype`, built-ins that Node
+identifies by their internal slots (a `Map` or `Date`, also with a swapped prototype), symbol or
+non-enumerable keys, getters and setters (which are not run), array holes and named array
+properties, and input too deep to walk. An object that keeps its data in `#private` fields or in
+slots that Node cannot identify (a `URL`, a `WeakRef`, an `Intl` object), with its prototype set
+to `Object.prototype`, serializes as `{}`. Pass plain JSON data.
 
 | Code                        | Thrown by                                                                                              | Meaning                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
@@ -96,7 +100,8 @@ Each `PermitkitError` has `code`, `hint` and, for validation errors, `issues` wi
 ## Size bounds
 
 Before schema validation, every input is copied through a size guard (`src/bounds.ts`). Input
-that is not plain data (objects other than plain objects and arrays, hidden keys, holes) is
+that is not plain data (objects other than plain objects and arrays, hidden keys, holes; see the
+threat model in the README for the one gap) is
 unusable as a whole and gives a deny. Getters and setters count as not plain data; the guard reads
 data properties only, so no caller code runs during the copy.
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096

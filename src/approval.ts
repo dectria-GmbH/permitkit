@@ -86,7 +86,7 @@ export const approvalInputSchema = z
         z
           .object({
             principalId: z.string().min(1),
-            permission: z.string().regex(/^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$/),
+            permission: z.string().min(1),
           })
           .strict(),
       )

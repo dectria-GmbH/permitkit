@@ -272,7 +272,9 @@ The operator switches these settings in the policy:
 
 - `requesterNeverApprovesSameType`: who requested an action of a type before may never approve an
   action of that type. Pass the history as `priorRequests`; without it, the result is a deny.
-  An empty list means "no earlier requests", so pass the full history for the approvers.
+  An empty list means "no earlier requests", so pass the full history for the approvers. Each
+  entry must name a permission of the current catalogue, or the result is `invalid_input`, so
+  filter out permissions that a later release removed.
 - `exclusiveRequestAndApproveRoles`: nobody may hold both a role that grants the permission and an
   approver role for it. Requests and approvals from such subjects are refused. Every approval
   rule then needs `eligibleApprovers: { kind: "roles", ... }`.
@@ -311,7 +313,11 @@ data (a `Map`, a `Date`, a class instance, non-enumerable or symbol keys, getter
 proxies, array
 holes, huge values, and data-valued pollution of `Object.prototype` from a bug elsewhere in the
 process. Data-valued pollution of `Array.prototype` also gives a deny, but is tested less.
-Such input gives a deny, never an exception from a decision function. Proxies count as not plain
+Such input gives a deny, never an exception from a decision function. One gap remains: a
+built-in or class instance that keeps its data in `#private` fields or engine slots that Node
+cannot identify (for example a `URL`, a `WeakRef` or an `Intl` object), with its prototype set to
+`Object.prototype` by caller code, copies as `{}`. A `{}` is refused as a scope, limit or
+condition and narrows as `resource.properties`, so it cannot widen access. Proxies count as not plain
 data, also reactive ones from UI state libraries: pass a plain copy. Code that runs in your
 process with its own functions (a replaced `Array.prototype.map`, a function on
 `Object.prototype.then`) is not covered. permitkit hardens the paths it knows about, but such
