@@ -117,7 +117,10 @@ Matching rules:
 | Precedence           | Deny rules win over grants. Approval rules apply only after a grant covers the request.                                     |
 
 Several properties in one scope combine with AND: a deny rule with `{ queue: ["vip"], project:
-["alpha"] }` matches only resources in both. Use separate deny rules for OR. Approval rule `when`
+["alpha"] }` matches only resources in both. The conditions of one deny rule (`roles`,
+`subjectTypes`, `scope`) also combine with AND: `roles: ["contractor"]` with
+`subjectTypes: ["agent"]` denies only agents acting for contractors. Use separate deny rules for
+OR. Approval rule `when`
 conditions combine with OR, so more conditions mean more approvals.
 
 ### Subjects and agents
@@ -125,9 +128,11 @@ conditions combine with OR, so more conditions mean more approvals.
 A subject is a `human` or `service` principal with role assignments. If an agent acts, the
 request carries the agent as `subject.act`, in the RFC 8693 `act` shape; nested `act` values are
 prior actors. They do not grant rights. If a prior actor carries a grant, that grant must come
-from the same principal and name that prior actor as its agent, or the request is denied with
-`agent_grant_principal_mismatch`. Prior
-actors are part of the request digest and the
+from the same principal, name that prior actor as its agent, and be inside its validity window
+and not revoked; otherwise the request is denied (`agent_grant_principal_mismatch`,
+`agent_grant_expired`, `agent_grant_revoked` or `agent_grant_not_yet_valid`). A prior grant's
+coverage is not checked, because it grants nothing. Prior actors are part of the request digest
+and the
 audit record, and their ids cannot approve the request. The current actor must hold a grant that
 the principal issued (`principalId` and `principalType`) to this agent (`agentId`), that is
 inside its validity window (`notBefore` inclusive, `expiresAt` and `revokedAt` exclusive), and
@@ -276,7 +281,8 @@ code can change the behaviour of any library in the process.
   `false`; an agent grant entry's `scope` or `limits` set to `undefined` gives that entry the
   principal's full rights for its permissions; `notBefore`, `revokedAt`, `policyVersion`,
   `policyDigest`, `approverRoles`, `proofTypes`, grant `limits` and the separation-of-duties
-  flags set to `undefined` count as not set. Agent grants usually come from database rows, so
+  flags set to `undefined` count as not set, and `denies: undefined` or `approvalRules: undefined`
+  compile to no deny rules or no approval rules. Agent grants usually come from database rows, so
   map optional columns on purpose.
   Check optional values before you build a request or a policy from them.
 - For the same reason, `limits: { amount: { max: undefined } }` is an empty limit and fails

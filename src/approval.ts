@@ -202,7 +202,15 @@ async function evaluateApprovalsUnguarded(
   // Written so that an unreadable time fails the check.
   if (!(now >= requestedAt)) return result("deny", "invalid_input");
 
-  const digestValue = requestDigest(policy, request);
+  let digestValue: string;
+  try {
+    digestValue = requestDigest(policy, request);
+  } catch (error) {
+    if (error instanceof PermitkitError && error.code === "request_invalid") {
+      return result("deny", "invalid_input");
+    }
+    throw error;
+  }
   const requesterDecision = decide(policy, {
     ...request,
     context: { ...request.context, now: nowText },

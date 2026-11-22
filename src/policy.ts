@@ -206,13 +206,18 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
   }
   const snapshot = boundedSnapshot(input, policyBounds);
   if (snapshot === undefined) {
-    throw new PermitkitError("policy_invalid", "The policy document is too large.", [
-      {
-        path: "",
-        message: "The document exceeds the size bounds (depth, nodes, array or string length).",
-        hint: "Split very large scope lists, or raise the bounds in a fork if you need more.",
-      },
-    ]);
+    throw new PermitkitError(
+      "policy_invalid",
+      "The policy document is too large or not plain data.",
+      [
+        {
+          path: "",
+          message:
+            "The document exceeds the size bounds, or holds values that are not plain data (getters, class instances, proxies).",
+          hint: "Split very large scope lists, or raise the bounds in a fork if you need more.",
+        },
+      ],
+    );
   }
   const parsed = safeParse(policySchema, snapshot);
   if (!parsed.success) {

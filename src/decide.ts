@@ -272,15 +272,17 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
     if (reason !== null) return deny(reason, requestDigestValue);
     // A chain acts for one principal. A prior actor's grant from someone else would hide that
     // person behind the request, where the requester exclusion of dual approval cannot see them.
+    // A revoked or expired grant upstream also ends the chain. Prior grants grant nothing, so
+    // their coverage is not checked.
     for (let prior = actor.act; prior !== undefined; prior = prior.act) {
-      const grant = prior.grant;
-      if (
-        grant !== undefined &&
-        (grant.principalId !== request.subject.id ||
-          grant.principalType !== request.subject.type ||
-          grant.agentId !== prior.id)
-      ) {
-        return deny("agent_grant_principal_mismatch", requestDigestValue);
+      if (prior.grant === undefined) continue;
+      const priorReason = agentGrantValidity(prior, request.subject, now);
+      if (priorReason !== null) {
+        const mapped =
+          priorReason === "agent_grant_actor_mismatch"
+            ? "agent_grant_principal_mismatch"
+            : priorReason;
+        return deny(mapped, requestDigestValue);
       }
     }
   }
