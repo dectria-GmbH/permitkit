@@ -169,9 +169,22 @@ describe("proof verifier results", () => {
   }));
 
   it("rejects anything but the exact success shape and never throws", async () => {
-    const results: unknown[] = [null, undefined, "yes", { valid: "false" }, { valid: 1 }, {}];
-    for (const value of results) {
-      const verifier = { type: "t", verify: () => value } as unknown as ApprovalProofVerifier;
+    const results: ((expected: { approverId: string; requestDigest: string }) => unknown)[] = [
+      () => null,
+      () => undefined,
+      () => "yes",
+      () => ({ valid: 1 }),
+      () => ({}),
+      // A correct echo with a non-boolean valid flag must still be rejected.
+      (expected) => ({ valid: "false", ...expected }),
+      (expected) => ({ valid: 1, ...expected }),
+    ];
+    for (const make of results) {
+      const verifier = {
+        type: "t",
+        verify: (_proof: unknown, expected: { approverId: string; requestDigest: string }) =>
+          make(expected),
+      } as unknown as ApprovalProofVerifier;
       const result = await evaluateApprovals(
         proofPolicy,
         { request, now: "2026-01-15T10:30:00.000Z", approvals },
