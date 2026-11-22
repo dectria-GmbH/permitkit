@@ -9,9 +9,16 @@ import {
   type ScopeResult,
 } from "./engine/conditions.js";
 import { PermitkitError } from "./errors.js";
-import { isCompiledPolicy, type CompiledPolicy } from "./policy.js";
+import { internalsOf, type CompiledPolicy, type DenyRule, type PolicyInternals } from "./policy.js";
 import { reasonHints, type ReasonCode } from "./reasons.js";
-import { accessRequestSchema, type AccessRequest, type Actor, type Subject } from "./request.js";
+import {
+  accessRequestSchema,
+  type AccessRequest,
+  type Actor,
+  type Scalar,
+  type Subject,
+} from "./request.js";
+import { instant } from "./time.js";
 
 export type Outcome = "allow" | "deny" | "approval_required";
 
@@ -91,13 +98,74 @@ export function permissionOf(request: Pick<AccessRequest, "action" | "resource">
 }
 
 /**
- * SHA-256 that identifies one request instance under one policy: principal, actor chain,
- * action, resource and request time. Approvals and approval proofs bind to this value.
+ * SHA-256 that identifies one request instance under one policy: principal, every actor with
+ * the content of its grant (without revokedAt, which may change later), action, resource and
+ * request time. Role assignments are not part of it; evaluateApprovals checks the requester's
+ * roles again at evaluation time. Approvals and approval proofs bind to this value.
+ * Throws PermitkitError `request_invalid` if the request does not match the schema.
  */
-export function requestDigest(policy: CompiledPolicy, request: AccessRequest): string {
-  const actors: { id: string; grantId: string | null }[] = [];
+export function requestDigest(policy: CompiledPolicy, request: unknown): string {
+  const parsed = parseRequest(request);
+  if (!parsed.ok) {
+    throw new PermitkitError("request_invalid", "requestDigest() needs a valid request.");
+  }
+  return digestOfRequest(policy, parsed.request);
+}
+
+export type ParsedRequest =
+  { ok: true; request: AccessRequest } | { ok: false; issues: { path: string; message: string }[] };
+
+/** Size guard plus schema validation. Never throws, also not for hostile getters or proxies. */
+export function parseRequest(input: unknown): ParsedRequest {
+  const snapshot = boundedSnapshot(input, requestBounds);
+  if (snapshot === undefined) return { ok: false, issues: [{ path: "", message: oversized }] };
+  const parsed = accessRequestSchema.safeParse(snapshot);
+  if (parsed.success) return { ok: true, request: parsed.data };
+  return {
+    ok: false,
+    issues: parsed.error.issues.map((item) => ({
+      path: item.path.join("."),
+      message: item.message,
+    })),
+  };
+}
+
+/** True if a deny rule applies to the subject for this permission and resource. */
+export function denyRuleMatches(
+  rule: DenyRule,
+  subject: Subject,
+  permission: string,
+  properties: Readonly<Record<string, Scalar>> | undefined,
+): boolean {
+  const types = new Set<string>([subject.type]);
+  if (subject.act !== undefined) types.add("agent");
+  const held = new Set(subject.roles.map((assignment) => assignment.role));
+  return (
+    rule.permissions.includes(permission) &&
+    (rule.roles === undefined || rule.roles.some((role) => held.has(role))) &&
+    (rule.subjectTypes === undefined || rule.subjectTypes.some((type) => types.has(type))) &&
+    scopeTouches(rule.scope, properties)
+  );
+}
+
+function digestOfRequest(policy: CompiledPolicy, request: AccessRequest): string {
+  const actors: unknown[] = [];
   for (let actor = request.subject.act; actor !== undefined; actor = actor.act) {
-    actors.push({ id: actor.id, grantId: actor.grant?.id ?? null });
+    const grant = actor.grant;
+    actors.push({
+      id: actor.id,
+      grant:
+        grant === undefined
+          ? null
+          : {
+              id: grant.id,
+              principalId: grant.principalId,
+              agentId: grant.agentId,
+              entries: grant.entries,
+              notBefore: grant.notBefore === undefined ? null : utc(grant.notBefore),
+              expiresAt: utc(grant.expiresAt),
+            },
+    });
   }
   return digest({
     schema: "permitkit.request/1",
@@ -110,14 +178,19 @@ export function requestDigest(policy: CompiledPolicy, request: AccessRequest): s
       id: request.resource.id ?? null,
       properties: request.resource.properties ?? {},
     },
-    requestedAt: new Date(Date.parse(request.context.now)).toISOString(),
+    requestedAt: utc(request.context.now),
   });
+}
+
+function utc(value: string): string {
+  return new Date(instant(value)).toISOString();
 }
 
 const oversized = "The input exceeds the size bounds (depth, nodes, array or string length).";
 
 function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefined): Decision {
-  if (!isCompiledPolicy(policy)) {
+  const internal: PolicyInternals | undefined = internalsOf(policy);
+  if (internal === undefined) {
     throw new PermitkitError("policy_unknown", "decide() needs a policy from compilePolicy().");
   }
   const policyRef = { version: policy.version, digest: policy.digest };
@@ -135,23 +208,12 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
     requestDigest: requestDigestValue,
   });
 
-  const snapshot = boundedSnapshot(input, requestBounds);
-  if (snapshot === undefined) {
-    trace?.push({ step: "validate", ok: false, issues: [{ path: "", message: oversized }] });
-    return deny("invalid_request", null);
-  }
-  const parsed = accessRequestSchema.safeParse(snapshot);
-  trace?.push({
-    step: "validate",
-    ok: parsed.success,
-    issues: parsed.success
-      ? []
-      : parsed.error.issues.map((item) => ({ path: item.path.join("."), message: item.message })),
-  });
-  if (!parsed.success) return deny("invalid_request", null);
-  const request = parsed.data;
-  const requestDigestValue = requestDigest(policy, request);
-  const now = Date.parse(request.context.now);
+  const parsed = parseRequest(input);
+  trace?.push({ step: "validate", ok: parsed.ok, issues: parsed.ok ? [] : parsed.issues });
+  if (!parsed.ok) return deny("invalid_request", null);
+  const request = parsed.request;
+  const requestDigestValue = digestOfRequest(policy, request);
+  const now = instant(request.context.now);
 
   const pinned = request.context.policyVersion ?? null;
   const versionOk = pinned === null || pinned === policy.version;
@@ -176,16 +238,9 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   }
 
   const properties = request.resource.properties;
-  const subjectTypes = new Set<string>([request.subject.type]);
-  if (actor !== undefined) subjectTypes.add("agent");
   const heldRoles = new Set(request.subject.roles.map((assignment) => assignment.role));
-  for (const rule of policy.denies) {
-    const matched =
-      rule.permissions.includes(permission) &&
-      (rule.roles === undefined || rule.roles.some((role) => heldRoles.has(role))) &&
-      (rule.subjectTypes === undefined ||
-        rule.subjectTypes.some((type) => subjectTypes.has(type))) &&
-      scopeTouches(rule.scope, properties);
+  for (const rule of internal.denies) {
+    const matched = denyRuleMatches(rule, request.subject, permission, properties);
     trace?.push({ step: "deny_rule", id: rule.id, matched });
     if (matched) return deny("denied_by_rule", requestDigestValue, { kind: "deny", id: rule.id });
   }
@@ -193,7 +248,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   let matchedGrant: MatchedRule | null = null;
   let closestFailure: "scope_mismatch" | "limit_exceeded" | null = null;
   search: for (const assignment of request.subject.roles) {
-    const role = policy.roles.get(assignment.role);
+    const role = internal.roles.get(assignment.role);
     trace?.push({ step: "role", role: assignment.role, known: role !== undefined });
     if (role === undefined) continue;
     for (const grant of role.grants) {
@@ -262,8 +317,8 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
     if (!covered) return deny("agent_grant_insufficient", requestDigestValue);
   }
 
-  const approvalRule = policy.approvalRules.get(permission);
-  if (policy.separationOfDuties.exclusiveRequestAndApproveRoles && approvalRule !== undefined) {
+  const approvalRule = internal.approvalRules.get(permission);
+  if (internal.separationOfDuties.exclusiveRequestAndApproveRoles && approvalRule !== undefined) {
     const conflicting = (approvalRule.approverRoles ?? []).filter((role) => heldRoles.has(role));
     trace?.push({
       step: "separation_of_duties",
@@ -306,14 +361,18 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   };
 }
 
+/** Every time check is written so that an unreadable time counts as a failed check. */
 function agentGrantValidity(actor: Actor, principal: Subject, now: number): ReasonCode | null {
   const grant = actor.grant;
   if (grant === undefined) return "agent_grant_missing";
   if (grant.principalId !== principal.id) return "agent_grant_principal_mismatch";
-  if (grant.revokedAt !== undefined && Date.parse(grant.revokedAt) <= now)
+  if (grant.agentId !== actor.id) return "agent_grant_actor_mismatch";
+  if (grant.revokedAt !== undefined && !(instant(grant.revokedAt) > now)) {
     return "agent_grant_revoked";
-  if (grant.notBefore !== undefined && Date.parse(grant.notBefore) > now)
+  }
+  if (grant.notBefore !== undefined && !(instant(grant.notBefore) <= now)) {
     return "agent_grant_not_yet_valid";
-  if (Date.parse(grant.expiresAt) <= now) return "agent_grant_expired";
+  }
+  if (!(instant(grant.expiresAt) > now)) return "agent_grant_expired";
   return null;
 }

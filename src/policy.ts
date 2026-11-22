@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { boundedSnapshot, policyBounds } from "./bounds.js";
 import { compareText, digest } from "./canonical.js";
-import type { Catalog } from "./catalog.js";
+import { isCatalog, type Catalog } from "./catalog.js";
 import { PermitkitError, type PolicyIssue } from "./errors.js";
 
 const identifier = z
@@ -113,24 +113,36 @@ export interface CompiledRole {
 
 /**
  * A validated, frozen policy bound to its catalogue. Only compilePolicy creates one.
- * The digest covers the catalogue and the normalized policy document.
+ * The digest covers the catalogue and the normalized policy document. The lookup tables that
+ * decide() uses are module-private, so code that holds the policy cannot change them.
  */
 export interface CompiledPolicy {
   readonly version: string;
   readonly digest: string;
   readonly catalog: Catalog;
+  /** The normalized, deeply frozen policy document. */
   readonly document: PolicyDocument;
+}
+
+/** Lookup tables built from the frozen document. Not exported from the package. */
+export interface PolicyInternals {
   readonly roles: ReadonlyMap<string, CompiledRole>;
   readonly denies: readonly DenyRule[];
   readonly approvalRules: ReadonlyMap<string, ApprovalRule>;
   readonly separationOfDuties: PolicyDocument["separationOfDuties"];
 }
 
-const compiled = new WeakSet<object>();
+const internals = new WeakMap<object, PolicyInternals>();
+
+/** The lookup tables of a compiled policy, or undefined for any other value. */
+export function internalsOf(value: unknown): PolicyInternals | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  return internals.get(value);
+}
 
 /** True only for objects that compilePolicy returned in this process. */
 export function isCompiledPolicy(value: unknown): value is CompiledPolicy {
-  return typeof value === "object" && value !== null && compiled.has(value);
+  return internalsOf(value) !== undefined;
 }
 
 /**
@@ -138,6 +150,12 @@ export function isCompiledPolicy(value: unknown): value is CompiledPolicy {
  * compiled policy. Throws PermitkitError with code `policy_invalid` and a list of issues.
  */
 export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy {
+  if (!isCatalog(catalog)) {
+    throw new PermitkitError(
+      "catalog_invalid",
+      "compilePolicy() needs a catalogue from defineCatalog().",
+    );
+  }
   const snapshot = boundedSnapshot(input, policyBounds);
   if (snapshot === undefined) {
     throw new PermitkitError("policy_invalid", "The policy document is too large.", [
@@ -166,7 +184,7 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
   const roles = new Map<string, CompiledRole>();
   for (const name of Object.keys(document.roles).toSorted(compareText)) {
     const role = document.roles[name];
-    if (role !== undefined) roles.set(name, { name, grants: role.grants });
+    if (role !== undefined) roles.set(name, Object.freeze({ name, grants: role.grants }));
   }
   const approvalRules = new Map<string, ApprovalRule>();
   for (const rule of document.approvalRules) {
@@ -179,12 +197,13 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
     digest: digest({ catalog: catalog.digest, policy: document }),
     catalog,
     document,
+  });
+  internals.set(policy, {
     roles,
     denies: document.denies,
     approvalRules,
     separationOfDuties: document.separationOfDuties,
   });
-  compiled.add(policy);
   return policy;
 }
 

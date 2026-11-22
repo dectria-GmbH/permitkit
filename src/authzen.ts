@@ -1,3 +1,4 @@
+import { boundedSnapshot, requestBounds } from "./bounds.js";
 import { decide, type ApprovalRequirement, type MatchedRule, type Outcome } from "./decide.js";
 import type { CompiledPolicy } from "./policy.js";
 import type { ReasonCode } from "./reasons.js";
@@ -31,7 +32,12 @@ export interface AuthZenResponse {
   };
 }
 
-export function evaluate(policy: CompiledPolicy, request: AuthZenRequest): AuthZenResponse {
+export function evaluate(policy: CompiledPolicy, input: AuthZenRequest): AuthZenResponse {
+  // Read the caller's object once, through the size guard, then map the plain copy.
+  const copy = boundedSnapshot(input, requestBounds);
+  const request = (
+    typeof copy === "object" && copy !== null ? copy : {}
+  ) as Partial<AuthZenRequest>;
   const subjectProperties = request.subject?.properties ?? {};
   const context = request.context ?? {};
   const native = {

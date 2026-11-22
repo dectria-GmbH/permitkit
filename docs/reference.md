@@ -19,6 +19,7 @@ an unknown decision reason as a deny. The exported objects `reasonCodes`, `reaso
 | `denied_by_rule`                 | `deny`              | A deny rule matches. Deny rules win over grants.                           |
 | `agent_grant_missing`            | `deny`              | An agent acts without a grant.                                             |
 | `agent_grant_principal_mismatch` | `deny`              | The agent grant belongs to another principal.                              |
+| `agent_grant_actor_mismatch`     | `deny`              | The agent grant was issued to another agent id.                            |
 | `agent_grant_not_yet_valid`      | `deny`              | The agent grant starts after the request time.                             |
 | `agent_grant_expired`            | `deny`              | The agent grant expired at or before the request time.                     |
 | `agent_grant_revoked`            | `deny`              | The agent grant was revoked at or before the request time.                 |
@@ -48,13 +49,14 @@ The first failing check gives the reason.
 | `approval_invalid`         | The approval does not match the approval schema.                      |
 | `approver_not_human`       | Only a human principal can approve.                                   |
 | `approver_is_delegated`    | An approval given through an agent does not count.                    |
-| `requester_cannot_approve` | The principal who requested the action cannot approve it.             |
+| `requester_cannot_approve` | The requesting principal, or an agent in its chain, cannot approve.   |
 | `duplicate_approver`       | This approver was already counted.                                    |
 | `digest_mismatch`          | The approval names another request digest.                            |
 | `approved_before_request`  | The approval time is before the request time.                         |
 | `approved_after_expiry`    | The approval time is after the approval window closed.                |
 | `approved_in_future`       | The approval time is after the evaluation time.                       |
 | `approver_role_missing`    | The approver holds none of the approver roles for this resource.      |
+| `approver_denied_by_rule`  | A deny rule for the permission matches the approver.                  |
 | `approver_not_permitted`   | The approver does not hold the permission (rules without roles).      |
 | `sod_role_conflict`        | The approver also holds a requesting role (if configured).            |
 | `sod_prior_request`        | The approver requested an action of this type before (if configured). |
@@ -66,13 +68,15 @@ The first failing check gives the reason.
 ## Errors
 
 permitkit throws only for programming and configuration errors. Decisions never throw for bad
-requests; they deny.
+requests, including throwing getters and revoked proxies; they deny. `catalog_invalid` is also
+thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
 
 | Code              | Thrown by                                | Meaning                                              |
 | ----------------- | ---------------------------------------- | ---------------------------------------------------- |
 | `catalog_invalid` | `defineCatalog`                          | The catalogue definition is not valid. See `issues`. |
 | `policy_invalid`  | `compilePolicy`                          | The policy document is not valid. See `issues`.      |
 | `policy_unknown`  | `decide`, `explain`, `evaluateApprovals` | The policy did not come from `compilePolicy`.        |
+| `request_invalid` | `requestDigest`                          | The request does not match the schema.               |
 | `not_canonical`   | `canonicalJson`, `digest`                | The value has no exact JSON form.                    |
 
 Each `PermitkitError` has `code`, `hint` and, for validation errors, `issues` with `path`,

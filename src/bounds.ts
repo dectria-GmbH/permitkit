@@ -32,14 +32,19 @@ export const policyBounds: InputBounds = Object.freeze({
 const tooLarge = Symbol("tooLarge");
 
 /**
- * A plain copy of the value, or `undefined` if the value exceeds the bounds. Arrays and objects
+ * A plain copy of the value, or `undefined` if the value exceeds the bounds or cannot be read. Arrays and objects
  * become plain arrays and objects with own enumerable string keys. Other values stay as they are,
  * so the schema still rejects functions, symbols and similar values.
  */
 export function boundedSnapshot(value: unknown, bounds: InputBounds): unknown {
   const state = { nodes: 0 };
-  const copy = clone(value, 0, bounds, state);
-  return copy === tooLarge ? undefined : copy;
+  try {
+    const copy = clone(value, 0, bounds, state);
+    return copy === tooLarge ? undefined : copy;
+  } catch {
+    // A throwing getter or a revoked proxy: treat the input as unusable.
+    return undefined;
+  }
 }
 
 function clone(

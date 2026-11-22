@@ -1,4 +1,4 @@
-export { defineCatalog } from "./catalog.js";
+export { defineCatalog, isCatalog } from "./catalog.js";
 export type { Catalog, CatalogDefinition, ResourceDefinition, ResourceEntry } from "./catalog.js";
 
 export { compilePolicy, isCompiledPolicy, policySchema } from "./policy.js";
@@ -25,13 +25,14 @@ export type {
   Subject,
 } from "./request.js";
 
-export { decide, explain, permissionOf, requestDigest } from "./decide.js";
+export { decide, explain, parseRequest, permissionOf, requestDigest } from "./decide.js";
 export type {
   ApprovalRequirement,
   Decision,
   Explanation,
   MatchedRule,
   Outcome,
+  ParsedRequest,
   TraceStep,
 } from "./decide.js";
 

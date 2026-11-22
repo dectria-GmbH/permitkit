@@ -131,6 +131,7 @@ const agentGrantArb = fc.record({
     "2026-02-01T00:00:00.000Z",
   ),
   samePrincipal: fc.boolean(),
+  sameAgent: fc.boolean(),
 });
 
 describe("properties", () => {
@@ -164,6 +165,7 @@ describe("properties", () => {
               grant: {
                 id: "g",
                 principalId: grant.samePrincipal ? request.subject.id : "someone-else",
+                agentId: grant.sameAgent ? "agent-1" : "agent-2",
                 entries: grant.entries,
                 expiresAt: grant.expiresAt,
               },

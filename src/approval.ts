@@ -1,15 +1,16 @@
 import { z } from "zod";
 
 import { boundedSnapshot, requestBounds } from "./bounds.js";
-import { decide, permissionOf, requestDigest, type Decision } from "./decide.js";
+import { decide, denyRuleMatches, permissionOf, requestDigest, type Decision } from "./decide.js";
 import { scopeCovers } from "./engine/conditions.js";
 import { PermitkitError } from "./errors.js";
-import { isCompiledPolicy, type CompiledPolicy } from "./policy.js";
+import { internalsOf, type CompiledPolicy } from "./policy.js";
 import type { ApprovalReasonCode, ApprovalRejectionCode } from "./reasons.js";
 import { accessRequestSchema, subjectSchema } from "./request.js";
+import { instant, timestampSchema } from "./time.js";
 
 const hexDigest = z.string().regex(/^[0-9a-f]{64}$/, "Use a lowercase hex SHA-256 digest.");
-const timestamp = z.string().datetime({ offset: true });
+const timestamp = timestampSchema;
 
 /**
  * Evidence that a specific person approved a specific request, for example a WebAuthn
@@ -116,7 +117,8 @@ export async function evaluateApprovals(
   input: unknown,
   options: ApprovalOptions = {},
 ): Promise<ApprovalDecision> {
-  if (!isCompiledPolicy(policy)) {
+  const internal = internalsOf(policy);
+  if (internal === undefined) {
     throw new PermitkitError(
       "policy_unknown",
       "evaluateApprovals() needs a policy from compilePolicy().",
@@ -146,9 +148,10 @@ export async function evaluateApprovals(
   const parsed = approvalInputSchema.safeParse(snapshot);
   if (!parsed.success) return result("deny", "invalid_input");
   const { request, now: nowText, priorRequests } = parsed.data;
-  const now = Date.parse(nowText);
-  const requestedAt = Date.parse(request.context.now);
-  if (now < requestedAt) return result("deny", "invalid_input");
+  const now = instant(nowText);
+  const requestedAt = instant(request.context.now);
+  // Written so that an unreadable time fails the check.
+  if (!(now >= requestedAt)) return result("deny", "invalid_input");
 
   const digestValue = requestDigest(policy, request);
   const requesterDecision = decide(policy, {
@@ -160,22 +163,27 @@ export async function evaluateApprovals(
   if (requesterDecision.outcome === "allow") return result("allow", "approval_not_required", base);
 
   const permission = permissionOf(request);
-  const rule = policy.approvalRules.get(permission);
+  const rule = internal.approvalRules.get(permission);
   if (rule === undefined) return result("deny", "invalid_input", base);
   const ruleBase = { ...base, ruleId: rule.id, required: rule.approvers };
   const windowEnd = requestedAt + rule.expiresInSeconds * 1000;
-  if (now > windowEnd) return result("deny", "approval_window_expired", ruleBase);
+  if (!(now <= windowEnd)) return result("deny", "approval_window_expired", ruleBase);
 
-  const sod = policy.separationOfDuties;
+  const sod = internal.separationOfDuties;
   if (sod.requesterNeverApprovesSameType && priorRequests === undefined) {
     return result("deny", "sod_history_missing", ruleBase);
   }
   const requestingRoles = new Set(
-    [...policy.roles.values()]
+    [...internal.roles.values()]
       .filter((role) => role.grants.some((grant) => grant.permissions.includes(permission)))
       .map((role) => role.name),
   );
   const properties = request.resource.properties;
+  // The requester is the principal and every agent in its actor chain.
+  const requesterIds = new Set<string>([request.subject.id]);
+  for (let actor = request.subject.act; actor !== undefined; actor = actor.act) {
+    requesterIds.add(actor.id);
+  }
   const verifiers = new Map((options.verifiers ?? []).map((verifier) => [verifier.type, verifier]));
 
   const counted: string[] = [];
@@ -199,7 +207,7 @@ export async function evaluateApprovals(
       reject("approver_is_delegated");
       continue;
     }
-    if (approver.id === request.subject.id) {
+    if (requesterIds.has(approver.id)) {
       reject("requester_cannot_approve");
       continue;
     }
@@ -211,17 +219,24 @@ export async function evaluateApprovals(
       reject("digest_mismatch");
       continue;
     }
-    const approvedAt = Date.parse(approval.approvedAt);
-    if (approvedAt < requestedAt) {
+    const approvedAt = instant(approval.approvedAt);
+    if (!(approvedAt >= requestedAt)) {
       reject("approved_before_request");
       continue;
     }
-    if (approvedAt > windowEnd) {
+    if (!(approvedAt <= windowEnd)) {
       reject("approved_after_expiry");
       continue;
     }
-    if (approvedAt > now) {
+    if (!(approvedAt <= now)) {
       reject("approved_in_future");
+      continue;
+    }
+    const denyRule = internal.denies.find((candidate) =>
+      denyRuleMatches(candidate, approver, permission, properties),
+    );
+    if (denyRule !== undefined) {
+      reject("approver_denied_by_rule", denyRule.id);
       continue;
     }
     if (rule.approverRoles !== undefined) {

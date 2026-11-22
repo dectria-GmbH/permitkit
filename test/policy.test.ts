@@ -121,7 +121,9 @@ describe("compiled policy", () => {
     const input = editablePolicyInput();
     const compiled = compilePolicy(catalog, input);
     input.roles["support"]!.grants[0]!.permissions.push("ticket:delete");
-    expect(compiled.roles.get("support")?.grants[0]?.permissions).not.toContain("ticket:delete");
+    expect(compiled.document.roles["support"]?.grants[0]?.permissions).not.toContain(
+      "ticket:delete",
+    );
     expect(Object.isFrozen(compiled.document.roles["support"]?.grants[0]?.permissions)).toBe(true);
     expect(() => {
       compiled.document.roles["support"]!.grants[0]!.permissions.push("ticket:delete");
@@ -137,8 +139,8 @@ describe("compiled policy", () => {
 
   it("applies schema defaults", () => {
     const minimal = compilePolicy(catalog, { schema: 1, version: "v1", roles: {} });
-    expect(minimal.denies).toEqual([]);
-    expect(minimal.separationOfDuties).toEqual({
+    expect(minimal.document.denies).toEqual([]);
+    expect(minimal.document.separationOfDuties).toEqual({
       requesterNeverApprovesSameType: false,
       exclusiveRequestAndApproveRoles: false,
     });

@@ -37,6 +37,13 @@ export interface Catalog {
   resourceOf(permission: string): ResourceEntry | undefined;
 }
 
+const catalogs = new WeakSet<object>();
+
+/** True only for objects that defineCatalog returned in this process. */
+export function isCatalog(value: unknown): value is Catalog {
+  return typeof value === "object" && value !== null && catalogs.has(value);
+}
+
 export function defineCatalog(definition: CatalogDefinition): Catalog {
   const issues: PolicyIssue[] = [];
   const resources = new Map<string, ResourceEntry>();
@@ -98,7 +105,7 @@ export function defineCatalog(definition: CatalogDefinition): Catalog {
     throw new PermitkitError("catalog_invalid", "The catalogue definition is not valid.", issues);
   }
 
-  return Object.freeze({
+  const catalog: Catalog = Object.freeze({
     permissions: Object.freeze([...permissions].toSorted(compareText)),
     resources: Object.freeze(
       [...resources.keys()].toSorted(compareText).map((type) => resources.get(type)!),
@@ -113,6 +120,8 @@ export function defineCatalog(definition: CatalogDefinition): Catalog {
       return resources.get(permission.slice(0, separator));
     },
   });
+  catalogs.add(catalog);
+  return catalog;
 }
 
 function issue(path: string, message: string): PolicyIssue {

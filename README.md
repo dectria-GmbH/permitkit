@@ -119,8 +119,8 @@ Matching rules:
 A subject is a `human` or `service` principal with role assignments. If an agent acts, the
 request carries the agent as `subject.act`, in the RFC 8693 `act` shape; nested `act` values are
 prior actors and are logged, not used for the decision. The current actor must hold a grant that
-the principal issued (`principalId`), that is inside its validity window, and that covers the
-permission, scope and limits of the request. Deny rules with `subjectTypes: ["agent"]` apply when
+the principal issued (`principalId`) to this agent (`agentId`), that is inside its validity
+window, and that covers the permission, scope and limits of the request. Deny rules with `subjectTypes: ["agent"]` apply when
 an agent acts.
 
 ### Dual approval
@@ -131,14 +131,15 @@ and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
 
 - the requester must still hold the permission at evaluation time;
 - each approver is a human principal acting directly, not through an agent;
-- the requester (the principal, also when an agent made the request) never counts;
+- the requester never counts: neither the principal nor any agent id in its actor chain;
 - each approver counts once;
-- each approval names the request digest, which covers principal, actors, action, resource,
-  request time and policy version, so an approval cannot move to another request or survive a
-  policy change;
+- each approval names the request digest, which covers principal, each actor with the content
+  of its grant, action, resource, request time and policy version, so an approval cannot move
+  to another request or survive a policy change;
 - approvals count only inside the window;
 - with `approverRoles`, the approver must hold one of those roles in a scope that covers the
   resource; without it, the approver must hold the permission itself;
+- a deny rule for the permission that matches the approver excludes the approval;
 - with `requireProof`, each approval needs a proof that a registered verifier accepts.
 
 `evaluateApprovals()` does not know whether a request already ran. Mark a request as executed
@@ -171,6 +172,7 @@ The operator switches these settings in the policy:
 
 - `requesterNeverApprovesSameType`: who requested an action of a type before may never approve an
   action of that type. Pass the history as `priorRequests`; without it, the result is a deny.
+  An empty list means "no earlier requests", so pass the full history for the approvers.
 - `exclusiveRequestAndApproveRoles`: nobody may hold both a role that grants the permission and an
   approver role for it. Requests and approvals from such subjects are refused.
 
@@ -182,7 +184,9 @@ reevaluate(policy, record); // "reproduced" | "diverged" | "policy_mismatch" | "
 ```
 
 `reevaluate()` refuses to run under a policy with another version or digest. Keep every policy
-version that produced decisions.
+version that produced decisions. It checks consistency, not integrity: the digests are not keyed,
+so whoever can write the log can write a consistent forged record. Sign or chain the audit log if
+you need tamper evidence.
 
 ### AuthZEN
 
@@ -191,6 +195,15 @@ version that produced decisions.
 `{ decision, context }`. AuthZEN defines no reason fields, so `context` uses permitkit's own
 names: `outcome`, `reason_codes`, `rule`, `approval`, `policy_version`, `policy_digest`,
 `request_digest`.
+
+### Input rules
+
+- Ids, role names and scope values are compared as exact strings. permitkit does not change case,
+  trim spaces or normalize Unicode. Normalize ids and scope values once, where they enter your
+  system, or a deny rule for `vip` does not match `VIP`.
+- Timestamps are ISO 8601 with seconds, at most three fraction digits and an offset
+  (`Z` or `+hh:mm` up to 23:59). Other forms are rejected, because engines read them differently.
+- Inputs pass a size guard before validation. Limits are in [docs/reference.md](docs/reference.md).
 
 ## Test kit
 

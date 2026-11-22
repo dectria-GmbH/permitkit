@@ -1,9 +1,10 @@
 import { z } from "zod";
 
 import { limitsSchema, scopeSchema } from "./policy.js";
+import { timestampSchema } from "./time.js";
 
 const id = z.string().min(1).max(256);
-const timestamp = z.string().datetime({ offset: true });
+const timestamp = timestampSchema;
 const scalar = z.union([z.string().max(4096), z.number().finite(), z.boolean(), z.null()]);
 
 /** Maximum nesting of `act`. RFC 8693 chains in practice are short. */
@@ -33,6 +34,8 @@ export const agentGrantSchema = z
   .object({
     id,
     principalId: id,
+    /** The agent this grant is for. Only an actor with this id can use it. */
+    agentId: id,
     entries: z.array(agentGrantEntrySchema).min(1),
     notBefore: timestamp.optional(),
     expiresAt: timestamp,
