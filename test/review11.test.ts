@@ -11,6 +11,7 @@ import {
   explain,
   reevaluate,
 } from "../src/index.js";
+import { detach } from "../src/bounds.js";
 import { accessRequest, human, role, viaAgent } from "../src/testing/index.js";
 import { policy } from "./fixtures.js";
 
@@ -45,6 +46,19 @@ describe("Object.prototype.return", () => {
     expect(outcome.error).toBeUndefined();
     expect(["reproduced", "not_replayable"]).toContain(outcome.status);
     expect(outcome.canonical).toBe(clean);
+  });
+});
+
+describe("detach under Object.prototype.return", () => {
+  it("copies without destructuring pairs", () => {
+    const outcome = withPollution(Object.prototype, "return", 1, () => {
+      try {
+        return JSON.stringify(detach({ b: 1, a: { c: [1] } }));
+      } catch (error) {
+        return `threw ${String(error)}`;
+      }
+    });
+    expect(outcome).toBe('{"b":1,"a":{"c":[1]}}');
   });
 });
 
