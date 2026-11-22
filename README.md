@@ -154,8 +154,9 @@ and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
 `evaluateApprovals()` checks the identity data you pass in; it cannot look it up. Before each
 call, rebuild from your identity store, not from what a client or an earlier step submitted:
 
-- `request.subject.roles` and the current agent grant, including `revokedAt`. Neither is part of
-  the request digest, so a stored request with stale roles still matches its approvals;
+- `request.subject.roles` and the current agent grant, including `revokedAt`. Role assignments
+  and `revokedAt` are not part of the request digest, so a stored request with stale roles or a
+  stale revocation still matches its approvals;
 - each `approver` subject (type and roles). An approval proof binds only the approver id and the
   request digest, so roles taken from the approval itself let approvers claim their own
   eligibility;
@@ -240,7 +241,8 @@ names: `outcome`, `reason_codes`, `rule`, `approval`, `policy_version`, `policy_
 permitkit treats every input as possibly hostile data: wrong types, objects that are not plain
 data (a `Map`, a `Date`, a class instance, non-enumerable or symbol keys), getters, proxies, array
 holes, huge values, and data-valued pollution of `Object.prototype` from a bug elsewhere in the process.
-Such input gives a deny, never an exception from a decision function. Code that runs in your
+Such input gives a deny, never an exception from a decision function. Proxies count as not plain
+data, also reactive ones from UI state libraries: pass a plain copy. Code that runs in your
 process with its own functions (a replaced `Array.prototype.map`, a function on
 `Object.prototype.then`) is not covered. permitkit hardens the paths it knows about, but such
 code can change the behaviour of any library in the process.

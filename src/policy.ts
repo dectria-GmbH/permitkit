@@ -26,11 +26,16 @@ export const restrictionScopeSchema = scopeSchema.refine(
 const limitSchema = z
   .object({ min: z.number().finite().optional(), max: z.number().finite().optional() })
   .strict()
-  .refine((limit) => limit.min !== undefined || limit.max !== undefined, "Give min, max or both.")
+  // Own keys only: Zod's output object has a prototype, and an inherited `max` must not count.
   .refine(
-    (limit) => limit.min === undefined || limit.max === undefined || limit.min <= limit.max,
-    "min must not be greater than max.",
-  );
+    (limit) => Object.hasOwn(limit, "min") || Object.hasOwn(limit, "max"),
+    "Give min, max or both.",
+  )
+  .refine((limit) => {
+    const min = Object.hasOwn(limit, "min") ? limit.min : undefined;
+    const max = Object.hasOwn(limit, "max") ? limit.max : undefined;
+    return min === undefined || max === undefined || min <= max;
+  }, "min must not be greater than max.");
 export const limitsSchema = z
   .record(identifier, limitSchema)
   .refine(

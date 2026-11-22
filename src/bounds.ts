@@ -1,3 +1,5 @@
+import { types } from "node:util";
+
 /**
  * Size guard that runs before schema validation. Zod 3 parses every item of an array even when
  * the array is longer than its `max()`, and keeps one issue per failing item, so a huge input
@@ -82,6 +84,9 @@ function clone(
   if (state.nodes > bounds.maxNodes || depth > bounds.maxDepth) return unusable;
   if (typeof value === "string") return value.length > bounds.maxStringLength ? unusable : value;
   if (typeof value !== "object" || value === null) return value;
+  // A proxy can describe itself as any plain object, for example one without keys, which as a
+  // scope would read as "everywhere". Proxies are unusable; pass plain data.
+  if (types.isProxy(value)) return unusable;
   // Only plain data is copied. A Map, a Date, a class instance or hidden keys (non-enumerable or
   // symbol) would lose data in the copy, and a lost scope reads as "everywhere". Such input is
   // unusable as a whole.
