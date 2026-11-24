@@ -87,3 +87,47 @@ describe("compilePolicy under a polluted prototype", () => {
     ]);
   });
 });
+
+describe("compilePolicy under accessor pollution", () => {
+  it("gives no raw error for a thrown PermitkitError with a throwing code getter", () => {
+    class ThrowingCode extends PermitkitError {
+      constructor() {
+        super("policy_invalid", "made by the caller");
+        Object.defineProperty(this, "code", {
+          get(): never {
+            throw new Error("raw error from the code getter");
+          },
+        });
+      }
+    }
+    const saved = Object.getOwnPropertyDescriptor(Set.prototype, "has");
+    let calls = 0;
+    // The test simulates accessor pollution of a built-in prototype elsewhere in the process.
+    // oxlint-disable-next-line no-extend-native
+    Object.defineProperty(Set.prototype, "has", {
+      get() {
+        calls += 1;
+        throw new ThrowingCode();
+      },
+      configurable: true,
+    });
+    let result: string;
+    try {
+      compilePolicy(catalog, validDocument);
+      result = "compiled";
+    } catch (error) {
+      if (PermitkitError.is(error)) {
+        const code = Object.getOwnPropertyDescriptor(error, "code");
+        result = code !== undefined && "value" in code ? String(code.value) : "spoof";
+      } else {
+        result = "raw";
+      }
+    } finally {
+      // Restores the original method.
+      // oxlint-disable-next-line no-extend-native
+      if (saved !== undefined) Object.defineProperty(Set.prototype, "has", saved);
+    }
+    expect(calls).toBeGreaterThan(0);
+    expect(result).toBe("policy_invalid");
+  });
+});

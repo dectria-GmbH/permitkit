@@ -88,7 +88,7 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
   try {
     return compileChecked(catalog, input);
   } catch (error) {
-    if (PermitkitError.is(error) && isCompileCode(error.code)) throw error;
+    if (PermitkitError.is(error) && isCompileCode(ownCode(error))) throw error;
     // Data-valued pollution of built-in prototypes can make internals throw, for example a
     // replaced Array.prototype.toSorted. The caller still gets a PermitkitError, never the raw
     // error, whose text could come from the polluted value.
@@ -103,10 +103,23 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
 }
 
 /**
+ * The code of a PermitkitError, read only from an own data property. A subclass can redefine
+ * `code` as a getter, and a polluted built-in can throw such an instance from inside
+ * compilePolicy; reading the getter would run caller code or let its raw error escape. The brand
+ * check in PermitkitError.is excludes a Proxy, so this read runs no trap.
+ */
+function ownCode(error: PermitkitError): unknown {
+  const descriptor = Reflect.getOwnPropertyDescriptor(error, "code");
+  return descriptor !== undefined && Object.hasOwn(descriptor, "value")
+    ? descriptor.value
+    : undefined;
+}
+
+/**
  * The error codes that compilePolicy itself throws. Any other error becomes policy_invalid.
  * Plain comparisons, no Set: a polluted Set.prototype.has would throw here.
  */
-function isCompileCode(code: ErrorCode): boolean {
+function isCompileCode(code: unknown): code is ErrorCode {
   return (
     code === "catalog_invalid" || code === "policy_invalid" || code === "policy_schema_unsupported"
   );
