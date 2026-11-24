@@ -134,8 +134,9 @@ normalized document. Only compiled policies are accepted by `decide()`. A reques
 denies with `policy_version_mismatch`. Pin the digest when the label alone is not enough.
 
 `compilePolicy()` throws a `PermitkitError` with a `code` and a list of `issues`. To catch it, use
-`PermitkitError.is(error)` instead of `instanceof`. It returns `true` only for errors that
-permitkit created, never throws, and runs no caller code, also when the thrown value is a Proxy.
+`PermitkitError.is(error)` instead of `instanceof`. It returns `true` for any `PermitkitError`
+instance, also one you created and one of a subclass, and `false` for an error from another copy
+of the package. It never throws and runs no caller code, also when the thrown value is a Proxy.
 See Errors in [docs/reference.md](docs/reference.md).
 
 Shapes:

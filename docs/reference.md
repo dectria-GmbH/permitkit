@@ -74,7 +74,10 @@ that would be valid.
 ## Errors
 
 permitkit throws only for programming and configuration errors. Decisions never throw for bad
-requests, including throwing getters and revoked proxies; they deny. `catalog_invalid` is also
+requests, including throwing getters and revoked proxies; they deny. `decide`, `explain` and
+`evaluate` throw only `policy_unknown`. Any other failure inside them, for example from a
+changed built-in prototype, gives a deny with reason `invalid_request`, `rule: null` and
+`requestDigest: null`. `catalog_invalid` is also
 thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
 `canonicalJson` and `digest` throw `not_canonical`, never a raw error: for objects whose prototype
 is not `Object.prototype`, `null` or `Array.prototype`, built-ins that the runtime's checks identify
@@ -109,10 +112,13 @@ Each `PermitkitError` has `code`, `hint` and, for validation errors, `issues` wi
 `message` and `hint`. The codes are stable. The wording of issue messages is not part of the API
 and can change in any release, so match on `code`, and on the reason code of a decision.
 
-`PermitkitError.is(value)` returns `true` if `value` is a `PermitkitError` that permitkit
-created, and `false` for any other value, also `null` and primitives. It never throws. It checks a
-private field, so it runs no caller code: no Proxy trap and no getter, and it does not read the
-prototype chain. An object made with `Object.create(PermitkitError.prototype)` is not one.
+`PermitkitError.is(value)` returns `true` for every instance that the `PermitkitError`
+constructor of this copy of permitkit built: the errors that permitkit throws, errors that you
+create with `new PermitkitError(...)`, and instances of subclasses. It returns `false` for an
+error from another copy of the package (a second install or another bundle), for an object made
+with `Object.create(PermitkitError.prototype)`, for object literals, `null` and primitives. It
+never throws. It checks a private field, so it runs no caller code: no Proxy trap and no getter,
+and it does not read the prototype chain.
 `instanceof` reads the prototype and runs the `getPrototypeOf` trap of a thrown Proxy, which can
 throw inside your `catch` block. Use `PermitkitError.is(error)` in a `catch` block that can see
 errors from code you do not control, and wherever a check must not throw:
@@ -125,6 +131,10 @@ try {
   log(error.code, error.issues);
 }
 ```
+
+The private field also makes the `PermitkitError` type nominal. An object literal with `code`,
+`hint` and `issues` no longer satisfies the type; create errors with `new PermitkitError(...)`.
+`name` stays a writable `string`, so a subclass can set its own name.
 
 ## Size bounds
 
