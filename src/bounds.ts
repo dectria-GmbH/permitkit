@@ -1,4 +1,4 @@
-import { isProxy, slotsAfterKeys, slotsBeforeKeys } from "./plain.js";
+import { hasInternalSlots, isProxy } from "./plain.js";
 
 /**
  * Size guard that runs before schema validation. Zod 3 parses every item of an array even when
@@ -186,15 +186,14 @@ function clone(
   if (prototype !== Object.prototype && prototype !== null) return unusable;
   // A Map or Date with a swapped prototype has no own keys and would copy as `{}`. The check
   // runs before any key is listed: a swapped typed array or boxed string can have millions.
-  if (slotsBeforeKeys(value)) return unusable;
+  // The portable path identifies fewer kinds (see plain.ts).
+  if (hasInternalSlots(value)) return unusable;
   const keys = Object.keys(value);
   if (keys.length > bounds.maxArrayLength) {
     state.tooLarge = true;
     return unusable;
   }
   const ownKeys = Reflect.ownKeys(value);
-  // The portable path runs its throwing checks only on objects without own keys (see plain.ts).
-  if (slotsAfterKeys(value, ownKeys.length > 0)) return unusable;
   if (ownKeys.length !== keys.length) return unusable;
   // A null prototype: a missing key reads as undefined even if Object.prototype was polluted.
   const result: Record<string, unknown> = Object.create(null);

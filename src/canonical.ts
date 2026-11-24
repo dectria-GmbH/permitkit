@@ -1,5 +1,5 @@
 import { PermitkitError } from "./errors.js";
-import { isProxy, slotsAfterKeys, slotsBeforeKeys } from "./plain.js";
+import { hasInternalSlots, isProxy } from "./plain.js";
 import { sha256Hex } from "./sha256.js";
 
 // Every built-in that a call reads is captured when the module loads. Caller code that replaces
@@ -36,7 +36,8 @@ const setDelete = Set.prototype.delete;
  * non-enumerable keys, getters and setters, array holes and named array properties. Nothing is
  * dropped silently, except a key set to `undefined`, which counts as absent as in JSON.
  * No caller code runs: only data properties are read. In a runtime without node:util a proxy
- * cannot be detected: it is read like a plain object, and its traps run.
+ * cannot be detected: it is read like a plain object, and its traps run. There, a built-in such as
+ * a Map or Date with a swapped prototype serializes as its own keys (see plain.ts).
  */
 export function canonicalJson(value: unknown): string {
   try {
@@ -133,16 +134,13 @@ function serializeObject(object: object, seen: Set<object>): string {
     if (prototype !== objectPrototype && prototype !== null) {
       return notCanonical("Only plain objects have a canonical JSON form.");
     }
-    // Before any key is listed: a swapped typed array or boxed string can have millions.
-    if (slotsBeforeKeys(object)) {
+    // Before any key is listed: a swapped typed array or boxed string can have millions. The
+    // portable path identifies fewer kinds (see plain.ts).
+    if (hasInternalSlots(object)) {
       return notCanonical("Built-in objects such as a Map or Date have no canonical JSON form.");
     }
     const keys = objectKeys(object);
     const ownKeys = ownKeysOf(object);
-    // The portable path runs its throwing checks only on objects without own keys (plain.ts).
-    if (slotsAfterKeys(object, ownKeys.length > 0)) {
-      return notCanonical("Built-in objects such as a Map or Date have no canonical JSON form.");
-    }
     // Symbol and non-enumerable keys would be dropped from the output.
     if (ownKeys.length !== keys.length) {
       return notCanonical("Symbol and non-enumerable keys have no JSON form.");

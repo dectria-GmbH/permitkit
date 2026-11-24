@@ -33,7 +33,7 @@ const cyclic: Record<string, unknown> = { a: 1 };
 cyclic["self"] = cyclic;
 /** Inputs that the code before this change also refuses with not_canonical. */
 const refused: Record<string, unknown> = {
-  swappedMap: Object.setPrototypeOf(new Map([["a", 1]]), Object.prototype),
+  swappedString: Object.setPrototypeOf(Object("ab"), Object.prototype),
   infinity: { a: Infinity },
   cyclic,
   symbolKey: { a: 1, [Symbol("s")]: 2 },
@@ -59,7 +59,7 @@ interface Observed {
   second: string;
   firstDigest: string;
   secondDigest: string;
-  swappedMap: string;
+  swappedString: string;
   infinity: string;
   cyclic: string;
   symbolKey: string;
@@ -83,7 +83,7 @@ function observe(): Observed {
     second: run(() => canonicalJson(second)),
     firstDigest: run(() => digest(first)),
     secondDigest: run(() => digest(second)),
-    swappedMap: codeOf(() => canonicalJson(refused["swappedMap"])),
+    swappedString: codeOf(() => canonicalJson(refused["swappedString"])),
     infinity: codeOf(() => canonicalJson(refused["infinity"])),
     cyclic: codeOf(() => canonicalJson(refused["cyclic"])),
     symbolKey: codeOf(() => canonicalJson(refused["symbolKey"])),
@@ -99,7 +99,7 @@ const expected: Observed = {
   second: secondJson,
   firstDigest: sha256(firstJson),
   secondDigest: sha256(secondJson),
-  swappedMap: "not_canonical",
+  swappedString: "not_canonical",
   infinity: "not_canonical",
   cyclic: "not_canonical",
   symbolKey: "not_canonical",

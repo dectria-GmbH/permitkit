@@ -18,10 +18,12 @@ const huge: [string, () => object][] = [
   ["boxed string", () => Object.setPrototypeOf(Object("x".repeat(size)), Object.prototype)],
 ];
 
+/** CPU time, not wall time: other test runs on the same machine must not fail a budget. */
 function timed(run: () => unknown): { result: unknown; ms: number } {
-  const start = performance.now();
+  const start = process.cpuUsage();
   const result = run();
-  return { result, ms: performance.now() - start };
+  const used = process.cpuUsage(start);
+  return { result, ms: (used.user + used.system) / 1000 };
 }
 
 function codeOf(run: () => unknown): unknown {
@@ -33,30 +35,39 @@ function codeOf(run: () => unknown): unknown {
   }
 }
 
-describe(`plain JSON objects with a length key (${expectedRuntime} path)`, () => {
-  // JSON can produce `length` only as an enumerable key. The early throwing checks on the
-  // portable path run for a non-enumerable one (a boxed string, an arguments object) only.
-  // With every own length, 19 x 1,000 such objects took 894 ms there.
-  const lengthBudgetMs = 100;
+/** A request from JSON text with 19 x 1,000 copies of `item` in its properties. */
+function jsonRequestWith(item: () => unknown): unknown {
+  const lead = human("u-lead", role("lead", everywhere));
+  const request = accessRequest(lead, "ticket:read", { properties: { queue: "a" } });
+  const blob = Array.from({ length: 19 }, () => Array.from({ length: 1000 }, item));
+  return JSON.parse(
+    JSON.stringify({
+      ...request,
+      resource: { ...request.resource, properties: { queue: "a", blob } },
+    }),
+  );
+}
 
-  it("go through decide() without the throwing checks", () => {
-    const lead = human("u-lead", role("lead", everywhere));
-    const request = accessRequest(lead, "ticket:read", { properties: { queue: "a" } });
-    const blob = Array.from({ length: 19 }, () =>
-      Array.from({ length: 1000 }, () => ({ length: 0 })),
-    );
-    const parsed: unknown = JSON.parse(
-      JSON.stringify({
-        ...request,
-        resource: { ...request.resource, properties: { queue: "a", blob } },
-      }),
-    );
-    decide(policy, parsed);
-    const { result, ms } = timed(() => decide(policy, parsed).reason);
-    expect({ result, fast: ms < lengthBudgetMs }).toEqual({
-      result: "invalid_request",
-      fast: true,
-    });
+describe(`many small plain JSON objects (${expectedRuntime} path)`, () => {
+  // Node takes about 15 ms of CPU for each case below. The portable path took 894 ms with
+  // {length: 0} (d6eba0a) and 1.8 s with {} (5b09c79), when it ran brand checks that throw for a
+  // plain object. JSON can produce `length` only as an enumerable key.
+  const cases: [string, () => unknown][] = [
+    ["{length: 0}", () => ({ length: 0 })],
+    ["{}", () => ({})],
+  ];
+
+  it("go through decide() at about the Node cost", () => {
+    for (const [label, item] of cases) {
+      const parsed = jsonRequestWith(item);
+      decide(policy, parsed);
+      const { result, ms } = timed(() => decide(policy, parsed).reason);
+      expect({ label, result, fast: ms < budgetMs }).toEqual({
+        label,
+        result: "invalid_request",
+        fast: true,
+      });
+    }
   });
 });
 

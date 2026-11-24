@@ -446,17 +446,35 @@ describe("range bounds", () => {
   });
 });
 
+function swappedScope(): unknown {
+  return Object.setPrototypeOf(
+    new Map([["properties", { queue: ["billing"] }]]),
+    Object.prototype,
+  ) as unknown;
+}
+
+function swappedProperties(): unknown {
+  return Object.setPrototypeOf(new Map([["queue", "vip"]]), Object.prototype) as unknown;
+}
+
 describe("built-in objects with a swapped prototype", () => {
-  it("refuses a Map with Object.prototype as a scope instead of copying it as {}", () => {
-    const swapped = Object.setPrototypeOf(
-      new Map([["properties", { queue: ["billing"] }]]),
-      Object.prototype,
-    ) as unknown;
-    expect(decide(policy, withAssignmentScope(swapped)).reason).toBe("invalid_request");
-    const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket:read");
-    const properties = Object.setPrototypeOf(new Map([["queue", "vip"]]), Object.prototype);
-    const withMap = { ...request, resource: { ...request.resource, properties } };
-    expect(decide(policy, withMap).reason).toBe("invalid_request");
+  const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket:read");
+  const withProperties = (properties: unknown) => ({
+    ...request,
+    resource: { ...request.resource, properties },
+  });
+
+  it.runIf(expectedRuntime === "node")("refuses a swapped Map as a scope or properties", () => {
+    expect(decide(policy, withAssignmentScope(swappedScope())).reason).toBe("invalid_request");
+    expect(decide(policy, withProperties(swappedProperties())).reason).toBe("invalid_request");
+  });
+
+  // Decided 2026-11-24: the portable path copies a swapped Map as `{}` (see src/plain.ts).
+  it.runIf(expectedRuntime === "portable")("decides for a swapped Map as for {}", () => {
+    expect(decide(policy, withAssignmentScope(swappedScope())).reason).toBe("invalid_request");
+    expect(decide(policy, withProperties(swappedProperties()))).toEqual(
+      decide(policy, withProperties({})),
+    );
   });
 });
 
@@ -622,10 +640,9 @@ describe("canonicalJson refuses non-plain data with a coded error", () => {
     ],
     ["array subclass", () => new (class List extends Array {})()],
     [
-      "Map with Object.prototype",
-      () => Object.setPrototypeOf(new Map([["a", 1]]), Object.prototype),
+      "boxed string with Object.prototype",
+      () => Object.setPrototypeOf(Object("ab"), Object.prototype),
     ],
-    ["Date with Object.prototype", () => Object.setPrototypeOf(new Date(0), Object.prototype)],
     [
       "very deep nesting",
       () => {
@@ -645,6 +662,30 @@ describe("canonicalJson refuses non-plain data with a coded error", () => {
   it.runIf(expectedRuntime === "portable")("serializes a proxy as its data elsewhere", () => {
     expect(canonicalJson(new Proxy({ a: 1 }, {}))).toBe('{"a":1}');
     expect(digest({ nested: new Proxy({ a: 1 }, {}) })).toBe(digest({ nested: { a: 1 } }));
+  });
+
+  // Decided 2026-11-24: the portable path has no check for these kinds (see src/plain.ts).
+  const swappedWithoutKeys: [string, () => unknown][] = [
+    [
+      "Map with Object.prototype",
+      () => Object.setPrototypeOf(new Map([["a", 1]]), Object.prototype),
+    ],
+    ["Date with Object.prototype", () => Object.setPrototypeOf(new Date(0), Object.prototype)],
+  ];
+
+  it.runIf(expectedRuntime === "node")("throws not_canonical for a swapped Map on Node", () => {
+    for (const [label, make] of swappedWithoutKeys) {
+      expect({ label, code: codeOf(() => canonicalJson(make())) }).toEqual({
+        label,
+        code: "not_canonical",
+      });
+    }
+  });
+
+  it.runIf(expectedRuntime === "portable")("serializes a swapped Map as {} elsewhere", () => {
+    for (const [label, make] of swappedWithoutKeys) {
+      expect({ label, json: canonicalJson(make()) }).toEqual({ label, json: "{}" });
+    }
   });
 
   it("throws not_canonical for every non-plain value, in canonicalJson and digest", () => {
