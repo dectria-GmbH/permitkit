@@ -11,8 +11,8 @@
  * - Portable (no usable `process`, for example Cloudflare workerd without `nodejs_compat`):
  *   ArrayBuffer.isView and Error.isError (where it exists) on every object, then brand checks
  *   through built-in getters and methods that throw for a wrong receiver and run no caller code.
- *   The throwing checks run only on objects without own keys or with an own `length`, because a
- *   throw costs microseconds and every plain object would throw in each check. A Map, Set, Date or other
+ *   The throwing checks run only on objects without own keys or with a non-enumerable own
+ *   `length` (a boxed string, an arguments object), because a throw costs microseconds and every plain object would throw in each check. A Map, Set, Date or other
  *   built-in of a throwing kind with a swapped prototype and own keys added by hand therefore
  *   copies as those own keys. JSON input cannot produce such an object. A proxy cannot be
  *   detected in JavaScript; it is read like a plain object.
@@ -176,10 +176,11 @@ const isError: unknown = getOwnPropertyDescriptor(Error, "isError")?.value;
 const brandCount = brandChecks.length;
 
 /**
- * Before the keys are listed: the two checks that never throw, on every object. An own `length`
- * marks the keyed built-ins whose keys are indices (a boxed string, an `arguments` object); for
- * those the throwing checks run too, so that a boxed string with millions of characters is
- * refused before its keys are listed. A plain object with a `length` key only pays the checks.
+ * Before the keys are listed: the two checks that never throw, on every object. A non-enumerable
+ * own `length` marks the keyed built-ins whose keys are indices (a boxed string, an `arguments`
+ * object); for those the throwing checks run too, so that a boxed string with millions of
+ * characters is refused before its keys are listed. JSON input has only enumerable keys, so a
+ * plain object with a `length` key does not pay the checks.
  */
 function portableBeforeKeys(value: object): boolean {
   if (typeof isView === "function" && apply(isView, undefined, [value]) === true) return true;
@@ -191,7 +192,9 @@ function portableBeforeKeys(value: object): boolean {
     // A revoked proxy. The caller fails on its next read of the value and refuses it.
     return false;
   }
-  return length !== undefined && throwingBrandChecks(value);
+  // Only a non-enumerable length, as on a boxed string or an arguments object. JSON input cannot
+  // produce one, so plain data with a `length` key does not pay the throwing checks.
+  return length !== undefined && length.enumerable === false && throwingBrandChecks(value);
 }
 
 /**

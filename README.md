@@ -337,16 +337,18 @@ two ways when it loads:
   own keys (`stack`, `message`), and an error without own keys copies as `{}`.
   The checks for typed arrays, `DataView`s and errors never fail with an exception, so they run
   on every object. The other checks fail with an exception for every plain object, which costs
-  time, so they run only on objects without own keys or with an own `length` (a boxed string, an
-  `arguments` object). So a `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `ArrayBuffer` or boxed
-  number, boolean, symbol or bigint with a swapped prototype and own keys added by hand copies
-  as those own keys instead of being refused. JSON input cannot produce such an object. The copy
+  time, so they run only on objects without own keys or with a non-enumerable own `length` (a
+  boxed string, an `arguments` object; JSON cannot produce such a key). So a `Map`, `Set`,
+  `WeakMap`, `WeakSet`, `Date`, `ArrayBuffer`, `SharedArrayBuffer` or boxed number, boolean,
+  symbol or bigint with a swapped prototype and own keys added by hand copies as those own keys
+  instead of being refused. JSON input cannot produce such an object. The copy
   holds only the object's own data, so the result is the same as for a plain object with those
   keys. The Node path still refuses it. Typed arrays, `DataView`s, boxed strings and errors
   (where `Error.isError` exists) are refused also with own keys. An `arguments` object of a
   sloppy-mode function with `length`, `callee` and `Symbol.iterator` deleted copies as its index
   data, for example `{"0": 1}`; Node refuses it. A `Promise`, generator or iterator has no check
-  without side effects: with a swapped prototype it copies as `{}`, like the gap above.
+  without side effects: with a swapped prototype it copies as `{}`, like the gap above, and with
+  own keys added by hand it copies as those keys.
   A JavaScript program cannot tell a proxy from its target, so a proxy is not refused. The size
   guard copies it like any object: own data properties only, and the proxy's traps run. Each
   copy reads it once, and validation and the decision use that copy, so the proxy cannot show
@@ -356,6 +358,11 @@ two ways when it loads:
   whole input. A proxy can show a small input to those early checks and a larger one to the
   copy. The copy still enforces the approval input bounds and the decision uses it, so this
   costs only work up to those bounds, never access.
+
+The test suite checks the portable path in two ways: a text scan of `src` and `dist` for plain
+uses of Node globals and modules, and a run of the built package in a V8 context without
+`process`, `Buffer` or `require`. Neither is a proof. A text scan cannot see a name that code
+builds at run time, and the run covers only the code paths it calls.
 
 The SHA-256 for digests is part of permitkit, so digests are the same in every runtime. It and
 `canonicalJson` capture every built-in they use when they load, so a built-in that caller code

@@ -83,8 +83,10 @@ getters and setters (which are not run), array holes and named array properties,
 proxies, and input too deep to walk. On Node, every proxy is refused too. In a runtime without
 `process` (for example Cloudflare Workers without `nodejs_compat`), a proxy cannot be detected:
 it serializes as the data it reports, and its traps run. There, a `Promise`, generator or
-iterator with its prototype set to `Object.prototype` serializes as `{}`; Node refuses them. A
-`Map`, `Set`, `Date` or other built-in of a kind that only an exception identifies, with a swapped
+iterator with its prototype set to `Object.prototype` serializes as `{}`, or as its own keys if
+caller code added any; Node refuses them. A
+`Map`, `Set`, `Date`, `SharedArrayBuffer` or other built-in of a kind that only an exception
+identifies, with a swapped
 prototype and own keys added by hand, serializes as those own keys there; Node refuses it. JSON
 input cannot produce such an object. Typed arrays, `DataView`s, boxed strings and errors (where
 `Error.isError` exists) are refused also with own keys. An

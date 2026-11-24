@@ -9,8 +9,8 @@ import {
 
 const root = new URL("../", import.meta.url);
 
-describe("portability", () => {
-  // From the review: each of these hid a Node dependency from the first scanner.
+describe("portability tripwire (a text scan, not a proof)", () => {
+  // From the reviews: each of these hid a plain Node use from an earlier scanner.
   const bypasses: Record<string, string> = {
     templateSubstitution: "const a = `${process.env.HOME}`;",
     templateBuffer: "const b = `x${Buffer.from('a').length}`;",
@@ -29,9 +29,11 @@ describe("portability", () => {
     importAttribute: "import fs from 'node:fs' with { type: 'json' };",
     exportFromMultiline: "export {\n  a,\n} from 'node:fs';",
     bareCrypto: "import { createHash } from 'crypto';",
+    importSplitOverLines: "const m = await import\n(name);",
+    importSplitWithComment: "const m = await import /* a */\n  /* b */ (name);",
   };
 
-  it("finds every known bypass", () => {
+  it("flags each plain-use bypass from the reviews", () => {
     const missed = Object.entries(bypasses)
       .filter(([, source]) => portabilityFindings(source).length === 0)
       .map(([name]) => name);
@@ -41,13 +43,19 @@ describe("portability", () => {
     expect(portabilityFindings("const a = processes + ArrayBuffer + requireProof;")).toEqual([]);
   });
 
-  it("finds in src only the listed occurrences", () => {
+  it("does not see names built at run time, which is why it is only a tripwire", () => {
+    // Both passed the scan and the vm smoke step in review. They stay out of src by review.
+    expect(portabilityFindings('Reflect.get(globalThis, "pro" + "cess");')).toEqual([]);
+    expect(portabilityFindings('host.getBuiltinModule("no" + "de:os");')).toEqual([]);
+  });
+
+  it("flags in src only the listed plain uses", () => {
     const files = filesUnder(root, "src/", ".ts");
     expect(files.length).toBeGreaterThan(10);
     expect(compareWithAllowlist(root, files, allowlist.src)).toEqual([]);
   });
 
-  it("fails on a new occurrence and on a listed one that is gone", () => {
+  it("fails on a new plain use and on a listed one that is gone", () => {
     const files = filesUnder(root, "src/", ".ts");
     const shorter = { ...allowlist.src, "src/catalog.ts": [] };
     expect(compareWithAllowlist(root, files, shorter)).toEqual([

@@ -1,8 +1,13 @@
-// Finds what could stop a file from loading in a runtime without Node built-ins (Cloudflare
-// workerd without nodejs_compat). The scan is raw: comments and strings are not stripped, so no
-// syntax (a template literal, a regex with a quote, an import with a comment) can hide a match.
-// Every match must be on the allowlist in portable-allowlist.json, with its exact line, as often
-// as listed. A new match fails, and so does a listed one that is gone.
+// A tripwire for plain uses of Node built-ins in code meant for a runtime without them (Cloudflare
+// workerd without nodejs_compat). It is not a proof. The scan is raw: comments and strings are not
+// stripped, so a template literal, a regex with a quote or an import with a comment cannot hide a
+// plain use. It works on the whole file text, so a match may span lines. Every match must be on
+// the allowlist in portable-allowlist.json, with its exact line, as often as listed. A new match
+// fails, and so does a listed one that is gone.
+// A text scan cannot see names that code computes at run time, for example
+// Reflect.get(globalThis, "pro" + "cess") or getBuiltinModule("no" + "de:os"). The vm smoke step
+// (scripts/smoke-vm.mjs) runs the built package without Node globals, but it covers only the
+// code paths it calls. Review computed names in src by hand.
 // Used by test/portability.test.ts on src and by scripts/smoke-vm.mjs on dist.
 import { readdirSync, readFileSync } from "node:fs";
 import { builtinModules } from "node:module";
@@ -13,9 +18,10 @@ const builtins = new Set(builtinModules);
 const byCodeUnit = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 
 /**
- * Node globals and module syntax as raw text. `\u` catches escapes in identifiers
- * (`\u0070rocess` is `process`), `Function(` and `eval` catch code built from strings, `import(` catches every
- * dynamic import, `node:` catches every Node specifier, also one built by concatenation.
+ * Plain uses of Node globals and module syntax, as raw text. `\u` catches escapes in identifiers
+ * (`process` is `process`). `Function(` and `eval` mark code built from strings, and
+ * `import(` marks every dynamic import, also one split over lines; each needs a review. `node:`
+ * catches a Node specifier written as one literal.
  */
 const rawPattern =
   /(?<![\w$])(?:process|Buffer|require|global|__dirname|__filename|eval)(?![\w$])|node:|\\u|(?<![\w$])Function\s*\(|(?<![\w$.])import\s*(?:\/\*[\s\S]*?\*\/\s*)*\(/g;
@@ -23,18 +29,23 @@ const rawPattern =
 /** Static import and export specifiers, so that a bare `fs` or `crypto` is caught too. */
 const specifierPattern = /\b(?:from|import)\s*["']([^"']+)["']/g;
 
-/** Each match as "<match> | <trimmed line>". */
+/** The trimmed text of the line where `index` lies. */
+function lineAt(source, index) {
+  const start = source.lastIndexOf("\n", index - 1) + 1;
+  const end = source.indexOf("\n", index);
+  return source.slice(start, end === -1 ? source.length : end).trim();
+}
+
+/** Each match as "<match> | <trimmed line where it starts>", over the whole file text. */
 export function portabilityFindings(source) {
   const findings = [];
-  const lines = source.split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
-    for (const match of line.matchAll(rawPattern)) findings.push(`${match[0]} | ${trimmed}`);
-    for (const match of line.matchAll(specifierPattern)) {
-      const specifier = match[1];
-      if (!specifier.startsWith("node:") && builtins.has(specifier.split("/")[0])) {
-        findings.push(`${specifier} | ${trimmed}`);
-      }
+  for (const match of source.matchAll(rawPattern)) {
+    findings.push(`${match[0].replaceAll(/\s+/g, " ")} | ${lineAt(source, match.index)}`);
+  }
+  for (const match of source.matchAll(specifierPattern)) {
+    const specifier = match[1];
+    if (!specifier.startsWith("node:") && builtins.has(specifier.split("/")[0])) {
+      findings.push(`${specifier} | ${lineAt(source, match.index)}`);
     }
   }
   return findings;

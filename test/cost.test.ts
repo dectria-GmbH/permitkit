@@ -33,6 +33,33 @@ function codeOf(run: () => unknown): unknown {
   }
 }
 
+describe(`plain JSON objects with a length key (${expectedRuntime} path)`, () => {
+  // JSON can produce `length` only as an enumerable key. The early throwing checks on the
+  // portable path run for a non-enumerable one (a boxed string, an arguments object) only.
+  // With every own length, 19 x 1,000 such objects took 894 ms there.
+  const lengthBudgetMs = 100;
+
+  it("go through decide() without the throwing checks", () => {
+    const lead = human("u-lead", role("lead", everywhere));
+    const request = accessRequest(lead, "ticket:read", { properties: { queue: "a" } });
+    const blob = Array.from({ length: 19 }, () =>
+      Array.from({ length: 1000 }, () => ({ length: 0 })),
+    );
+    const parsed: unknown = JSON.parse(
+      JSON.stringify({
+        ...request,
+        resource: { ...request.resource, properties: { queue: "a", blob } },
+      }),
+    );
+    decide(policy, parsed);
+    const { result, ms } = timed(() => decide(policy, parsed).reason);
+    expect({ result, fast: ms < lengthBudgetMs }).toEqual({
+      result: "invalid_request",
+      fast: true,
+    });
+  });
+});
+
 describe(`huge built-ins with a swapped prototype (${expectedRuntime} path)`, () => {
   const lead = human("u-lead", role("lead", everywhere));
 
