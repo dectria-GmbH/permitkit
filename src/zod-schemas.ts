@@ -8,8 +8,9 @@
 
 import { z } from "zod";
 
-// Private copies, so that the reference shares no code with the hand-written validators. The
-// constants and the timestamp checks below are copied verbatim from src/time.ts as of e258cf0.
+// Private copies, so that the reference shares no code with the hand-written validators.
+// policySchemaVersion is from src/policy.ts and maxActorDepth from src/request.ts; the other
+// constants and the timestamp checks are from src/time.ts. All are verbatim as of e258cf0.
 
 /** The policy document format that this release reads. */
 const policySchemaVersion = 2;
