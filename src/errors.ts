@@ -31,7 +31,7 @@ const errorHints: Record<ErrorCode, string> = {
 export class PermitkitError extends Error {
   // A class field, so the name is defined on the instance. An assignment would throw if
   // Error.prototype.name were made read-only or a getter.
-  override readonly name = "PermitkitError";
+  override name: string = "PermitkitError";
   readonly code: ErrorCode;
   readonly hint: string;
   readonly issues: readonly PolicyIssue[];
