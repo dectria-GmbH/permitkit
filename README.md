@@ -331,9 +331,14 @@ two ways when it loads:
 - **Other runtimes** (no `process`, for example Cloudflare Workers without `nodejs_compat`).
   permitkit calls built-in methods that fail for an object without the slot and run no caller
   code. A `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `RegExp`, buffer, typed array, `DataView`,
-  boxed primitive and error are refused, also with a swapped prototype. A `Promise`, generator
-  or iterator has no such check without side effects: with a swapped prototype it copies as
-  `{}`, like the gap above. A JavaScript program cannot tell a proxy from its target, so a proxy
+  boxed primitive and error are refused, also with a swapped prototype. These checks run only on
+  objects without own keys, because each failed check costs time on every plain object. So a
+  built-in with a swapped prototype and own keys copies as those own keys instead of being
+  refused: for example a `Map` or `Date` with keys added by hand, or a typed array, whose elements
+  are own keys. JSON input cannot produce such an object. The copy holds only the object's own
+  data, so the result is the same as for a plain object with those keys. The Node path still
+  refuses it. A `Promise`, generator or iterator has no check without side effects: with a
+  swapped prototype it copies as `{}`, like the gap above. A JavaScript program cannot tell a proxy from its target, so a proxy
   is not refused. The size guard reads it once, as it reads any object: own data properties
   only. The proxy's traps run during that read, and validation and the decision use the copy,
   so the proxy cannot show one value to the guard and another to the decision. A proxy that

@@ -97,12 +97,14 @@ function serializeObject(object: object, seen: Set<object>): string {
     if (prototype !== Object.prototype && prototype !== null) {
       return notCanonical("Only plain objects have a canonical JSON form.");
     }
-    if (hasInternalSlots(object)) {
+    const ownKeys = Reflect.ownKeys(object);
+    // The portable path checks only objects without own keys (see plain.ts).
+    if (hasInternalSlots(object, ownKeys.length > 0)) {
       return notCanonical("Built-in objects such as a Map or Date have no canonical JSON form.");
     }
     const keys = Object.keys(object);
     // Symbol and non-enumerable keys would be dropped from the output.
-    if (Reflect.ownKeys(object).length !== keys.length) {
+    if (ownKeys.length !== keys.length) {
       return notCanonical("Symbol and non-enumerable keys have no JSON form.");
     }
     // Keys plus index access, no [key, value] destructuring (see detach in bounds.ts).

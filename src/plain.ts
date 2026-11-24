@@ -10,7 +10,10 @@
  *   resolve it.
  * - Portable (no usable `process`, for example Cloudflare workerd without `nodejs_compat`):
  *   brand checks through built-in getters and methods that throw for a wrong receiver and run no
- *   caller code. A proxy cannot be detected in JavaScript; it is read like a plain object.
+ *   caller code. They run only on objects without own keys, because a throw costs microseconds
+ *   and every plain object would throw in each check. A built-in with a swapped prototype and own
+ *   keys added by hand therefore copies as those own keys. JSON input cannot produce such an
+ *   object. A proxy cannot be detected in JavaScript; it is read like a plain object.
  *
  * Every built-in function is captured at module load, so later pollution or replacement of a
  * prototype method cannot change a check.
@@ -18,12 +21,21 @@
 
 type Check = (value: object) => boolean;
 
+/**
+ * True for a built-in object that keeps its data in internal slots. `hasOwnKeys` says whether
+ * `Reflect.ownKeys(value)` is not empty; the caller computes it once and passes it on.
+ */
+type SlotCheck = (value: object, hasOwnKeys: boolean) => boolean;
+
 export interface PlainDataChecks {
   readonly runtime: "node" | "portable";
   /** True for a proxy. Always false on the portable path, where a proxy cannot be detected. */
   readonly isProxy: Check;
-  /** True for a built-in object that keeps its data in internal slots. */
-  readonly hasInternalSlots: Check;
+  /**
+   * True for a built-in object that keeps its data in internal slots. The Node path ignores
+   * `hasOwnKeys`. The portable path answers false for an object with own keys.
+   */
+  readonly hasInternalSlots: SlotCheck;
 }
 
 const apply = Reflect.apply;
@@ -84,7 +96,7 @@ export function nodeChecks(host: unknown): PlainDataChecks | undefined {
     return freeze({
       runtime: "node",
       isProxy: (value: object) => call(proxyCheck, value),
-      hasInternalSlots: (value: object) => {
+      hasInternalSlots: (value: object, _hasOwnKeys: boolean) => {
         for (let index = 0; index < count; index += 1) {
           if (call(slotChecks[index], value)) return true;
         }
@@ -144,7 +156,9 @@ const isView: unknown = getOwnPropertyDescriptor(ArrayBuffer, "isView")?.value;
 const isError: unknown = getOwnPropertyDescriptor(Error, "isError")?.value;
 const brandCount = brandChecks.length;
 
-function hasBrand(value: object): boolean {
+function hasBrand(value: object, hasOwnKeys: boolean): boolean {
+  // Decided 2026-11-24: brand checks only for objects without own keys. See the file comment.
+  if (hasOwnKeys) return false;
   if (typeof isView === "function" && apply(isView, undefined, [value]) === true) return true;
   if (typeof isError === "function" && apply(isError, undefined, [value]) === true) return true;
   for (let index = 0; index < brandCount; index += 1) {
@@ -187,8 +201,10 @@ export function isProxy(value: object): boolean {
 
 /**
  * True for built-in objects that keep their data in internal slots. On Node this is
- * `util.types`; on the portable path it covers fewer kinds (see portableChecks).
+ * `util.types`, and `hasOwnKeys` is not used. On the portable path it covers fewer kinds and
+ * answers false if `hasOwnKeys` is true (see portableChecks). Pass whether
+ * `Reflect.ownKeys(value)` is not empty.
  */
-export function hasInternalSlots(value: object): boolean {
-  return active.hasInternalSlots(value);
+export function hasInternalSlots(value: object, hasOwnKeys: boolean): boolean {
+  return active.hasInternalSlots(value, hasOwnKeys);
 }

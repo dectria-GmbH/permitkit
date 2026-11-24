@@ -3,7 +3,7 @@ import { types } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
-import { requestBounds, snapshotOf } from "../src/bounds.js";
+import { boundedSnapshot, requestBounds, snapshotOf } from "../src/bounds.js";
 import { canonicalJson } from "../src/index.js";
 import {
   hasInternalSlots,
@@ -76,6 +76,7 @@ const slotKinds: readonly (readonly [string, () => object])[] = [
   ["SharedArrayBuffer", () => new SharedArrayBuffer(8)],
   ["Uint8Array", () => new Uint8Array(4)],
   ["Float64Array", () => new Float64Array(2)],
+  ["Uint8Array, empty", () => new Uint8Array(0)],
   ["DataView", () => new DataView(new ArrayBuffer(4))],
   ["Number object", () => Object(1) as object],
   ["String object", () => Object("ab") as object],
@@ -92,6 +93,36 @@ const slotKinds: readonly (readonly [string, () => object])[] = [
   ["arguments, sloppy, indices only", sloppyArgumentsWithIndicesOnly],
 ];
 
+/**
+ * Built-ins with own keys added by hand. On the portable path the brand checks run only on
+ * objects without own keys, so these copy as their own keys there. Node refuses them.
+ */
+const keyedKinds: readonly (readonly [string, () => object])[] = [
+  ["Map with an own key", () => Object.assign(new Map([["a", 1]]), { kind: "all" })],
+  ["Date with an own key", () => Object.assign(new Date(0), { kind: "all" })],
+  ["Uint8Array with an own key", () => Object.assign(new Uint8Array(2), { kind: "all" })],
+];
+
+/** The kinds with their prototype set to Object.prototype and to null. */
+function withSwappedPrototypes(
+  kinds: readonly (readonly [string, () => object])[],
+): (readonly [string, () => object])[] {
+  return kinds.flatMap(([kind, make]): (readonly [string, () => object])[] => [
+    [`${kind}, Object.prototype`, () => Object.setPrototypeOf(make(), Object.prototype)],
+    [`${kind}, null prototype`, () => Object.setPrototypeOf(make(), null)],
+  ]);
+}
+
+/** The flag that the call sites in bounds.ts and canonical.ts pass to hasInternalSlots. */
+function hasOwnKeys(value: object): boolean {
+  try {
+    return Reflect.ownKeys(value).length > 0;
+  } catch {
+    // A revoked proxy. The call sites throw before they get here.
+    return false;
+  }
+}
+
 function revokedProxy(): object {
   const { proxy, revoke } = Proxy.revocable({ a: 1 }, {});
   revoke();
@@ -99,10 +130,8 @@ function revokedProxy(): object {
 }
 
 const corpus: readonly (readonly [string, () => object])[] = [
-  ...slotKinds.flatMap(([kind, make]): (readonly [string, () => object])[] => [
-    [`${kind}, Object.prototype`, () => Object.setPrototypeOf(make(), Object.prototype)],
-    [`${kind}, null prototype`, () => Object.setPrototypeOf(make(), null)],
-  ]),
+  ...withSwappedPrototypes(slotKinds),
+  ...withSwappedPrototypes(keyedKinds),
   // A module namespace has a null prototype that cannot be changed.
   ["module namespace", () => moduleNamespace as object],
   ["proxy of a plain object", () => new Proxy({ a: 1 }, {})],
@@ -140,15 +169,24 @@ describe("plain-data checks", () => {
     expect(nodePath?.runtime).toBe("node");
     const node = resultsOf(
       (value) => nodePath?.isProxy(value),
-      (value) => nodePath?.hasInternalSlots(value),
+      (value) => nodePath?.hasInternalSlots(value, hasOwnKeys(value)),
     );
     expect(node).toEqual(referenceResults());
+    // The Node path does not use the own-keys flag.
+    for (const flag of [true, false]) {
+      const fixed = resultsOf(
+        (value) => nodePath?.isProxy(value),
+        (value) => nodePath?.hasInternalSlots(value, flag),
+      );
+      expect({ flag, fixed }).toEqual({ flag, fixed: referenceResults() });
+    }
     // Every slot kind is caught today, with either prototype. This guards the corpus itself.
     expect(referenceResults().filter((item) => !item.proxy && !item.slots)).toEqual([]);
   });
 
   it.runIf(expectedRuntime === "node")("uses the Node path in the module-level checks", () => {
-    expect(resultsOf(isProxy, hasInternalSlots)).toEqual(referenceResults());
+    const active = resultsOf(isProxy, (value) => hasInternalSlots(value, hasOwnKeys(value)));
+    expect(active).toEqual(referenceResults());
   });
 
   it.runIf(expectedRuntime === "node")("refuses every item on the Node path", () => {
@@ -166,7 +204,8 @@ describe("plain-data checks", () => {
 
   /**
    * Which mechanism handles each item on the portable path:
-   * - "brand check": portableChecks.hasInternalSlots identifies the built-in.
+   * - "brand check": portableChecks.hasInternalSlots identifies the built-in. It runs only on
+   *   items without own keys.
    * - "own keys": the item has non-enumerable or symbol own keys, which the size guard and
    *   canonicalJson refuse.
    * - "throws when read": reading the item throws, which both refuse.
@@ -184,34 +223,36 @@ describe("plain-data checks", () => {
     "WeakSet, null prototype": "brand check",
     "Date, Object.prototype": "brand check",
     "Date, null prototype": "brand check",
-    "RegExp, Object.prototype": "brand check",
-    "RegExp, null prototype": "brand check",
+    "RegExp, Object.prototype": "own keys",
+    "RegExp, null prototype": "own keys",
     "Promise, Object.prototype": "copies as {}",
     "Promise, null prototype": "copies as {}",
     "ArrayBuffer, Object.prototype": "brand check",
     "ArrayBuffer, null prototype": "brand check",
     "SharedArrayBuffer, Object.prototype": "brand check",
     "SharedArrayBuffer, null prototype": "brand check",
-    "Uint8Array, Object.prototype": "brand check",
-    "Uint8Array, null prototype": "brand check",
-    "Float64Array, Object.prototype": "brand check",
-    "Float64Array, null prototype": "brand check",
+    "Uint8Array, Object.prototype": "copies its data",
+    "Uint8Array, null prototype": "copies its data",
+    "Float64Array, Object.prototype": "copies its data",
+    "Float64Array, null prototype": "copies its data",
+    "Uint8Array, empty, Object.prototype": "brand check",
+    "Uint8Array, empty, null prototype": "brand check",
     "DataView, Object.prototype": "brand check",
     "DataView, null prototype": "brand check",
     "Number object, Object.prototype": "brand check",
     "Number object, null prototype": "brand check",
-    "String object, Object.prototype": "brand check",
-    "String object, null prototype": "brand check",
+    "String object, Object.prototype": "own keys",
+    "String object, null prototype": "own keys",
     "Boolean object, Object.prototype": "brand check",
     "Boolean object, null prototype": "brand check",
     "Symbol object, Object.prototype": "brand check",
     "Symbol object, null prototype": "brand check",
     "BigInt object, Object.prototype": "brand check",
     "BigInt object, null prototype": "brand check",
-    "Error, Object.prototype": "brand check",
-    "Error, null prototype": "brand check",
-    "TypeError, Object.prototype": "brand check",
-    "TypeError, null prototype": "brand check",
+    "Error, Object.prototype": "own keys",
+    "Error, null prototype": "own keys",
+    "TypeError, Object.prototype": "own keys",
+    "TypeError, null prototype": "own keys",
     "Error without own keys, Object.prototype": "brand check",
     "Error without own keys, null prototype": "brand check",
     "generator object, Object.prototype": "copies as {}",
@@ -224,6 +265,12 @@ describe("plain-data checks", () => {
     "arguments, strict, null prototype": "own keys",
     "arguments, sloppy, indices only, Object.prototype": "copies its data",
     "arguments, sloppy, indices only, null prototype": "copies its data",
+    "Map with an own key, Object.prototype": "copies its data",
+    "Map with an own key, null prototype": "copies its data",
+    "Date with an own key, Object.prototype": "copies its data",
+    "Date with an own key, null prototype": "copies its data",
+    "Uint8Array with an own key, Object.prototype": "copies its data",
+    "Uint8Array with an own key, null prototype": "copies its data",
     "module namespace": "own keys",
     "proxy of a plain object": "copies its data",
     "proxy of an array": "copies its data",
@@ -233,7 +280,10 @@ describe("plain-data checks", () => {
 
   it("brand-checks exactly the listed kinds on the portable path", () => {
     const brand = corpus
-      .filter(([, make]) => portableChecks.hasInternalSlots(make()))
+      .filter(([, make]) => {
+        const value = make();
+        return portableChecks.hasInternalSlots(value, hasOwnKeys(value));
+      })
       .map(([label]) => label);
     const listed = Object.entries(portableMechanisms)
       .filter(([, mechanism]) => mechanism === "brand check")
@@ -251,12 +301,12 @@ describe("plain-data checks", () => {
 function mechanismOf(make: () => object): string {
   const snapshot = snapshotOf(make(), requestBounds);
   const code = codeOf(() => canonicalJson(make()));
-  if (portableChecks.hasInternalSlots(make())) {
+  const value = make();
+  if (portableChecks.hasInternalSlots(value, hasOwnKeys(value))) {
     return !snapshot.ok && code === "not_canonical" ? "brand check" : "brand check not enforced";
   }
   if (!snapshot.ok && code === "not_canonical") {
-    if (codeOf(() => Reflect.ownKeys(make())) !== "ok") return "throws when read";
-    const value = make();
+    if (codeOf(() => Reflect.ownKeys(value)) !== "ok") return "throws when read";
     return Reflect.ownKeys(value).length === Object.keys(value).length ? "unexplained" : "own keys";
   }
   if (snapshot.ok && code === "ok") {
@@ -273,6 +323,71 @@ function codeOf(run: () => unknown): unknown {
     return error instanceof Error && "code" in error ? error.code : "raw error";
   }
 }
+
+describe("built-ins with a swapped prototype and own keys", () => {
+  const items: [string, () => object, unknown][] = [
+    [
+      "Map",
+      () =>
+        Object.assign(Object.setPrototypeOf(new Map([["a", 1]]), Object.prototype), {
+          kind: "all",
+        }),
+      { kind: "all" },
+    ],
+    [
+      "Date",
+      () => Object.assign(Object.setPrototypeOf(new Date(0), null), { kind: "all" }),
+      { kind: "all" },
+    ],
+    [
+      "Uint8Array",
+      () =>
+        Object.assign(Object.setPrototypeOf(new Uint8Array(2), Object.prototype), { kind: "all" }),
+      { 0: 0, 1: 0, kind: "all" },
+    ],
+  ];
+
+  it("are identified by the Node checks and skipped by the portable checks", () => {
+    const nodePath = nodeChecks(process);
+    for (const [label, make] of items) {
+      const value = make();
+      expect({ label, node: nodePath?.hasInternalSlots(value, true) }).toEqual({
+        label,
+        node: true,
+      });
+      expect({ label, portable: portableChecks.hasInternalSlots(value, true) }).toEqual({
+        label,
+        portable: false,
+      });
+    }
+  });
+
+  it.runIf(expectedRuntime === "node")("are refused on the Node path", () => {
+    for (const [label, make] of items) {
+      expect({ label, copy: boundedSnapshot(make(), requestBounds) }).toEqual({
+        label,
+        copy: undefined,
+      });
+      expect({ label, code: codeOf(() => canonicalJson(make())) }).toEqual({
+        label,
+        code: "not_canonical",
+      });
+    }
+  });
+
+  it.runIf(expectedRuntime === "portable")("copy as their own keys on the portable path", () => {
+    for (const [label, make, ownData] of items) {
+      expect({ label, copy: { ...(boundedSnapshot(make(), requestBounds) as object) } }).toEqual({
+        label,
+        copy: ownData,
+      });
+      expect({ label, json: canonicalJson(make()) }).toEqual({
+        label,
+        json: canonicalJson(ownData),
+      });
+    }
+  });
+});
 
 describe("nodeChecks with an untrusted host", () => {
   const hosts: [string, () => unknown][] = [
@@ -339,7 +454,7 @@ describe("nodeChecks with an untrusted host", () => {
     util.types.isMap = () => false;
     util.types.isProxy = () => false;
     const swapped = Object.setPrototypeOf(new Map(), Object.prototype) as object;
-    expect(checks?.hasInternalSlots(swapped)).toBe(true);
+    expect(checks?.hasInternalSlots(swapped, false)).toBe(true);
     expect(checks?.isProxy(new Proxy({}, {}))).toBe(true);
   });
 });
@@ -352,9 +467,9 @@ describe("portable brand checks", () => {
       // oxlint-disable-next-line no-extend-native
       Object.defineProperty(Map.prototype, "size", { get: () => 0, configurable: true });
       const fake = Object.setPrototypeOf({}, Object.prototype) as object;
-      expect(portableChecks.hasInternalSlots(fake)).toBe(false);
+      expect(portableChecks.hasInternalSlots(fake, false)).toBe(false);
       const map = Object.setPrototypeOf(new Map(), Object.prototype) as object;
-      expect(portableChecks.hasInternalSlots(map)).toBe(true);
+      expect(portableChecks.hasInternalSlots(map, false)).toBe(true);
     } finally {
       // oxlint-disable-next-line no-extend-native
       Object.defineProperty(Map.prototype, "size", original);
@@ -384,12 +499,13 @@ describe("portable brand checks", () => {
         },
       },
     );
-    expect(portableChecks.hasInternalSlots(trap)).toBe(false);
+    expect(portableChecks.hasInternalSlots(trap, false)).toBe(false);
     expect(reads).toBe(0);
   });
 
   it("treat RegExp.prototype, which has no slot, like Node does", () => {
-    expect(portableChecks.hasInternalSlots(RegExp.prototype)).toBe(
+    // RegExp.prototype has own keys; the flag is false here to reach the brand checks.
+    expect(portableChecks.hasInternalSlots(RegExp.prototype, false)).toBe(
       referenceHasInternalSlots(RegExp.prototype),
     );
   });

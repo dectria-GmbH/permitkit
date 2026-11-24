@@ -83,7 +83,10 @@ getters and setters (which are not run), array holes and named array properties,
 proxies, and input too deep to walk. On Node, every proxy is refused too. In a runtime without
 `process` (for example Cloudflare Workers without `nodejs_compat`), a proxy cannot be detected:
 it serializes as the data it reports, and its traps run. There, a `Promise`, generator or
-iterator with its prototype set to `Object.prototype` serializes as `{}`; Node refuses them. An
+iterator with its prototype set to `Object.prototype` serializes as `{}`; Node refuses them. A
+built-in with a swapped prototype and own keys (a `Map` or `Date` with keys added by hand, or a
+typed array, whose elements are own keys) serializes as those own keys there; Node refuses it.
+JSON input cannot produce such an object. An
 object that keeps its data in `#private` fields or in slots that permitkit cannot identify (a
 `URL`, a `WeakRef`, an `Intl` object), with its prototype set to `Object.prototype`, serializes
 as `{}` in every runtime. The threat model in the README lists the checks per runtime. Pass plain
@@ -110,7 +113,9 @@ threat model in the README for the one gap) is
 unusable as a whole and gives a deny. Getters and setters count as not plain data; the guard reads
 data properties only, so no caller code runs during the copy. On Node, a proxy is also unusable. In
 a runtime without `process`, a proxy cannot be detected: the guard copies it like a plain object,
-its traps run during that one read, and validation runs on the copy.
+its traps run during that one read, and validation runs on the copy. There, a built-in with a
+swapped prototype and own keys also copies as those own keys; Node refuses it (see the README
+threat model).
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Audit records: 300,000 values, and the request inside meets the request
 bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.

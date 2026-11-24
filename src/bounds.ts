@@ -184,14 +184,17 @@ function clone(
     return items;
   }
   if (prototype !== Object.prototype && prototype !== null) return unusable;
-  // A Map or Date with a swapped prototype has no own keys and would copy as `{}`.
-  if (hasInternalSlots(value)) return unusable;
+  // Read once: for a proxy, which the portable path cannot detect, every read runs its trap.
+  const ownKeys = Reflect.ownKeys(value);
+  // A Map or Date with a swapped prototype has no own keys and would copy as `{}`. The portable
+  // path checks only objects without own keys (see plain.ts).
+  if (hasInternalSlots(value, ownKeys.length > 0)) return unusable;
   const keys = Object.keys(value);
   if (keys.length > bounds.maxArrayLength) {
     state.tooLarge = true;
     return unusable;
   }
-  if (Reflect.ownKeys(value).length !== keys.length) return unusable;
+  if (ownKeys.length !== keys.length) return unusable;
   // A null prototype: a missing key reads as undefined even if Object.prototype was polluted.
   const result: Record<string, unknown> = Object.create(null);
   for (const key of keys) {
