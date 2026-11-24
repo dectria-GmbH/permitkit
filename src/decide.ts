@@ -289,7 +289,11 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
 
   const properties = request.resource.properties;
   const heldRoles = new Set(request.subject.roles.map((assignment) => assignment.role));
-  for (const rule of internal.denies) {
+  // Index loops, no for-of: an early exit closes an iterator, and closing reads `return`
+  // through the prototype chain, which a polluted Object.prototype supplies.
+  for (let index = 0; index < internal.denies.length; index += 1) {
+    const rule = internal.denies[index];
+    if (rule === undefined) continue;
     const matched = denyRuleMatches(rule, request.subject, permission, properties);
     trace?.push({ step: "deny_rule", id: rule.id, matched });
     if (matched) return deny("denied_by_rule", requestDigestValue, { kind: "deny", id: rule.id });
@@ -297,12 +301,15 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
 
   let matchedGrant: MatchedRule | null = null;
   let closestFailure: "scope_mismatch" | "limit_exceeded" | null = null;
-  search: for (const assignment of request.subject.roles) {
+  search: for (let index = 0; index < request.subject.roles.length; index += 1) {
+    const assignment = request.subject.roles[index];
+    if (assignment === undefined) continue;
     const role = internal.roles.get(assignment.role);
     trace?.push({ step: "role", role: assignment.role, known: role !== undefined });
     if (role === undefined) continue;
-    for (const grant of role.grants) {
-      if (!grant.permissions.includes(permission)) continue;
+    for (let grantIndex = 0; grantIndex < role.grants.length; grantIndex += 1) {
+      const grant = role.grants[grantIndex];
+      if (grant === undefined || !grant.permissions.includes(permission)) continue;
       const assignmentScope = scopeCovers(assignment.scope, properties);
       if (!assignmentScope.ok) {
         trace?.push({

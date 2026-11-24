@@ -61,7 +61,11 @@ export function scopeCovers(scope: ScopeLike, properties: Properties): ScopeResu
   const listed = scope.properties;
   const names = Object.keys(listed);
   if (names.length === 0) return unknownScope;
-  for (const name of names) {
+  // Index loops, no for-of: an early return closes an iterator, and closing reads `return`
+  // through the prototype chain, which a polluted Object.prototype supplies.
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    if (name === undefined) return unknownScope;
     const allowed = listed[name] ?? [];
     const actual = ownValue(properties, name);
     if (typeof actual !== "string" || !allowed.includes(actual)) {
@@ -80,7 +84,10 @@ export function scopeCovers(scope: ScopeLike, properties: Properties): ScopeResu
 export function scopeTouches(scope: ScopeLike, properties: Properties): boolean {
   if (ownKind(scope) !== "match" || scope.kind !== "match") return true;
   const listed = scope.properties;
-  for (const name of Object.keys(listed)) {
+  const names = Object.keys(listed);
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    if (name === undefined) return true;
     const allowed = listed[name] ?? [];
     const actual = ownValue(properties, name);
     if (typeof actual === "string" && !allowed.includes(actual)) return false;
@@ -108,7 +115,9 @@ export function limitsHold(limits: LimitsLike, properties: Properties): LimitRes
   const listed = limits.properties;
   const names = Object.keys(listed);
   if (names.length === 0) return unknownLimits;
-  for (const name of names) {
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    if (name === undefined) return unknownLimits;
     const limit = listed[name];
     if (limit === undefined) return unknownLimits;
     const actual = ownValue(properties, name);
