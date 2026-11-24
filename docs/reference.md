@@ -106,7 +106,8 @@ the checks per runtime. Pass plain JSON data.
 | `not_canonical`             | `canonicalJson`, `digest`                                                                              | The value has no exact JSON form, or is not plain data.                    |
 
 Each `PermitkitError` has `code`, `hint` and, for validation errors, `issues` with `path`,
-`message` and `hint`.
+`message` and `hint`. The codes are stable. The wording of issue messages is not part of the API
+and can change in any release, so match on `code`, and on the reason code of a decision.
 
 ## Size bounds
 
@@ -128,6 +129,9 @@ that throws could identify, with a swapped prototype, also copies as its own key
 it has none; Node refuses it (see the README threat model). An error is identified there only
 where the runtime has `Error.isError`. A swapped typed array or boxed string is refused before
 its keys are read, on both paths, so its size costs nothing.
+The guard stays in front of every validator. Requests and policy documents use hand-written
+validators. Approval inputs and decision records still use Zod 3, which validates every item of
+an oversized array and keeps one issue per failing item (GHSA-mrhx-c7xc-m3w5, no fix in Zod 3).
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Audit records: 300,000 values, and the request inside meets the request
 bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.
@@ -156,6 +160,4 @@ normalized time is again a valid timestamp. A request time (`context.now`, and `
 The request digest has the format tag `permitkit.request/2`. It covers the agent grant entries,
 including their `scope` and `limits` in the schema 2 shape, so digests from the earlier format do
 not match. Audit records have the format tag `permitkit.decision/2`; a record with another tag is
-`not_replayable`. The
-guard exists because Zod 3 validates every item of an oversized array and keeps one issue per
-failing item (GHSA-mrhx-c7xc-m3w5, no fix in Zod 3).
+`not_replayable`.
