@@ -14,8 +14,9 @@
   run time, so never compute a global or module name in `src`.
 - Requests and policy documents use hand-written validators (`src/validate.ts`,
   `src/request.ts`, `src/policy-document.ts`). Zod 3 is still a runtime dependency, but only
-  approval inputs and decision records use it, through `src/zod-schemas.ts`, until their own
-  validators replace it. Do not import Zod anywhere else, and do not add a runtime dependency.
+  approval inputs (through `src/zod-schemas.ts`) and decision records (`src/audit.ts`) use it,
+  until their own validators replace it. Do not import Zod anywhere else, and do not add a
+  runtime dependency.
   `pnpm bundle-check` fails if `decide` pulls in Zod.
 - Absence never widens access. Never add a schema default or an optional field whose absence
   means "everywhere", "no limit" or "no deny rules"; the wide case is an explicit `kind` value. See

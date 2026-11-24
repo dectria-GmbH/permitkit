@@ -293,7 +293,8 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   // through the prototype chain, which a polluted Object.prototype supplies.
   for (let index = 0; index < internal.denies.length; index += 1) {
     const rule = internal.denies[index];
-    if (rule === undefined) continue;
+    // An unreadable deny rule denies, as a broken deny scope does; it is never skipped.
+    if (rule === undefined) return deny("denied_by_rule", requestDigestValue);
     const matched = denyRuleMatches(rule, request.subject, permission, properties);
     trace?.push({ step: "deny_rule", id: rule.id, matched });
     if (matched) return deny("denied_by_rule", requestDigestValue, { kind: "deny", id: rule.id });
