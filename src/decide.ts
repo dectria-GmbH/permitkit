@@ -448,7 +448,8 @@ function guarded(policy: CompiledPolicy, evaluate: () => Decision): Decision {
   try {
     return evaluate();
   } catch (error) {
-    if (error instanceof PermitkitError) throw error;
+    // A brand check, not instanceof: a thrown Proxy could run a getPrototypeOf trap.
+    if (PermitkitError.is(error)) throw error;
     return {
       outcome: "deny",
       allowed: false,

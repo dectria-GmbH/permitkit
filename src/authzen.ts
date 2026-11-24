@@ -75,7 +75,7 @@ export function evaluate(policy: CompiledPolicy, input: AuthZenRequest): AuthZen
     return evaluateUnsafe(policy, input);
   } catch (error) {
     // Programming errors (a policy from elsewhere) still throw. Anything else denies.
-    if (error instanceof PermitkitError) throw error;
+    if (PermitkitError.is(error)) throw error;
     return responseOf(decide(policy, null));
   }
 }

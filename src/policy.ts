@@ -87,7 +87,7 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
   try {
     return compileChecked(catalog, input);
   } catch (error) {
-    if (error instanceof PermitkitError && compileCodes.has(error.code)) throw error;
+    if (PermitkitError.is(error) && isCompileCode(error.code)) throw error;
     // Data-valued pollution of built-in prototypes can make internals throw, for example a
     // replaced Array.prototype.toSorted. The caller still gets a PermitkitError, never the raw
     // error, whose text could come from the polluted value.
@@ -101,12 +101,15 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
   }
 }
 
-/** The error codes that compilePolicy itself throws. Any other error becomes policy_invalid. */
-const compileCodes: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
-  "catalog_invalid",
-  "policy_invalid",
-  "policy_schema_unsupported",
-]);
+/**
+ * The error codes that compilePolicy itself throws. Any other error becomes policy_invalid.
+ * Plain comparisons, no Set: a polluted Set.prototype.has would throw here.
+ */
+function isCompileCode(code: ErrorCode): boolean {
+  return (
+    code === "catalog_invalid" || code === "policy_invalid" || code === "policy_schema_unsupported"
+  );
+}
 
 function compileChecked(catalog: Catalog, input: unknown): CompiledPolicy {
   if (!isCatalog(catalog)) {

@@ -1,6 +1,8 @@
-// compilePolicy under data-valued pollution of Array.prototype methods. It may refuse the
-// document, but only with PermitkitError policy_invalid and a fixed text, never a raw error.
-// The pollution also breaks the test framework, so each case captures first and asserts after.
+// compilePolicy under data-valued pollution of built-in methods. It may refuse the document,
+// but only with a PermitkitError, never a raw error. Its own codes (catalog_invalid,
+// policy_invalid, policy_schema_unsupported) pass through unchanged; any other failure is
+// policy_invalid with a fixed text. The pollution also breaks the test framework, so each case
+// captures first and asserts after clean-up.
 import { describe, expect, it } from "vitest";
 
 import { compilePolicy, defineCatalog, PermitkitError } from "../src/index.js";
@@ -30,9 +32,9 @@ const validDocument = {
   },
 };
 
-function outcomeOf(document: unknown): string {
+function outcomeOf(run: () => unknown): string {
   try {
-    compilePolicy(catalog, document);
+    run();
     return "compiled";
   } catch (error) {
     if (!(error instanceof PermitkitError)) return `raw ${String(error)}`;
@@ -41,37 +43,47 @@ function outcomeOf(document: unknown): string {
   }
 }
 
-/** Each method: the outcome for an invalid and for a valid document. */
-const cases: [method: string, valid: string][] = [
-  // No array method on the compile path any more, so the valid document compiles.
-  ["map", "compiled"],
-  ["forEach", "compiled"],
-  // Still used by compilePolicy and the canonical digest; the error becomes policy_invalid.
-  ["toSorted", "policy_invalid"],
-  ["join", "policy_invalid"],
+/** Outcomes for: an invalid document, a valid one, a fake catalogue, and schema 3. */
+function outcomes(): string[] {
+  return [
+    outcomeOf(() => compilePolicy(catalog, invalidDocument)),
+    outcomeOf(() => compilePolicy(catalog, validDocument)),
+    outcomeOf(() => compilePolicy({} as never, validDocument)),
+    outcomeOf(() => compilePolicy(catalog, { ...validDocument, schema: 3 })),
+  ];
+}
+
+const cases: [target: string, method: string, valid: string][] = [
+  // No such call on the compile path any more, so the valid document compiles.
+  ["Array", "map", "compiled"],
+  ["Array", "forEach", "compiled"],
+  // Still used by compilePolicy and the canonical digest; the failure becomes policy_invalid.
+  ["Array", "toSorted", "policy_invalid"],
+  ["Array", "join", "policy_invalid"],
+  // Used by checkReferences. The check of the error code itself must not use it.
+  ["Set", "has", "policy_invalid"],
 ];
 
-describe("compilePolicy under a polluted Array.prototype", () => {
-  it.each(cases)("Array.prototype.%s = 1 gives no raw error", (method, valid) => {
-    const saved: unknown = Reflect.get(Array.prototype, method);
+const prototypes: Record<string, object> = { Array: Array.prototype, Set: Set.prototype };
+
+describe("compilePolicy under a polluted prototype", () => {
+  it.each(cases)("%s.prototype.%s = 1 gives no raw error", (target, method, valid) => {
+    const prototype = prototypes[target] as object;
+    const saved = Object.getOwnPropertyDescriptor(prototype, method);
     // The test simulates a prototype-pollution bug elsewhere in the process.
     // oxlint-disable-next-line no-extend-native
-    Object.defineProperty(Array.prototype, method, {
-      value: 1,
-      configurable: true,
-      writable: true,
-    });
-    let outcomes: string[];
+    Object.defineProperty(prototype, method, { value: 1, configurable: true, writable: true });
+    let result: string[];
     try {
-      outcomes = [outcomeOf(invalidDocument), outcomeOf(validDocument)];
+      result = outcomes();
     } finally {
-      // oxlint-disable-next-line no-extend-native
-      Object.defineProperty(Array.prototype, method, {
-        value: saved,
-        configurable: true,
-        writable: true,
-      });
+      if (saved !== undefined) Object.defineProperty(prototype, method, saved);
     }
-    expect(outcomes).toEqual(["policy_invalid", valid]);
+    expect(result).toEqual([
+      "policy_invalid",
+      valid,
+      "catalog_invalid",
+      "policy_schema_unsupported",
+    ]);
   });
 });
