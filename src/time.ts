@@ -6,7 +6,7 @@ import { fail, type Check, type Issue, type Path } from "./validate.js";
  * without a colon, more fraction digits) parse differently or not at all across engines, so
  * they are rejected.
  */
-export const isoInstant =
+const isoInstant =
   /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{1,3})?(Z|[+-]([01]\d|2[0-3]):[0-5]\d)$/;
 
 /** The longest approval window that a policy can set, in seconds (31 days). */
@@ -58,7 +58,7 @@ function checkTimestamp(value: unknown, path: Path, issues: Issue[], latest: num
   return value;
 }
 
-export function inRange(value: string, latest: number): boolean {
+function inRange(value: string, latest: number): boolean {
   const time = Date.parse(value);
   // Written so that an unreadable time fails the check.
   return time >= earliestInstant && time <= latest;
@@ -68,7 +68,7 @@ export function inRange(value: string, latest: number): boolean {
  * Rejects days that the month does not have. V8 reads 2026-02-30 as 2 March, other engines
  * return NaN, so the day is checked here instead of trusting Date.parse.
  */
-export function isCalendarInstant(value: string): boolean {
+function isCalendarInstant(value: string): boolean {
   const year = Number(value.slice(0, 4));
   const month = Number(value.slice(5, 7));
   const day = Number(value.slice(8, 10));
