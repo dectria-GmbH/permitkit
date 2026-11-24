@@ -314,11 +314,69 @@ proxies, array
 holes, huge values, and data-valued pollution of `Object.prototype` from a bug elsewhere in the
 process. Data-valued pollution of `Array.prototype` also gives a deny, but is tested less.
 Such input gives a deny, never an exception from a decision function. One gap remains: a
-built-in or class instance that keeps its data in `#private` fields or engine slots that Node
-cannot identify (for example a `URL`, a `WeakRef` or an `Intl` object), with its prototype set to
-`Object.prototype` by caller code, copies as `{}`. A `{}` is refused as a scope, limit or
-condition and narrows as `resource.properties`, so it cannot widen access. Proxies count as not plain
-data, also reactive ones from UI state libraries: pass a plain copy. Code that runs in your
+built-in or class instance that keeps its data in `#private` fields or engine slots that
+permitkit cannot identify (for example a `URL`, a `WeakRef`, an `Intl` object or an array
+iterator), with its prototype set to `Object.prototype` by caller code, copies as `{}`. Outside
+Node, this also holds for a `Map`, `Date` and other built-ins (see the list below). A `{}` is
+refused as a scope, limit or condition and narrows as `resource.properties`, so it cannot widen
+access. Pass plain copies, also of reactive objects from UI state libraries.
+
+How permitkit identifies objects that are not plain data depends on the runtime. It picks one of
+two ways when it loads:
+
+- **Node** (and other runtimes whose `process.getBuiltinModule("node:util")` returns a working
+  `util.types`, such as Deno). permitkit uses `util.types`. A proxy is refused. Every built-in
+  that `util.types` identifies by its engine slots is refused, also with a swapped prototype: a
+  `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `RegExp`, `Promise`, buffer, typed array,
+  `DataView`, boxed primitive, error, generator, `Map` or `Set` iterator, module namespace and
+  `arguments` object.
+- **Other runtimes** (no `process`, for example Cloudflare Workers without `nodejs_compat`).
+  permitkit uses only checks that never fail with an exception and run no caller code. A typed
+  array and a `DataView` are refused by `ArrayBuffer.isView`, also with a swapped prototype and
+  with own keys. An error is refused by `Error.isError` where the runtime has it. Elsewhere an
+  error is refused only by its hidden own keys (`stack`, `message`), and an error without own
+  keys copies as `{}`. An object other than an array with a non-enumerable own `length` is
+  refused before its keys are listed: a boxed string, an `arguments` object, or such an object
+  made by hand. So a boxed string with millions of characters costs nothing. JSON input cannot
+  produce a non-enumerable key.
+  Decided 2026-11-24: there are no checks that fail with an exception for an object of the wrong
+  kind. Such a check costs microseconds for every plain object that it runs on: `decide()` with
+  19,000 `{}` took about 1.8 s of CPU with them, against 13 ms on Node (measured with
+  `process.cpuUsage` in Node 24 with the portable path forced, not in workerd). So a built-in whose
+  kind only such a check identifies copies as its own keys when caller code sets its prototype to
+  `Object.prototype` or `null`, and as `{}` if it has none: a `Map`, `Set`, `WeakMap`, `WeakSet`,
+  `Date`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, boxed number, boolean, symbol or bigint,
+  generator, and `Map` or `Set` iterator. Node refuses all of them. JSON input cannot produce such
+  an object. The copy holds only the object's own data, so the decision is the same as for a plain
+  object with those keys; a `{}` cannot widen access (see above). A `RegExp` is still refused, by
+  its non-enumerable own `lastIndex`. An `arguments` object of a sloppy-mode function with `length`,
+  `callee` and `Symbol.iterator` deleted copies as its index data, for example `{"0": 1}`; Node
+  refuses it.
+  A JavaScript program cannot tell a proxy from its target, so a proxy is not refused. The size
+  guard copies it like any object: own data properties only, and the proxy's traps run. Each
+  copy reads it once, and validation and the decision use that copy, so the proxy cannot show
+  one value to validation and another to the decision. A proxy that hides its keys copies as
+  `{}`, which cannot widen access. `evaluateApprovals` reads its input more than once, though:
+  it counts the approvals and checks the request size on separate reads before it copies the
+  whole input. A proxy can show a small input to those early checks and a larger one to the
+  copy. The copy still enforces the approval input bounds and the decision uses it, so this
+  costs only work up to those bounds, never access.
+  A proxy also defeats the size bound's cost control. The guard lists the keys of an object
+  before it refuses one that is too large, and a proxy with no traps around a large typed array
+  (or another object with many keys) is listed key by key. For example,
+  `new Proxy(Object.setPrototypeOf(new Uint8Array(1e7), Object.prototype), {})` costs about 7.9 s
+  of CPU and 2.1 GB before the guard returns `too_large`; Node refuses it at once. Only a caller
+  that builds such an object in its own process can cause this. JSON input cannot.
+
+The test suite checks the portable path in two ways: a text scan of `src` and `dist` for plain
+uses of Node globals and modules, and a run of the built package in a V8 context without
+`process`, `Buffer` or `require`. Neither is a proof. A text scan cannot see a name that code
+builds at run time, and the run covers only the code paths it calls.
+
+The SHA-256 for digests is part of permitkit, so digests are the same in every runtime. It and
+`canonicalJson` capture every built-in they use when they load, so a built-in that caller code
+replaces later (`JSON.stringify`, `Array.prototype.toSorted`) does not change a digest. The size
+guard does not capture its built-ins. Code that runs in your
 process with its own functions (a replaced `Array.prototype.map`, a function on
 `Object.prototype.then`) is not covered. permitkit hardens the paths it knows about, but such
 code can change the behaviour of any library in the process.

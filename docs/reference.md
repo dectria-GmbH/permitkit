@@ -76,13 +76,24 @@ that would be valid.
 permitkit throws only for programming and configuration errors. Decisions never throw for bad
 requests, including throwing getters and revoked proxies; they deny. `catalog_invalid` is also
 thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
-`canonicalJson` and `digest` throw `not_canonical`, never a raw error: for proxies, objects
-whose prototype is not `Object.prototype`, `null` or `Array.prototype`, built-ins that Node
-identifies by their internal slots (a `Map` or `Date`, also with a swapped prototype), symbol or
-non-enumerable keys, getters and setters (which are not run), array holes and named array
-properties, and input too deep to walk. An object that keeps its data in `#private` fields or in
-slots that Node cannot identify (a `URL`, a `WeakRef`, an `Intl` object), with its prototype set
-to `Object.prototype`, serializes as `{}`. Pass plain JSON data.
+`canonicalJson` and `digest` throw `not_canonical`, never a raw error: for objects whose prototype
+is not `Object.prototype`, `null` or `Array.prototype`, built-ins that the runtime's checks identify
+by their internal slots (on Node a `Map` or `Date`, also with a swapped prototype; fewer kinds in
+other runtimes, see below), symbol or non-enumerable keys, getters and setters (which are not run),
+array holes and named array properties, revoked proxies, and input too deep to walk. On Node, every
+proxy is refused too. In a runtime without `process` (for example Cloudflare Workers without
+`nodejs_compat`), a proxy cannot be detected: it serializes as the data it reports, and its traps
+run. There, a built-in whose kind only a check that throws could identify serializes as its own keys
+when its prototype is set to `Object.prototype` or `null`, and as `{}` if it has none: a `Map`,
+`Set`, `WeakMap`, `WeakSet`, `Date`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, boxed number,
+boolean, symbol or bigint, generator, and `Map` or `Set` iterator. Node refuses all of them. JSON
+input cannot produce such an object (decided 2026-11-24, see the README threat model). Typed arrays,
+`DataView`s and errors (where `Error.isError` exists) are still refused there, also with own keys. A
+boxed string, an `arguments` object and any other object with a non-enumerable own `length` are
+refused too. An object that keeps its data in `#private` fields or in slots that permitkit cannot
+identify (a `URL`, a `WeakRef`, an `Intl` object, an array or string iterator), with its prototype
+set to `Object.prototype`, serializes as `{}` in every runtime. The threat model in the README lists
+the checks per runtime. Pass plain JSON data.
 
 | Code                        | Thrown by                                                                                              | Meaning                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
@@ -103,7 +114,20 @@ Before schema validation, every input is copied through a size guard (`src/bound
 that is not plain data (objects other than plain objects and arrays, hidden keys, holes; see the
 threat model in the README for the one gap) is
 unusable as a whole and gives a deny. Getters and setters count as not plain data; the guard reads
-data properties only, so no caller code runs during the copy.
+data properties only, so no caller code runs during the copy. On Node, a proxy is also unusable. In
+a runtime without `process`, a proxy cannot be detected: the guard copies it like a plain object,
+its traps run during that read, and validation runs on the copy. `evaluateApprovals` reads a proxy
+input more than once there (the early approval count and request check, then the full copy), so
+the early checks can see a smaller input than the copy. The full copy still enforces the approval
+input bounds, so this costs work up to those bounds, never access. A proxy around a large typed
+array (or another object with many keys) is also listed key by key before the size bound refuses
+it: about 7.9 s of CPU and 2.1 GB for a 1e7-element array behind a proxy with no traps, where Node
+refuses it at once. Only a caller that builds such an object in its own process can cause this;
+JSON input cannot. There, a `Map`, `Set`, `Date` or other built-in of a kind that only a check
+that throws could identify, with a swapped prototype, also copies as its own keys, and as `{}` if
+it has none; Node refuses it (see the README threat model). An error is identified there only
+where the runtime has `Error.isError`. A swapped typed array or boxed string is refused before
+its keys are read, on both paths, so its size costs nothing.
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Audit records: 300,000 values, and the request inside meets the request
 bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.

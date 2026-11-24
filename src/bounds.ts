@@ -1,6 +1,4 @@
-import { types } from "node:util";
-
-import { hasInternalSlots } from "./plain.js";
+import { hasInternalSlots, isProxy } from "./plain.js";
 
 /**
  * Size guard that runs before schema validation. Zod 3 parses every item of an array even when
@@ -120,16 +118,16 @@ export function snapshotOf(value: unknown, bounds: InputBounds): SnapshotResult 
  * code and without copying. Undefined for anything else; the full snapshot then decides.
  */
 export function ownArrayLength(value: unknown, key: string): number | undefined {
-  if (typeof value !== "object" || value === null || types.isProxy(value)) return undefined;
+  if (typeof value !== "object" || value === null || isProxy(value)) return undefined;
   const item = dataValue(value, key);
-  if (!Array.isArray(item) || types.isProxy(item)) return undefined;
+  if (!Array.isArray(item) || isProxy(item)) return undefined;
   const length: unknown = dataValue(item, "length");
   return typeof length === "number" ? length : undefined;
 }
 
 /** An own data property, read without running caller code. Undefined for anything else. */
 export function ownDataValue(value: unknown, key: string): unknown {
-  if (typeof value !== "object" || value === null || types.isProxy(value)) return undefined;
+  if (typeof value !== "object" || value === null || isProxy(value)) return undefined;
   const item = dataValue(value, key);
   return item === unusable ? undefined : item;
 }
@@ -156,8 +154,10 @@ function clone(
   }
   if (typeof value !== "object" || value === null) return value;
   // A proxy can describe itself as any plain object, for example one without keys, which as a
-  // scope would read as "everywhere". Proxies are unusable; pass plain data.
-  if (types.isProxy(value)) return unusable;
+  // scope would read as "everywhere". Proxies are unusable; pass plain data. Only Node can
+  // detect a proxy. Elsewhere it is copied like a plain object: each property is read once and
+  // validation runs on the copy, so a proxy that hides its keys copies as `{}`.
+  if (isProxy(value)) return unusable;
   // Only plain data is copied. A Map, a Date, a class instance or hidden keys (non-enumerable or
   // symbol) would lose data in the copy, and a lost scope reads as "everywhere". Such input is
   // unusable as a whole.
@@ -184,14 +184,17 @@ function clone(
     return items;
   }
   if (prototype !== Object.prototype && prototype !== null) return unusable;
-  // A Map or Date with a swapped prototype has no own keys and would copy as `{}`.
+  // A Map or Date with a swapped prototype has no own keys and would copy as `{}`. The check
+  // runs before any key is listed: a swapped typed array or boxed string can have millions.
+  // The portable path identifies fewer kinds (see plain.ts).
   if (hasInternalSlots(value)) return unusable;
   const keys = Object.keys(value);
   if (keys.length > bounds.maxArrayLength) {
     state.tooLarge = true;
     return unusable;
   }
-  if (Reflect.ownKeys(value).length !== keys.length) return unusable;
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length !== keys.length) return unusable;
   // A null prototype: a missing key reads as undefined even if Object.prototype was polluted.
   const result: Record<string, unknown> = Object.create(null);
   for (const key of keys) {
