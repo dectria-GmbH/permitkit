@@ -82,14 +82,14 @@ internal slots (a `Map` or `Date`, also with a swapped prototype), symbol or non
 getters and setters (which are not run), array holes and named array properties, revoked
 proxies, and input too deep to walk. On Node, every proxy is refused too. In a runtime without
 `process` (for example Cloudflare Workers without `nodejs_compat`), a proxy cannot be detected:
-it serializes as the data it reports, and its traps run. There, a `Promise`, generator or
-iterator with its prototype set to `Object.prototype` serializes as `{}`, or as its own keys if
-caller code added any; Node refuses them. A
-`Map`, `Set`, `Date`, `SharedArrayBuffer` or other built-in of a kind that only an exception
-identifies, with a swapped
-prototype and own keys added by hand, serializes as those own keys there; Node refuses it. JSON
-input cannot produce such an object. Typed arrays, `DataView`s, boxed strings and errors (where
-`Error.isError` exists) are refused also with own keys. An
+it serializes as the data it reports, and its traps run. There, a built-in whose kind only a
+check that throws could identify serializes as its own keys when its prototype is set to
+`Object.prototype` or `null`, and as `{}` if it has none: a `Map`, `Set`, `WeakMap`, `WeakSet`,
+`Date`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, boxed number, boolean, symbol or bigint,
+generator or iterator. Node refuses all of them. JSON input cannot produce such an object
+(decided 2026-11-24, see the README threat model). Typed arrays, `DataView`s and errors (where
+`Error.isError` exists) are still refused there, also with own keys. A boxed string, an
+`arguments` object and any other object with a non-enumerable own `length` are refused too. An
 object that keeps its data in `#private` fields or in slots that permitkit cannot identify (a
 `URL`, a `WeakRef`, an `Intl` object), with its prototype set to `Object.prototype`, serializes
 as `{}` in every runtime. The threat model in the README lists the checks per runtime. Pass plain
@@ -123,11 +123,11 @@ input bounds, so this costs work up to those bounds, never access. A proxy aroun
 array (or another object with many keys) is also listed key by key before the size bound refuses
 it: about 7.9 s of CPU and 2.1 GB for a 1e7-element array behind a proxy with no traps, where Node
 refuses it at once. Only a caller that builds such an object in its own process can cause this;
-JSON input cannot. There, a `Map`, `Set`, `Date`
-or other built-in of a kind that only an exception identifies, with a swapped prototype and own
-keys added by hand, also copies as those own keys; Node refuses it (see the README threat model).
-An error is identified there only where the runtime has `Error.isError`. A swapped typed array or
-boxed string is refused before its keys are read, on both paths, so its size costs nothing.
+JSON input cannot. There, a `Map`, `Set`, `Date` or other built-in of a kind that only a check
+that throws could identify, with a swapped prototype, also copies as its own keys, and as `{}` if
+it has none; Node refuses it (see the README threat model). An error is identified there only
+where the runtime has `Error.isError`. A swapped typed array or boxed string is refused before
+its keys are read, on both paths, so its size costs nothing.
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Audit records: 300,000 values, and the request inside meets the request
 bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.

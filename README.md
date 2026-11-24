@@ -316,7 +316,8 @@ process. Data-valued pollution of `Array.prototype` also gives a deny, but is te
 Such input gives a deny, never an exception from a decision function. One gap remains: a
 built-in or class instance that keeps its data in `#private` fields or engine slots that
 permitkit cannot identify (for example a `URL`, a `WeakRef` or an `Intl` object), with its
-prototype set to `Object.prototype` by caller code, copies as `{}`. A `{}` is refused as a scope,
+prototype set to `Object.prototype` by caller code, copies as `{}`. Outside Node, this also
+holds for a `Map`, `Date` and other built-ins (see the list below). A `{}` is refused as a scope,
 limit or condition and narrows as `resource.properties`, so it cannot widen access. Pass plain
 copies, also of reactive objects from UI state libraries.
 
@@ -330,25 +331,26 @@ two ways when it loads:
   `DataView`, boxed primitive, error, generator, `Map` or `Set` iterator, module namespace and
   `arguments` object.
 - **Other runtimes** (no `process`, for example Cloudflare Workers without `nodejs_compat`).
-  permitkit calls built-in methods that fail for an object without the slot and run no caller
-  code. A `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `RegExp`, buffer, typed array, `DataView`
-  and boxed primitive are refused, also with a swapped prototype. An error is refused this way
-  only where the runtime has `Error.isError`. Elsewhere an error is refused only by its hidden
-  own keys (`stack`, `message`), and an error without own keys copies as `{}`.
-  The checks for typed arrays, `DataView`s and errors never fail with an exception, so they run
-  on every object. The other checks fail with an exception for every plain object, which costs
-  time, so they run only on objects without own keys or with a non-enumerable own `length` (a
-  boxed string, an `arguments` object; JSON cannot produce such a key). So a `Map`, `Set`,
-  `WeakMap`, `WeakSet`, `Date`, `ArrayBuffer`, `SharedArrayBuffer` or boxed number, boolean,
-  symbol or bigint with a swapped prototype and own keys added by hand copies as those own keys
-  instead of being refused. JSON input cannot produce such an object. The copy
-  holds only the object's own data, so the result is the same as for a plain object with those
-  keys. The Node path still refuses it. Typed arrays, `DataView`s, boxed strings and errors
-  (where `Error.isError` exists) are refused also with own keys. An `arguments` object of a
-  sloppy-mode function with `length`, `callee` and `Symbol.iterator` deleted copies as its index
-  data, for example `{"0": 1}`; Node refuses it. A `Promise`, generator or iterator has no check
-  without side effects: with a swapped prototype it copies as `{}`, like the gap above, and with
-  own keys added by hand it copies as those keys.
+  permitkit uses only checks that never fail with an exception and run no caller code. A typed
+  array and a `DataView` are refused by `ArrayBuffer.isView`, also with a swapped prototype and
+  with own keys. An error is refused by `Error.isError` where the runtime has it. Elsewhere an
+  error is refused only by its hidden own keys (`stack`, `message`), and an error without own
+  keys copies as `{}`. An object other than an array with a non-enumerable own `length` is
+  refused before its keys are listed: a boxed string, an `arguments` object, or such an object
+  made by hand. So a boxed string with millions of characters costs nothing. JSON input cannot
+  produce a non-enumerable key.
+  Decided 2026-11-24: there are no checks that fail with an exception for an object of the wrong
+  kind. Such a check costs microseconds for every plain object that it runs on: `decide()` with
+  19,000 `{}` took about 1.8 s of CPU with them, against 13 ms on Node. So a built-in whose kind
+  only such a check identifies copies as its own keys when caller code sets its prototype to
+  `Object.prototype` or `null`, and as `{}` if it has none: a `Map`, `Set`, `WeakMap`, `WeakSet`,
+  `Date`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, boxed number, boolean, symbol or
+  bigint, generator, and `Map` or `Set` iterator. Node refuses all of them. JSON input cannot
+  produce such an object. The copy holds only the object's own data, so the decision is the same
+  as for a plain object with those keys; a `{}` cannot widen access (see above). A `RegExp` is
+  still refused, by its non-enumerable own `lastIndex`. An `arguments` object of a sloppy-mode
+  function with `length`, `callee` and `Symbol.iterator` deleted copies as its index data, for
+  example `{"0": 1}`; Node refuses it.
   A JavaScript program cannot tell a proxy from its target, so a proxy is not refused. The size
   guard copies it like any object: own data properties only, and the proxy's traps run. Each
   copy reads it once, and validation and the decision use that copy, so the proxy cannot show
