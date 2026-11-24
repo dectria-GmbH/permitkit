@@ -109,6 +109,23 @@ Each `PermitkitError` has `code`, `hint` and, for validation errors, `issues` wi
 `message` and `hint`. The codes are stable. The wording of issue messages is not part of the API
 and can change in any release, so match on `code`, and on the reason code of a decision.
 
+`PermitkitError.is(value)` returns `true` if `value` is a `PermitkitError` that permitkit
+created, and `false` for any other value, also `null` and primitives. It never throws. It checks a
+private field, so it runs no caller code: no Proxy trap and no getter, and it does not read the
+prototype chain. An object made with `Object.create(PermitkitError.prototype)` is not one.
+`instanceof` reads the prototype and runs the `getPrototypeOf` trap of a thrown Proxy, which can
+throw inside your `catch` block. Use `PermitkitError.is(error)` in a `catch` block that can see
+errors from code you do not control, and wherever a check must not throw:
+
+```ts
+try {
+  policy = compilePolicy(catalog, document);
+} catch (error) {
+  if (!PermitkitError.is(error)) throw error;
+  log(error.code, error.issues);
+}
+```
+
 ## Size bounds
 
 Before schema validation, every input is copied through a size guard (`src/bounds.ts`). Input
