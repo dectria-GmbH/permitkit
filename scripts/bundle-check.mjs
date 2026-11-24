@@ -1,7 +1,8 @@
-// Bundles an entry that imports the decision exports (coreNames below) from the built package
-// root, and fails if the bundle holds Zod. A Worker that only decides must not ship it.
-// As a control, a second entry that also imports evaluateApprovals must hold Zod, so the check
-// can fail. Rolldown comes through vitest's vite; permitkit has no direct bundler dependency.
+// Bundles an entry that imports every export of the built package root except the known Zod
+// users, and fails if the bundle holds Zod. A Worker that only decides must not ship it. A new
+// export is gated without a change here. Each known Zod user, bundled alone, must still hold
+// Zod, so the check can fail and the list cannot keep a name that no longer needs Zod.
+// Rolldown comes through vitest's vite; permitkit has no direct bundler dependency.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -38,28 +39,28 @@ async function bundle(names) {
 
 const isZodModule = (id) => /[\\/]zod[\\/]|zod-schemas/.test(id);
 
-// Every export that a Worker uses to compile, decide and log a decision without approvals.
-const coreNames = [
-  "defineCatalog",
-  "compilePolicy",
-  "decide",
-  "explain",
-  "parseRequest",
-  "requestDigest",
-  "permissionOf",
-  "evaluate",
-  "canonicalJson",
-  "digest",
-];
+// The exports that still use Zod, until the approval and audit validators replace it.
+const zodUsers = ["evaluateApprovals", "decideAndRecord", "reevaluate", "toDecisionRecord"];
+const exported = Object.keys(await import(pathToFileURL(packageRoot).href));
+for (const name of zodUsers) assert.ok(exported.includes(name), `${name} is no longer exported`);
+const coreNames = exported.filter((name) => !zodUsers.includes(name));
+assert.ok(coreNames.includes("decide") && coreNames.includes("compilePolicy"), "no core exports");
+
 const core = await bundle(coreNames);
 assert.ok(core.modules.length > 0, "the core bundle lists no modules");
 assert.deepEqual(core.modules.filter(isZodModule), [], "the core bundle includes Zod modules");
 assert.ok(!zodCode.test(core.code), "the core bundle contains Zod code");
 
-const control = await bundle([...coreNames, "evaluateApprovals"]);
-assert.ok(control.modules.some(isZodModule), "control: evaluateApprovals no longer pulls in Zod");
-assert.ok(zodCode.test(control.code), "control: the Zod marker does not match Zod code");
+for (const name of zodUsers) {
+  const alone = await bundle([name]);
+  assert.ok(
+    alone.modules.some(isZodModule),
+    `${name} no longer pulls in Zod: remove it from zodUsers`,
+  );
+  assert.ok(zodCode.test(alone.code), `control: the Zod marker does not match the code of ${name}`);
+}
+const control = await bundle(exported);
 
 console.log(
-  `bundle ok: core exports without Zod ${core.bytes} bytes, with evaluateApprovals ${control.bytes} bytes`,
+  `bundle ok: ${coreNames.length} exports without Zod ${core.bytes} bytes, all ${exported.length} exports ${control.bytes} bytes`,
 );
