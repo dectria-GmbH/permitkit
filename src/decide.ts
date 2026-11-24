@@ -19,7 +19,7 @@ import {
   type Subject,
 } from "./request.js";
 import { instant } from "./time.js";
-import { invalid, type Issue } from "./validate.js";
+import { invalid, joined, type Issue } from "./validate.js";
 
 export type Outcome = "allow" | "deny" | "approval_required";
 
@@ -142,10 +142,12 @@ function parseRequestUnguarded(input: unknown): ParsedRequest {
   const found: Issue[] = [];
   const request = accessRequest(snapshot, null, found);
   if (request !== invalid) return { ok: true, request };
-  return {
-    ok: false,
-    issues: found.map((item) => ({ path: item.path.join("."), message: item.message })),
-  };
+  const issues: { path: string; message: string }[] = [];
+  for (let index = 0; index < found.length; index += 1) {
+    const item = found[index];
+    if (item !== undefined) issues.push({ path: joined(item.path, "."), message: item.message });
+  }
+  return { ok: false, issues };
 }
 
 /** True if a deny rule applies to the subject for this permission and resource. */

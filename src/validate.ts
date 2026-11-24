@@ -41,6 +41,15 @@ export function pathOf(path: Path): (string | number)[] {
   return keys;
 }
 
+/** Joins items with a separator. A loop, not Array.prototype.join, which pollution can replace. */
+export function joined(items: readonly (string | number)[], separator: string): string {
+  let result = "";
+  for (let index = 0; index < items.length; index += 1) {
+    result += `${index === 0 ? "" : separator}${String(items[index])}`;
+  }
+  return result;
+}
+
 /** Adds an issue and returns `invalid`. */
 export function fail(issues: Issue[], path: Path, message: string): typeof invalid {
   issues.push({ path: pathOf(path), message });
@@ -89,10 +98,10 @@ export function knownKeys(
   const unknown: string[] = [];
   for (let index = 0; index < present.length; index += 1) {
     const key = present[index];
-    if (key !== undefined && !keys.includes(key)) unknown.push(key);
+    if (key !== undefined && !keys.includes(key)) unknown.push(JSON.stringify(key));
   }
   if (unknown.length === 0) return true;
-  fail(issues, path, `Unknown key(s): ${unknown.map((key) => JSON.stringify(key)).join(", ")}.`);
+  fail(issues, path, `Unknown key(s): ${joined(unknown, ", ")}.`);
   return false;
 }
 
@@ -186,7 +195,7 @@ export function oneOf<const T extends string>(values: readonly T[]): Check<T> {
       const option = values[index];
       if (option !== undefined && value === option) return option;
     }
-    return fail(issues, path, `Use one of: ${values.join(", ")}.`);
+    return fail(issues, path, `Use one of: ${joined(values, ", ")}.`);
   };
 }
 

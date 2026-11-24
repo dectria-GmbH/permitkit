@@ -1,7 +1,7 @@
 import { boundedSnapshot, policyBounds } from "./bounds.js";
 import { compareText, digest } from "./canonical.js";
 import { isCatalog, type Catalog } from "./catalog.js";
-import { PermitkitError, type PolicyIssue } from "./errors.js";
+import { PermitkitError, type ErrorCode, type PolicyIssue } from "./errors.js";
 import {
   policyDocument,
   policySchemaVersion,
@@ -11,7 +11,7 @@ import {
   type PolicyDocument,
   type Scope,
 } from "./policy-document.js";
-import { invalid, type Issue } from "./validate.js";
+import { invalid, joined, type Issue } from "./validate.js";
 
 export { policySchemaVersion } from "./policy-document.js";
 export type {
@@ -84,6 +84,31 @@ export function isCompiledPolicy(value: unknown): value is CompiledPolicy {
  * in another format version, and `policy_invalid` with a list of issues for any other error.
  */
 export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy {
+  try {
+    return compileChecked(catalog, input);
+  } catch (error) {
+    if (error instanceof PermitkitError && compileCodes.has(error.code)) throw error;
+    // Data-valued pollution of built-in prototypes can make internals throw, for example a
+    // replaced Array.prototype.toSorted. The caller still gets a PermitkitError, never the raw
+    // error, whose text could come from the polluted value.
+    throw new PermitkitError("policy_invalid", "The policy document could not be compiled.", [
+      {
+        path: "",
+        message: "Compiling the policy failed inside permitkit.",
+        hint: "Check for changed built-in prototypes in this process, then compile again.",
+      },
+    ]);
+  }
+}
+
+/** The error codes that compilePolicy itself throws. Any other error becomes policy_invalid. */
+const compileCodes: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
+  "catalog_invalid",
+  "policy_invalid",
+  "policy_schema_unsupported",
+]);
+
+function compileChecked(catalog: Catalog, input: unknown): CompiledPolicy {
   if (!isCatalog(catalog)) {
     throw new PermitkitError(
       "catalog_invalid",
@@ -125,11 +150,16 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
   const found: Issue[] = [];
   const document = validated(snapshot, found);
   if (document === invalid) {
-    const issues = found.map((item) => ({
-      path: item.path.join("."),
-      message: item.message,
-      hint: "Fix the field shape. Unknown keys are rejected, so check the spelling.",
-    }));
+    const issues: PolicyIssue[] = [];
+    for (let index = 0; index < found.length; index += 1) {
+      const item = found[index];
+      if (item === undefined) continue;
+      issues.push({
+        path: joined(item.path, "."),
+        message: item.message,
+        hint: "Fix the field shape. Unknown keys are rejected, so check the spelling.",
+      });
+    }
     throw new PermitkitError("policy_invalid", "The policy document is not valid.", issues);
   }
   const issues = checkReferences(catalog, document);
@@ -198,15 +228,16 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
   };
   const roleNames = new Set(Object.keys(document.roles));
   const checkRoles = (roles: readonly string[], path: string) => {
-    roles.forEach((role, roleIndex) => {
-      if (!roleNames.has(role)) {
+    for (let roleIndex = 0; roleIndex < roles.length; roleIndex += 1) {
+      const role = roles[roleIndex];
+      if (role === undefined || !roleNames.has(role)) {
         issues.push({
           path: `${path}.${roleIndex}`,
-          message: `Role ${role} is not defined.`,
+          message: `Role ${String(role)} is not defined.`,
           hint: "Define the role under roles, or fix the spelling.",
         });
       }
-    });
+    }
   };
 
   const checkPermissions = (
@@ -214,22 +245,23 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
     path: string,
     properties: { scope: readonly string[]; limits: readonly string[]; limitsKey: string },
   ) => {
-    permissions.forEach((permission, index) => {
-      const resource = catalog.resourceOf(permission);
+    for (let index = 0; index < permissions.length; index += 1) {
+      const permission = permissions[index];
+      const resource = permission === undefined ? undefined : catalog.resourceOf(permission);
       if (resource === undefined) {
         issues.push({
           path: `${path}.permissions.${index}`,
-          message: `Permission ${permission} is not in the catalogue.`,
+          message: `Permission ${String(permission)} is not in the catalogue.`,
           hint: "Add the action to the catalogue in code, or fix the spelling.",
         });
-        return;
+        continue;
       }
       for (const name of properties.scope) {
         if (!resource.scopes.includes(name)) {
           issues.push({
             path: `${path}.scope.properties.${name}`,
             message: `Resource type ${resource.type} has no scope property ${name}.`,
-            hint: `Use one of: ${resource.scopes.join(", ") || "(none)"}.`,
+            hint: `Use one of: ${joined(resource.scopes, ", ") || "(none)"}.`,
           });
         }
       }
@@ -238,17 +270,19 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
           issues.push({
             path: `${path}.${properties.limitsKey}.properties.${name}`,
             message: `Resource type ${resource.type} has no limit property ${name}.`,
-            hint: `Use one of: ${resource.limits.join(", ") || "(none)"}.`,
+            hint: `Use one of: ${joined(resource.limits, ", ") || "(none)"}.`,
           });
         }
       }
-    });
+    }
   };
 
   for (const roleName of Object.keys(document.roles)) {
     const role = document.roles[roleName];
     if (role === undefined) continue;
-    role.grants.forEach((grant, index) => {
+    for (let index = 0; index < role.grants.length; index += 1) {
+      const grant = role.grants[index];
+      if (grant === undefined) continue;
       const path = `roles.${roleName}.grants.${index}`;
       claimId(grant.id, path);
       checkPermissions(grant.permissions, path, {
@@ -256,10 +290,12 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
         limits: grant.limits.kind === "range" ? Object.keys(grant.limits.properties) : [],
         limitsKey: "limits",
       });
-    });
+    }
   }
 
-  document.denies.forEach((deny, index) => {
+  for (let index = 0; index < document.denies.length; index += 1) {
+    const deny = document.denies[index];
+    if (deny === undefined) continue;
     const path = `denies.${index}`;
     claimId(deny.id, path);
     checkPermissions(deny.permissions, path, {
@@ -268,10 +304,12 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
       limitsKey: "limits",
     });
     if (deny.roles !== undefined) checkRoles(deny.roles, `${path}.roles`);
-  });
+  }
 
   const ruled = new Map<string, string>();
-  document.approvalRules.forEach((rule, index) => {
+  for (let index = 0; index < document.approvalRules.length; index += 1) {
+    const rule = document.approvalRules[index];
+    if (rule === undefined) continue;
     const path = `approvalRules.${index}`;
     claimId(rule.id, path);
     checkPermissions(rule.permissions, path, {
@@ -317,7 +355,7 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
         hint: 'Use eligibleApprovers: { kind: "roles", roles: [...] }, or switch off exclusiveRequestAndApproveRoles.',
       });
     }
-  });
+  }
 
   return issues;
 }
