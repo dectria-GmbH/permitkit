@@ -119,7 +119,11 @@ a runtime without `process`, a proxy cannot be detected: the guard copies it lik
 its traps run during that read, and validation runs on the copy. `evaluateApprovals` reads a proxy
 input more than once there (the early approval count and request check, then the full copy), so
 the early checks can see a smaller input than the copy. The full copy still enforces the approval
-input bounds, so this costs work up to those bounds, never access. There, a `Map`, `Set`, `Date`
+input bounds, so this costs work up to those bounds, never access. A proxy around a large typed
+array (or another object with many keys) is also listed key by key before the size bound refuses
+it: about 7.9 s of CPU and 2.1 GB for a 1e7-element array behind a proxy with no traps, where Node
+refuses it at once. Only a caller that builds such an object in its own process can cause this;
+JSON input cannot. There, a `Map`, `Set`, `Date`
 or other built-in of a kind that only an exception identifies, with a swapped prototype and own
 keys added by hand, also copies as those own keys; Node refuses it (see the README threat model).
 An error is identified there only where the runtime has `Error.isError`. A swapped typed array or

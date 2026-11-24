@@ -12,7 +12,8 @@
  *   ArrayBuffer.isView and Error.isError (where it exists) on every object, then brand checks
  *   through built-in getters and methods that throw for a wrong receiver and run no caller code.
  *   The throwing checks run only on objects without own keys or with a non-enumerable own
- *   `length` (a boxed string, an arguments object), because a throw costs microseconds and every plain object would throw in each check. A Map, Set, Date or other
+ *   `length` (a boxed string, an arguments object), because a throw costs microseconds and every
+ *   plain object would throw in each check. A Map, Set, Date or other
  *   built-in of a throwing kind with a swapped prototype and own keys added by hand therefore
  *   copies as those own keys. JSON input cannot produce such an object. A proxy cannot be
  *   detected in JavaScript; it is read like a plain object.

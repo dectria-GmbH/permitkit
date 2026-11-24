@@ -358,6 +358,12 @@ two ways when it loads:
   whole input. A proxy can show a small input to those early checks and a larger one to the
   copy. The copy still enforces the approval input bounds and the decision uses it, so this
   costs only work up to those bounds, never access.
+  A proxy also defeats the size bound's cost control. The guard lists the keys of an object
+  before it refuses one that is too large, and a proxy with no traps around a large typed array
+  (or another object with many keys) is listed key by key. For example,
+  `new Proxy(Object.setPrototypeOf(new Uint8Array(1e7), Object.prototype), {})` costs about 7.9 s
+  of CPU and 2.1 GB before the guard returns `too_large`; Node refuses it at once. Only a caller
+  that builds such an object in its own process can cause this. JSON input cannot.
 
 The test suite checks the portable path in two ways: a text scan of `src` and `dist` for plain
 uses of Node globals and modules, and a run of the built package in a V8 context without
