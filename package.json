@@ -41,7 +41,8 @@
     "format:check": "prettier --check .",
     "test": "vitest run --maxWorkers=2",
     "smoke": "node scripts/smoke.mjs && node --experimental-vm-modules scripts/smoke-vm.mjs",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build && pnpm smoke"
+    "bundle-check": "node scripts/bundle-check.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build && pnpm smoke && pnpm bundle-check"
   },
   "dependencies": {
     "zod": "3.25.76"
