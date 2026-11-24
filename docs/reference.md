@@ -76,24 +76,24 @@ that would be valid.
 permitkit throws only for programming and configuration errors. Decisions never throw for bad
 requests, including throwing getters and revoked proxies; they deny. `catalog_invalid` is also
 thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
-`canonicalJson` and `digest` throw `not_canonical`, never a raw error: for objects whose
-prototype is not `Object.prototype`, `null` or `Array.prototype`, built-ins identified by their
-internal slots (a `Map` or `Date`, also with a swapped prototype), symbol or non-enumerable keys,
-getters and setters (which are not run), array holes and named array properties, revoked
-proxies, and input too deep to walk. On Node, every proxy is refused too. In a runtime without
-`process` (for example Cloudflare Workers without `nodejs_compat`), a proxy cannot be detected:
-it serializes as the data it reports, and its traps run. There, a built-in whose kind only a
-check that throws could identify serializes as its own keys when its prototype is set to
-`Object.prototype` or `null`, and as `{}` if it has none: a `Map`, `Set`, `WeakMap`, `WeakSet`,
-`Date`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, boxed number, boolean, symbol or bigint,
-generator or iterator. Node refuses all of them. JSON input cannot produce such an object
-(decided 2026-11-24, see the README threat model). Typed arrays, `DataView`s and errors (where
-`Error.isError` exists) are still refused there, also with own keys. A boxed string, an
-`arguments` object and any other object with a non-enumerable own `length` are refused too. An
-object that keeps its data in `#private` fields or in slots that permitkit cannot identify (a
-`URL`, a `WeakRef`, an `Intl` object), with its prototype set to `Object.prototype`, serializes
-as `{}` in every runtime. The threat model in the README lists the checks per runtime. Pass plain
-JSON data.
+`canonicalJson` and `digest` throw `not_canonical`, never a raw error: for objects whose prototype
+is not `Object.prototype`, `null` or `Array.prototype`, built-ins that the runtime's checks identify
+by their internal slots (on Node a `Map` or `Date`, also with a swapped prototype; fewer kinds in
+other runtimes, see below), symbol or non-enumerable keys, getters and setters (which are not run),
+array holes and named array properties, revoked proxies, and input too deep to walk. On Node, every
+proxy is refused too. In a runtime without `process` (for example Cloudflare Workers without
+`nodejs_compat`), a proxy cannot be detected: it serializes as the data it reports, and its traps
+run. There, a built-in whose kind only a check that throws could identify serializes as its own keys
+when its prototype is set to `Object.prototype` or `null`, and as `{}` if it has none: a `Map`,
+`Set`, `WeakMap`, `WeakSet`, `Date`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, boxed number,
+boolean, symbol or bigint, generator, and `Map` or `Set` iterator. Node refuses all of them. JSON
+input cannot produce such an object (decided 2026-11-24, see the README threat model). Typed arrays,
+`DataView`s and errors (where `Error.isError` exists) are still refused there, also with own keys. A
+boxed string, an `arguments` object and any other object with a non-enumerable own `length` are
+refused too. An object that keeps its data in `#private` fields or in slots that permitkit cannot
+identify (a `URL`, a `WeakRef`, an `Intl` object, an array or string iterator), with its prototype
+set to `Object.prototype`, serializes as `{}` in every runtime. The threat model in the README lists
+the checks per runtime. Pass plain JSON data.
 
 | Code                        | Thrown by                                                                                              | Meaning                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { canonicalJson, decide, PermitkitError } from "../src/index.js";
 import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
@@ -48,25 +48,105 @@ function jsonRequestWith(item: () => unknown): unknown {
   );
 }
 
-describe(`many small plain JSON objects (${expectedRuntime} path)`, () => {
-  // Node takes about 15 ms of CPU for each case below. The portable path took 894 ms with
-  // {length: 0} (d6eba0a) and 1.8 s with {} (5b09c79), when it ran brand checks that throw for a
-  // plain object. JSON can produce `length` only as an enumerable key.
-  const cases: [string, () => unknown][] = [
-    ["{length: 0}", () => ({ length: 0 })],
-    ["{}", () => ({})],
+interface PathApi {
+  readonly runtime: string;
+  readonly decide: (input: unknown) => string;
+  readonly canonicalJson: (input: unknown) => number;
+}
+
+/**
+ * A fresh copy of src on the given path. src/plain.ts picks its path when it loads, so the
+ * portable copy loads while process.getBuiltinModule is hidden, as in test/setup.
+ */
+async function loadPath(path: "node" | "portable"): Promise<PathApi> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "getBuiltinModule");
+  if (descriptor === undefined) throw new Error("process.getBuiltinModule is missing");
+  vi.resetModules();
+  if (path === "portable") Reflect.deleteProperty(process, "getBuiltinModule");
+  try {
+    const api = await import("../src/index.js");
+    const plain = await import("../src/plain.js");
+    const catalog = api.defineCatalog({ ticket: { actions: ["read"], scopes: ["queue"] } });
+    const compiled = api.compilePolicy(catalog, {
+      schema: 2,
+      version: "cost",
+      roles: {
+        lead: {
+          grants: [
+            {
+              id: "g",
+              permissions: ["ticket:read"],
+              scope: { kind: "all" },
+              limits: { kind: "unlimited" },
+            },
+          ],
+        },
+      },
+      denies: [],
+      approvalRules: [],
+      separationOfDuties: {
+        requesterNeverApprovesSameType: false,
+        exclusiveRequestAndApproveRoles: false,
+      },
+    });
+    return {
+      runtime: plain.plainDataRuntime,
+      decide: (input) => api.decide(compiled, input).reason,
+      canonicalJson: (input) => api.canonicalJson(input).length,
+    };
+  } finally {
+    Object.defineProperty(process, "getBuiltinModule", descriptor);
+  }
+}
+
+describe(`many small plain JSON objects (${expectedRuntime} project)`, () => {
+  /**
+   * The portable path must cost about what the Node path costs, measured in the same run, so
+   * that load on the machine changes both sides. With brand checks that throw for a plain object,
+   * decide() with 19,000 {} took about 1.8 s of CPU on the portable path against 13 ms on Node
+   * (5b09c79). One throw per object still gave about 180 ms for decide() and 870 ms against
+   * 80 ms for canonicalJson. Without throws, the portable path costs less than the Node path.
+   */
+  const ratio = 2;
+  const slackMs = 10;
+  const rounds = 5;
+  const lengthRequest = jsonRequestWith(() => ({ length: 0 }));
+  const emptyRequest = jsonRequestWith(() => ({}));
+  const emptyObjects: unknown = JSON.parse(
+    JSON.stringify(Array.from({ length: 200 }, () => Array.from({ length: 1000 }, () => ({})))),
+  );
+  const cases: [string, (api: PathApi) => unknown, unknown][] = [
+    ["decide(), 19,000 {length: 0}", (api) => api.decide(lengthRequest), "invalid_request"],
+    ["decide(), 19,000 {}", (api) => api.decide(emptyRequest), "invalid_request"],
+    ["canonicalJson, 200,000 {}", (api) => api.canonicalJson(emptyObjects), 600_401],
   ];
 
-  it("go through decide() at about the Node cost", () => {
-    for (const [label, item] of cases) {
-      const parsed = jsonRequestWith(item);
-      decide(policy, parsed);
-      const { result, ms } = timed(() => decide(policy, parsed).reason);
-      expect({ label, result, fast: ms < budgetMs }).toEqual({
+  it("cost at most twice the Node path on the portable path", { timeout: 120_000 }, async () => {
+    const node = await loadPath("node");
+    const portable = await loadPath("portable");
+    expect([node.runtime, portable.runtime]).toEqual(["node", "portable"]);
+    for (const [label, run, expected] of cases) {
+      expect({ label, node: run(node), portable: run(portable) }).toEqual({
         label,
-        result: "invalid_request",
-        fast: true,
+        node: expected,
+        portable: expected,
       });
+      // The lowest of several runs is the one least disturbed by load. The paths alternate, so
+      // that a burst of load hits both.
+      let nodeMs = Infinity;
+      let portableMs = Infinity;
+      for (let round = 0; round < rounds; round += 1) {
+        nodeMs = Math.min(nodeMs, timed(() => run(node)).ms);
+        portableMs = Math.min(portableMs, timed(() => run(portable)).ms);
+      }
+      const limitMs = ratio * nodeMs + slackMs;
+      // Soft, so that a failure reports every case.
+      expect
+        .soft(
+          portableMs,
+          `${label}: portable ${portableMs.toFixed(1)} ms, Node ${nodeMs.toFixed(1)} ms of CPU`,
+        )
+        .toBeLessThanOrEqual(limitMs);
     }
   });
 });

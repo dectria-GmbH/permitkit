@@ -636,6 +636,20 @@ describe("nodeChecks with an untrusted host", () => {
   });
 });
 
+/** A proxy that revokes itself in its getOwnPropertyDescriptor trap and reports a length. */
+function selfRevokingProxy(): object {
+  const { proxy, revoke } = Proxy.revocable(
+    {},
+    {
+      getOwnPropertyDescriptor() {
+        revoke();
+        return { value: 0, enumerable: false, configurable: true, writable: true };
+      },
+    },
+  );
+  return proxy;
+}
+
 describe("portable checks", () => {
   it("are not changed by a later replacement of the built-ins they use", () => {
     const isView = Object.getOwnPropertyDescriptor(ArrayBuffer, "isView");
@@ -742,6 +756,16 @@ describe("portable checks", () => {
     );
     expect(portableChecks.hasInternalSlots(trap)).toBe(true);
     expect(reads).toEqual(["getOwnPropertyDescriptor length"]);
+  });
+
+  it("refuse a proxy that revokes itself while its length is read, without throwing", () => {
+    expect(codeOf(() => portableChecks.hasInternalSlots(selfRevokingProxy()))).toBe("ok");
+    expect(portableChecks.hasInternalSlots(selfRevokingProxy())).toBe(true);
+    expect(snapshotOf({ nested: selfRevokingProxy() }, requestBounds)).toEqual({
+      ok: false,
+      reason: "not_plain",
+    });
+    expect(codeOf(() => canonicalJson({ nested: selfRevokingProxy() }))).toBe("not_canonical");
   });
 
   it("treat RegExp.prototype, which has no slot, like Node does", () => {

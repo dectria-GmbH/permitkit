@@ -315,11 +315,11 @@ holes, huge values, and data-valued pollution of `Object.prototype` from a bug e
 process. Data-valued pollution of `Array.prototype` also gives a deny, but is tested less.
 Such input gives a deny, never an exception from a decision function. One gap remains: a
 built-in or class instance that keeps its data in `#private` fields or engine slots that
-permitkit cannot identify (for example a `URL`, a `WeakRef` or an `Intl` object), with its
-prototype set to `Object.prototype` by caller code, copies as `{}`. Outside Node, this also
-holds for a `Map`, `Date` and other built-ins (see the list below). A `{}` is refused as a scope,
-limit or condition and narrows as `resource.properties`, so it cannot widen access. Pass plain
-copies, also of reactive objects from UI state libraries.
+permitkit cannot identify (for example a `URL`, a `WeakRef`, an `Intl` object or an array
+iterator), with its prototype set to `Object.prototype` by caller code, copies as `{}`. Outside
+Node, this also holds for a `Map`, `Date` and other built-ins (see the list below). A `{}` is
+refused as a scope, limit or condition and narrows as `resource.properties`, so it cannot widen
+access. Pass plain copies, also of reactive objects from UI state libraries.
 
 How permitkit identifies objects that are not plain data depends on the runtime. It picks one of
 two ways when it loads:
@@ -341,16 +341,17 @@ two ways when it loads:
   produce a non-enumerable key.
   Decided 2026-11-24: there are no checks that fail with an exception for an object of the wrong
   kind. Such a check costs microseconds for every plain object that it runs on: `decide()` with
-  19,000 `{}` took about 1.8 s of CPU with them, against 13 ms on Node. So a built-in whose kind
-  only such a check identifies copies as its own keys when caller code sets its prototype to
+  19,000 `{}` took about 1.8 s of CPU with them, against 13 ms on Node (measured with
+  `process.cpuUsage` in Node 24 with the portable path forced, not in workerd). So a built-in whose
+  kind only such a check identifies copies as its own keys when caller code sets its prototype to
   `Object.prototype` or `null`, and as `{}` if it has none: a `Map`, `Set`, `WeakMap`, `WeakSet`,
-  `Date`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, boxed number, boolean, symbol or
-  bigint, generator, and `Map` or `Set` iterator. Node refuses all of them. JSON input cannot
-  produce such an object. The copy holds only the object's own data, so the decision is the same
-  as for a plain object with those keys; a `{}` cannot widen access (see above). A `RegExp` is
-  still refused, by its non-enumerable own `lastIndex`. An `arguments` object of a sloppy-mode
-  function with `length`, `callee` and `Symbol.iterator` deleted copies as its index data, for
-  example `{"0": 1}`; Node refuses it.
+  `Date`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, boxed number, boolean, symbol or bigint,
+  generator, and `Map` or `Set` iterator. Node refuses all of them. JSON input cannot produce such
+  an object. The copy holds only the object's own data, so the decision is the same as for a plain
+  object with those keys; a `{}` cannot widen access (see above). A `RegExp` is still refused, by
+  its non-enumerable own `lastIndex`. An `arguments` object of a sloppy-mode function with `length`,
+  `callee` and `Symbol.iterator` deleted copies as its index data, for example `{"0": 1}`; Node
+  refuses it.
   A JavaScript program cannot tell a proxy from its target, so a proxy is not refused. The size
   guard copies it like any object: own data properties only, and the proxy's traps run. Each
   copy reads it once, and validation and the decision use that copy, so the proxy cannot show

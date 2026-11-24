@@ -15,7 +15,8 @@
  *   non-enumerable key, so plain data never meets this rule.
  *   Decided 2026-11-24: there are no brand checks that throw for a wrong receiver. A throw costs
  *   microseconds, and every plain object without own keys paid one per check: decide() with
- *   19,000 `{}` took 1,579 ms here against 16 ms on Node. So a built-in whose kind only such a
+ *   19,000 `{}` took about 1.8 s of CPU here against 13 ms on Node (measured in Node 24, see the
+ *   README threat model). So a built-in whose kind only such a
  *   check identifies (a Map, Set, WeakMap, WeakSet, Date, Promise, ArrayBuffer, boxed number,
  *   boolean, symbol or bigint, and others) copies as its own keys when its prototype is
  *   swapped, and as `{}` if it has none. Node refuses all of them. A proxy cannot be detected in
@@ -125,8 +126,13 @@ const isError: unknown = getOwnPropertyDescriptor(Error, "isError")?.value;
  * the built-ins whose keys are indices (a boxed string, an `arguments` object), so a boxed
  * string with millions of characters is refused before its keys are listed. An array is
  * excluded: its `length` is non-enumerable too, and the callers check arrays on their own path.
- * The size guard and canonicalJson refuse every non-enumerable key anyway, so the rule refuses
- * nothing that they would accept.
+ * The size guard and canonicalJson refuse every non-enumerable key anyway, so for an object that
+ * is not a proxy the rule refuses nothing that they would accept; it only refuses earlier. A
+ * proxy can report a non-enumerable `length` here and no own keys later. Such a proxy copied as
+ * `{}` before this rule and is refused now, which only narrows.
+ *
+ * It does not throw. A proxy can revoke itself in its getOwnPropertyDescriptor trap, and then
+ * Array.isArray throws; such a value is refused.
  */
 function portableHasInternalSlots(value: object): boolean {
   if (typeof isView === "function" && apply(isView, undefined, [value]) === true) return true;
@@ -140,7 +146,13 @@ function portableHasInternalSlots(value: object): boolean {
     return false;
   }
   // A data or an accessor property. The descriptor is a new object from the engine.
-  return length !== undefined && length.enumerable === false && !isArray(value);
+  if (length === undefined || length.enumerable !== false) return false;
+  try {
+    return !isArray(value);
+  } catch {
+    // A proxy that revoked itself in the trap above. It is not plain data.
+    return true;
+  }
 }
 
 /** The checks for runtimes without `node:util`. Proxies cannot be detected. */
