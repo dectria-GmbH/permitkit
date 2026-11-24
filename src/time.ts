@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { fail, type Check, type Issue, type Path } from "./validate.js";
 
 /**
  * ISO 8601 date-time with seconds, at most millisecond precision and an explicit offset in
@@ -6,7 +6,7 @@ import { z } from "zod";
  * without a colon, more fraction digits) parse differently or not at all across engines, so
  * they are rejected.
  */
-const isoInstant =
+export const isoInstant =
   /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{1,3})?(Z|[+-]([01]\d|2[0-3]):[0-5]\d)$/;
 
 /** The longest approval window that a policy can set, in seconds (31 days). */
@@ -30,25 +30,35 @@ const timestampMessage =
   "Use an ISO 8601 date-time with an offset, for example 2026-01-15T10:00:00Z.";
 
 /** A timestamp between 0000-01-01T00:00:00Z and 9999-12-31T23:59:59.999Z. */
-export const timestampSchema = z
-  .string()
-  .regex(isoInstant, timestampMessage)
-  .refine(isCalendarInstant, "The date-time does not exist.")
-  .refine(
-    (value) => inRange(value, latestInstant),
-    "The date-time must be between 0000-01-01T00:00:00Z and 9999-12-31T23:59:59.999Z.",
-  );
+export const timestamp: Check<string> = (value, path, issues) =>
+  checkTimestamp(value, path, issues, latestInstant);
 
 /**
  * A request or evaluation time. It ends 31 days before the latest timestamp, so the end of an
  * approval window that starts at it can still be written as a timestamp.
  */
-export const requestTimeSchema = timestampSchema.refine(
-  (value) => inRange(value, latestRequestInstant),
-  "A request time must be at most 9999-11-30T23:59:59.999Z.",
-);
+export const requestTime: Check<string> = (value, path, issues) =>
+  checkTimestamp(value, path, issues, latestRequestInstant);
 
-function inRange(value: string, latest: number): boolean {
+/** Format first, then the calendar day, then the range, as the earlier schema did. */
+function checkTimestamp(value: unknown, path: Path, issues: Issue[], latest: number) {
+  if (typeof value !== "string") return fail(issues, path, timestampMessage);
+  if (!isoInstant.test(value)) return fail(issues, path, timestampMessage);
+  if (!isCalendarInstant(value)) return fail(issues, path, "The date-time does not exist.");
+  if (!inRange(value, latestInstant)) {
+    return fail(
+      issues,
+      path,
+      "The date-time must be between 0000-01-01T00:00:00Z and 9999-12-31T23:59:59.999Z.",
+    );
+  }
+  if (!inRange(value, latest)) {
+    return fail(issues, path, "A request time must be at most 9999-11-30T23:59:59.999Z.");
+  }
+  return value;
+}
+
+export function inRange(value: string, latest: number): boolean {
   const time = Date.parse(value);
   // Written so that an unreadable time fails the check.
   return time >= earliestInstant && time <= latest;
@@ -58,7 +68,7 @@ function inRange(value: string, latest: number): boolean {
  * Rejects days that the month does not have. V8 reads 2026-02-30 as 2 March, other engines
  * return NaN, so the day is checked here instead of trusting Date.parse.
  */
-function isCalendarInstant(value: string): boolean {
+export function isCalendarInstant(value: string): boolean {
   const year = Number(value.slice(0, 4));
   const month = Number(value.slice(5, 7));
   const day = Number(value.slice(8, 10));
@@ -69,7 +79,7 @@ function isCalendarInstant(value: string): boolean {
   return day <= daysInMonth && Number.isFinite(Date.parse(value));
 }
 
-/** Milliseconds since the epoch for a value that timestampSchema accepted. */
+/** Milliseconds since the epoch for a value that `timestamp` accepted. */
 export function instant(value: string): number {
   return Date.parse(value);
 }

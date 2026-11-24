@@ -1,5 +1,4 @@
-import { boundedSnapshot, detach, requestBounds } from "./bounds.js";
-import { safeParse } from "./parse.js";
+import { boundedSnapshot, requestBounds } from "./bounds.js";
 import { digest } from "./canonical.js";
 import {
   limitsHold,
@@ -13,13 +12,14 @@ import { PermitkitError } from "./errors.js";
 import { internalsOf, type CompiledPolicy, type DenyRule, type PolicyInternals } from "./policy.js";
 import { reasonHints, type ReasonCode } from "./reasons.js";
 import {
-  accessRequestSchema,
+  accessRequest,
   type AccessRequest,
   type Actor,
   type Scalar,
   type Subject,
 } from "./request.js";
 import { instant } from "./time.js";
+import { invalid, type Issue } from "./validate.js";
 
 export type Outcome = "allow" | "deny" | "approval_required";
 
@@ -126,7 +126,7 @@ export function requestDigest(policy: CompiledPolicy, request: unknown): string 
 export type ParsedRequest =
   { ok: true; request: AccessRequest } | { ok: false; issues: { path: string; message: string }[] };
 
-/** Size guard plus schema validation. Never throws, also not for hostile getters or proxies. */
+/** Size guard plus validation. Never throws, also not for hostile getters or proxies. */
 export function parseRequest(input: unknown): ParsedRequest {
   try {
     return parseRequestUnguarded(input);
@@ -139,14 +139,12 @@ export function parseRequest(input: unknown): ParsedRequest {
 function parseRequestUnguarded(input: unknown): ParsedRequest {
   const snapshot = boundedSnapshot(input, requestBounds);
   if (snapshot === undefined) return { ok: false, issues: [{ path: "", message: oversized }] };
-  const parsed = safeParse(accessRequestSchema, snapshot);
-  if (parsed.success) return { ok: true, request: detach(parsed.data) };
+  const found: Issue[] = [];
+  const request = accessRequest(snapshot, null, found);
+  if (request !== invalid) return { ok: true, request };
   return {
     ok: false,
-    issues: parsed.error.issues.map((item) => ({
-      path: item.path.join("."),
-      message: item.message,
-    })),
+    issues: found.map((item) => ({ path: item.path.join("."), message: item.message })),
   };
 }
 

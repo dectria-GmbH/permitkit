@@ -19,6 +19,7 @@ const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket
 describe("exported helpers under a polluted Array.prototype", () => {
   it("parseRequest, toDecisionRecord and requestDigest do not throw raw errors", () => {
     const decision = decide(policy, request);
+    const cleanDigest = requestDigest(policy, request);
     // oxlint-disable-next-line no-extend-native
     Object.defineProperty(Array.prototype, "constructor", {
       value: 1,
@@ -46,7 +47,9 @@ describe("exported helpers under a polluted Array.prototype", () => {
         writable: true,
       });
     }
-    expect(outcomes).toEqual([false, "permitkit.decision/2", "request_invalid"]);
+    // The validators use no array species, so this pollution no longer breaks them; the digest
+    // must then be the one computed without pollution.
+    expect(outcomes).toEqual([true, "permitkit.decision/2", cleanDigest]);
   });
 });
 
