@@ -146,3 +146,98 @@ describe("decisions under polluted built-ins", () => {
     expect([...result, added]).toEqual(["threw catalog_invalid", "v", "v"]);
   });
 });
+
+/** A PermitkitError whose code getter throws a raw error. */
+class ThrowingCode extends PermitkitError {
+  constructor() {
+    super("policy_unknown", "made by the caller");
+    Object.defineProperty(this, "code", {
+      get(): never {
+        throw new Error("raw error from the code getter");
+      },
+    });
+  }
+}
+
+/** Like capture(), but reads the code only from an own data property, so no getter runs. */
+function captureSafe(run: () => string): string {
+  try {
+    return run();
+  } catch (error) {
+    if (!PermitkitError.is(error)) return "threw raw";
+    const code = Object.getOwnPropertyDescriptor(error, "code");
+    return code !== undefined && "value" in code ? `threw ${String(code.value)}` : "threw spoof";
+  }
+}
+
+/** Runs with target[key] as a getter that throws the made value. Returns results and calls. */
+function withThrowingGetter<T>(
+  target: object,
+  key: string,
+  make: () => unknown,
+  run: () => T,
+): { result: T; calls: number } {
+  const saved = Object.getOwnPropertyDescriptor(target, key);
+  let calls = 0;
+  // The test simulates accessor pollution of a built-in prototype elsewhere in the process.
+  // oxlint-disable-next-line no-extend-native
+  Object.defineProperty(target, key, {
+    get() {
+      calls += 1;
+      throw make();
+    },
+    configurable: true,
+  });
+  try {
+    return { result: run(), calls };
+  } finally {
+    if (saved === undefined) Reflect.deleteProperty(target, key);
+    else Object.defineProperty(target, key, saved);
+  }
+}
+
+const spoofs: [label: string, make: () => unknown][] = [
+  ["a caller-made policy_unknown", () => new PermitkitError("policy_unknown", "spoof")],
+  ["a PermitkitError with a throwing code getter", () => new ThrowingCode()],
+];
+
+describe("decisions under accessor pollution", () => {
+  // Set.prototype.has runs inside the decision, so guarded() catches what it throws.
+  it.each(spoofs)("decide and explain deny %s", (_label, make) => {
+    const { result, calls } = withThrowingGetter(Set.prototype, "has", make, () => [
+      captureSafe(() => decide(policy, request()).reason),
+      captureSafe(() => explain(policy, request()).decision.reason),
+    ]);
+    expect(calls).toBeGreaterThan(0);
+    expect(result).toEqual(["invalid_request", "invalid_request"]);
+  });
+
+  // Array.prototype.includes runs in the AuthZEN key check, before decide(), so the catch in
+  // evaluate() handles what it throws.
+  it.each(spoofs)("evaluate denies %s", (_label, make) => {
+    const { result, calls } = withThrowingGetter(Array.prototype, "includes", make, () =>
+      captureSafe(() => evaluate(policy, authzen()).context.reason_codes[0] ?? "none"),
+    );
+    expect(calls).toBeGreaterThan(0);
+    expect(result).toBe("invalid_request");
+  });
+
+  it("still throw policy_unknown for a policy from elsewhere", () => {
+    const forged = { version: "v", digest: "d" } as never;
+    const { result } = withThrowingGetter(
+      Set.prototype,
+      "has",
+      () => new ThrowingCode(),
+      () => [
+        captureSafe(() => decide(forged, request()).reason),
+        captureSafe(() => explain(forged, request()).decision.reason),
+        captureSafe(() => String(evaluate(forged, authzen()).decision)),
+      ],
+    );
+    expect(result).toEqual([
+      "threw policy_unknown",
+      "threw policy_unknown",
+      "threw policy_unknown",
+    ]);
+  });
+});

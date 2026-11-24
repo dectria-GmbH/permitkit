@@ -442,18 +442,21 @@ function agentGrantValidity(actor: Actor, principal: Subject, now: number): Reas
 }
 
 /**
- * Runs a decision and turns any failure that is not a PermitkitError into a deny. Data-valued
- * pollution of built-in prototypes can make library internals throw; the result must still be a
- * deny, built here without array methods that such pollution can break.
+ * Runs a decision and turns any failure into a deny. Pollution of built-in prototypes can make
+ * library internals throw; the result must still be a deny, built here without array methods
+ * that such pollution can break.
  */
 function guarded(policy: CompiledPolicy, evaluate: () => Decision): Decision {
+  // The documented error of decide() and explain(), decided before the try from the registry
+  // alone. Inside the try, no error can become a throw.
+  if (internalsOf(policy) === undefined) {
+    throw new PermitkitError("policy_unknown", "decide() needs a policy from compilePolicy().");
+  }
   try {
     return evaluate();
-  } catch (error) {
-    // Only the documented error of decide() and explain() passes. Any other error, also a
-    // PermitkitError such as not_canonical from a polluted built-in, becomes the deny below:
-    // decisions never throw. A brand check, not instanceof, so a thrown Proxy runs no trap.
-    if (PermitkitError.is(error) && error.code === "policy_unknown") throw error;
+  } catch {
+    // Every error denies, also a PermitkitError, and no property of it is read. Under accessor
+    // pollution, internals can throw a caller-made error whose code getter lies or throws.
     return {
       outcome: "deny",
       allowed: false,
