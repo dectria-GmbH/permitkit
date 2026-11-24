@@ -7,7 +7,7 @@ import {
   type MatchedRule,
   type Outcome,
 } from "./decide.js";
-import type { CompiledPolicy } from "./policy.js";
+import { internalsOf, type CompiledPolicy } from "./policy.js";
 import type { ReasonCode } from "./reasons.js";
 
 /**
@@ -71,11 +71,15 @@ function onlyKeys(value: unknown, keys: readonly string[]): boolean {
  * accepted and not used.
  */
 export function evaluate(policy: CompiledPolicy, input: AuthZenRequest): AuthZenResponse {
+  // The documented error of evaluate(), decided before the try from the registry alone.
+  if (internalsOf(policy) === undefined) {
+    throw new PermitkitError("policy_unknown", "evaluate() needs a policy from compilePolicy().");
+  }
   try {
     return evaluateUnsafe(policy, input);
-  } catch (error) {
-    // Programming errors (a policy from elsewhere) still throw. Anything else denies.
-    if (error instanceof PermitkitError) throw error;
+  } catch {
+    // Every error denies, and no property of it is read: under accessor pollution, internals
+    // can throw a caller-made error whose code getter lies or throws.
     return responseOf(decide(policy, null));
   }
 }

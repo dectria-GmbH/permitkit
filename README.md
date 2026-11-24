@@ -16,13 +16,14 @@ Status: 0.1, in development, not published. The API can change before 1.0.
 - **Auditable.** A decision carries the policy version, a policy digest and a request digest.
   `toDecisionRecord()` and `reevaluate()` replay a logged decision under the same policy.
 - **Fixed catalogue, free policy.** Permissions live in code. Roles, scopes, limits, deny rules
-  and approval rules are versioned data, validated with Zod.
+  and approval rules are versioned data, checked by permitkit's own validators.
 - **One identity per human.** A subject is one identity with any number of role assignments.
   permitkit has no notion of a second account for the same person, so dual approval compares
   identity ids. Your identity layer must make sure that one person has one id.
 - **Agents act on behalf of a principal, with narrower rights.** The effective right is the
   intersection of the principal's roles and the agent grant.
-- **No framework in the core.** The only runtime dependency is Zod 3.
+- **No framework in the core.** `compilePolicy` and `decide` use no third-party code.
+  `evaluateApprovals` and the audit functions still use Zod 3, the only runtime dependency.
 
 ## Install
 
@@ -131,6 +132,12 @@ migrate old documents. `compilePolicy()` returns a frozen policy with a digest o
 normalized document. Only compiled policies are accepted by `decide()`. A request can pin
 `context.policyVersion` (a label) and `context.policyDigest` (the exact content); a mismatch
 denies with `policy_version_mismatch`. Pin the digest when the label alone is not enough.
+
+`compilePolicy()` throws a `PermitkitError` with a `code` and a list of `issues`. To catch it, use
+`PermitkitError.is(error)` instead of `instanceof`. It returns `true` for any `PermitkitError`
+instance, also one you created and one of a subclass, and `false` for an error from another copy
+of the package. It never throws and runs no caller code, also when the thrown value is a Proxy.
+See Errors in [docs/reference.md](docs/reference.md).
 
 Shapes:
 
@@ -391,7 +398,7 @@ code can change the behaviour of any library in the process.
   lists and records that permitkit cannot check.
 - Agent grants usually come from database rows. Map every column on purpose: a nullable
   `revoked_at` column maps to `revokedAt: row.revoked_at ?? null`, never to a missing key.
-- Zod drops a `__proto__` key in `resource.properties`. It cannot be a scope or limit name, but
+- permitkit drops a `__proto__` key in `resource.properties`. It cannot be a scope or limit name, but
   two requests that differ only in it share a request digest.
 - A service principal is its own identity. If a person triggers a service action, model the
   person as the principal and the service as the actor, or the person can approve their own

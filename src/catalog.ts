@@ -1,5 +1,6 @@
 import { compareText, digest } from "./canonical.js";
 import { PermitkitError, type PolicyIssue } from "./errors.js";
+import { setAdd, setHas } from "./intrinsics.js";
 
 const namePattern = /^[a-z][a-z0-9_-]*$/;
 
@@ -41,7 +42,7 @@ const catalogs = new WeakSet<object>();
 
 /** True only for objects that defineCatalog returned in this process. */
 export function isCatalog(value: unknown): value is Catalog {
-  return typeof value === "object" && value !== null && catalogs.has(value);
+  return typeof value === "object" && value !== null && setHas(catalogs, value);
 }
 
 export function defineCatalog(definition: CatalogDefinition): Catalog {
@@ -131,7 +132,7 @@ export function defineCatalog(definition: CatalogDefinition): Catalog {
       return resources.get(permission.slice(0, separator));
     },
   });
-  catalogs.add(catalog);
+  setAdd(catalogs, catalog);
   return catalog;
 }
 

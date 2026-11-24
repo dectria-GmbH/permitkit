@@ -19,7 +19,8 @@
       "process | return Reflect.get(globalThis, \"process\");"
     ],
     "src/policy.ts": [
-      "process | /** True only for objects that compilePolicy returned in this process. */"
+      "process | /** True only for objects that compilePolicy returned in this process. */",
+      "process | hint: \"Check for changed built-in prototypes in this process, then compile again.\","
     ],
     "src/sha256.ts": [
       "node: | * SHA-256 (FIPS 180-4) in plain TypeScript. permitkit runs in runtimes without `node:crypto`,"
@@ -45,7 +46,8 @@
       "process | return Reflect.get(globalThis, \"process\");"
     ],
     "dist/policy.js": [
-      "process | /** True only for objects that compilePolicy returned in this process. */"
+      "process | /** True only for objects that compilePolicy returned in this process. */",
+      "process | hint: \"Check for changed built-in prototypes in this process, then compile again.\","
     ],
     "dist/sha256.js": [
       "node: | * SHA-256 (FIPS 180-4) in plain TypeScript. permitkit runs in runtimes without `node:crypto`,"

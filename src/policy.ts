@@ -1,236 +1,31 @@
-import { z } from "zod";
-
-import { boundedSnapshot, detach, policyBounds } from "./bounds.js";
+import { boundedSnapshot, policyBounds } from "./bounds.js";
 import { compareText, digest } from "./canonical.js";
 import { isCatalog, type Catalog } from "./catalog.js";
-import { PermitkitError, type PolicyIssue } from "./errors.js";
-import { safeParse } from "./parse.js";
-import { maxApprovalWindowSeconds } from "./time.js";
+import { PermitkitError, type ErrorCode, type PolicyIssue } from "./errors.js";
+import {
+  policyDocument,
+  policySchemaVersion,
+  type ApprovalRule,
+  type DenyRule,
+  type GrantRule,
+  type PolicyDocument,
+  type Scope,
+} from "./policy-document.js";
+import { mapGet, mapSet, ownDataValue } from "./intrinsics.js";
+import { invalid, joined, type Issue } from "./validate.js";
 
-/** The policy document format that this release reads. Older formats are refused. */
-export const policySchemaVersion = 2;
-
-const identifier = z
-  .string()
-  .min(1)
-  .max(128)
-  .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/, "Use letters, digits, and _ . : - only.");
-const permissionName = z
-  .string()
-  .regex(/^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$/, "Use the form <resource>:<action>.");
-
-/**
- * A discriminated union on `kind` whose error names the accepted shapes. A missing, null, empty
- * or misspelt value is refused; no shape is ever read as the wide case by default.
- */
-function explicit<
-  Options extends [
-    z.ZodDiscriminatedUnionOption<"kind">,
-    ...z.ZodDiscriminatedUnionOption<"kind">[],
-  ],
->(what: string, shapes: string, options: Options) {
-  const message = `State the ${what} explicitly: ${shapes}. A missing, null, empty or unknown ${what} is refused.`;
-  return z.discriminatedUnion("kind", options, {
-    errorMap: (issue, context) =>
-      issue.code === z.ZodIssueCode.invalid_type || issue.code === "invalid_union_discriminator"
-        ? { message }
-        : { message: context.defaultError },
-  });
-}
-
-const scopeValue = z
-  .string()
-  .min(1)
-  .refine((value) => value !== "*", '"*" is not a wildcard. Use { kind: "all" } for everywhere.');
-
-/** Property name to the list of allowed string values. At least one property. */
-const scopeValueLists = z
-  .record(identifier, z.array(scopeValue).min(1).max(1000))
-  .refine(
-    (properties) => Object.keys(properties).length > 0,
-    'A match scope needs at least one property. Use { kind: "all" } for everywhere.',
-  );
-
-/**
- * Where a grant, role assignment, agent grant entry or deny rule applies.
- * `{ kind: "all" }` is the only way to say "everywhere". `{ kind: "match", properties }` lists
- * the allowed string values per resource property.
- */
-export const scopeSchema = explicit(
-  "scope",
-  '{ kind: "all" } or { kind: "match", properties: { <property>: [<values>] } }',
-  [
-    z.object({ kind: z.literal("all") }).strict(),
-    z.object({ kind: z.literal("match"), properties: scopeValueLists }).strict(),
-  ],
-);
-
-/**
- * An inclusive numeric range. Both bounds are required: a number, or `null` for "no bound on
- * this side". A lost bound is refused, never read as open. At least one bound is a number.
- */
-const limitSchema = z
-  .object({ min: z.number().finite().nullable(), max: z.number().finite().nullable() })
-  .strict()
-  .refine(
-    (limit) => limit.min !== null || limit.max !== null,
-    "Give at least one bound as a number. Both bounds null restrict nothing.",
-  )
-  .refine(
-    (limit) => limit.min === null || limit.max === null || limit.min <= limit.max,
-    "min must not be greater than max.",
-  );
-
-/**
- * Numeric limits of a grant or agent grant entry. `{ kind: "unlimited" }` is the only way to
- * say "no limit". `{ kind: "range", properties }` gives a range per numeric resource property.
- */
-export const limitsSchema = explicit(
-  "limits",
-  '{ kind: "unlimited" } or { kind: "range", properties: { <property>: { min, max } } } with each bound a number or null',
-  [
-    z.object({ kind: z.literal("unlimited") }).strict(),
-    z
-      .object({
-        kind: z.literal("range"),
-        properties: z
-          .record(identifier, limitSchema)
-          .refine(
-            (properties) => Object.keys(properties).length > 0,
-            'A range needs at least one property. Use { kind: "unlimited" } for no limit.',
-          ),
-      })
-      .strict(),
-  ],
-);
-
-/**
- * When an approval rule applies. `{ kind: "always" }` applies to every covered request.
- * `{ kind: "threshold", properties }` applies if any listed property is at least `gte`, is
- * missing, or is not a finite number.
- */
-export const whenSchema = explicit(
-  "when condition",
-  '{ kind: "always" } or { kind: "threshold", properties: { <property>: { gte } } }',
-  [
-    z.object({ kind: z.literal("always") }).strict(),
-    z
-      .object({
-        kind: z.literal("threshold"),
-        properties: z
-          .record(identifier, z.object({ gte: z.number().finite() }).strict())
-          .refine(
-            (properties) => Object.keys(properties).length > 0,
-            'A threshold needs at least one property. Use { kind: "always" } instead.',
-          ),
-      })
-      .strict(),
-  ],
-);
-
-/**
- * Who may approve. `{ kind: "roles", roles }`: a holder of one of these roles whose assignment
- * scope covers the resource. `{ kind: "permission" }`: a holder of the permission itself.
- */
-export const eligibleApproversSchema = explicit(
-  "approver eligibility",
-  '{ kind: "roles", roles: [<role>] } or { kind: "permission" }',
-  [
-    z.object({ kind: z.literal("permission") }).strict(),
-    z.object({ kind: z.literal("roles"), roles: z.array(identifier).min(1) }).strict(),
-  ],
-);
-
-export const grantSchema = z
-  .object({
-    id: identifier,
-    permissions: z.array(permissionName).min(1),
-    scope: scopeSchema,
-    limits: limitsSchema,
-  })
-  .strict();
-
-export const roleSchema = z
-  .object({
-    description: z.string().max(1000).optional(),
-    grants: z.array(grantSchema),
-  })
-  .strict();
-
-// Literals, not z.enum: Zod 3 caches enum values on the instance through a lazy property.
-export const subjectTypeSchema = z.union([
-  z.literal("human"),
-  z.literal("service"),
-  z.literal("agent"),
-]);
-
-export const denySchema = z
-  .object({
-    id: identifier,
-    description: z.string().max(1000).optional(),
-    permissions: z.array(permissionName).min(1),
-    /** The rule applies only to subjects that hold one of these roles. Absent: everyone. */
-    roles: z.array(identifier).min(1).optional(),
-    /** The rule applies only to these subject types. `agent` means an agent acts. Absent: all. */
-    subjectTypes: z.array(subjectTypeSchema).min(1).optional(),
-    /**
-     * The resources the rule applies to. In a match scope, a property that is missing on the
-     * resource or is not a string counts as inside, so leaving out a property never escapes it.
-     */
-    scope: scopeSchema,
-  })
-  .strict();
-
-export const approvalRuleSchema = z
-  .object({
-    id: identifier,
-    description: z.string().max(1000).optional(),
-    permissions: z.array(permissionName).min(1),
-    when: whenSchema,
-    /** Number of distinct approvers besides the requester. */
-    approvers: z.number().int().min(1).max(10),
-    eligibleApprovers: eligibleApproversSchema,
-    /** Approvals count only inside this window after the request time. */
-    expiresInSeconds: z.number().int().min(60).max(maxApprovalWindowSeconds),
-    /** Each approval must carry a proof that a registered verifier accepts. */
-    requireProof: z.boolean(),
-    /** The proof types that count. Required with requireProof, refused without it. */
-    proofTypes: z.array(z.string().min(1).max(64)).min(1).optional(),
-  })
-  .strict();
-
-export const separationOfDutiesSchema = z
-  .object({
-    /** Who requested an action of a type before may never approve an action of that type. */
-    requesterNeverApprovesSameType: z.boolean(),
-    /** Nobody may hold both a requesting and an approving role for the same permission. */
-    exclusiveRequestAndApproveRoles: z.boolean(),
-  })
-  .strict();
-
-export const policySchema = z
-  .object({
-    /** Format version of the policy document. */
-    schema: z.literal(policySchemaVersion),
-    /** Operator-chosen version label. Decisions and audit records carry it. */
-    version: z.string().min(1).max(128),
-    roles: z.record(identifier, roleSchema),
-    // Required, also when empty: a lost list must not read as "no deny rules".
-    denies: z.array(denySchema),
-    approvalRules: z.array(approvalRuleSchema),
-    separationOfDuties: separationOfDutiesSchema,
-  })
-  .strict();
-
-export type PolicyInput = z.input<typeof policySchema>;
-export type PolicyDocument = z.output<typeof policySchema>;
-export type Scope = z.output<typeof scopeSchema>;
-export type Limits = z.output<typeof limitsSchema>;
-export type When = z.output<typeof whenSchema>;
-export type EligibleApprovers = z.output<typeof eligibleApproversSchema>;
-export type GrantRule = z.output<typeof grantSchema>;
-export type DenyRule = z.output<typeof denySchema>;
-export type ApprovalRule = z.output<typeof approvalRuleSchema>;
+export { policySchemaVersion } from "./policy-document.js";
+export type {
+  ApprovalRule,
+  DenyRule,
+  EligibleApprovers,
+  GrantRule,
+  Limits,
+  PolicyDocument,
+  PolicyInput,
+  Scope,
+  When,
+} from "./policy-document.js";
 
 export interface CompiledRole {
   readonly name: string;
@@ -276,7 +71,7 @@ const internals = new WeakMap<object, PolicyInternals>();
 /** The lookup tables of a compiled policy, or undefined for any other value. */
 export function internalsOf(value: unknown): PolicyInternals | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  return internals.get(value);
+  return mapGet(internals, value);
 }
 
 /** True only for objects that compilePolicy returned in this process. */
@@ -290,6 +85,37 @@ export function isCompiledPolicy(value: unknown): value is CompiledPolicy {
  * in another format version, and `policy_invalid` with a list of issues for any other error.
  */
 export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy {
+  try {
+    return compileChecked(catalog, input);
+  } catch (error) {
+    if (PermitkitError.is(error) && isCompileCode(ownDataValue(error, "code"))) throw error;
+    // Data-valued pollution of built-in prototypes can make internals throw, for example a
+    // replaced Array.prototype.toSorted. The caller still gets a PermitkitError, never the raw
+    // error, whose text could come from the polluted value.
+    throw new PermitkitError("policy_invalid", "The policy document could not be compiled.", [
+      {
+        path: "",
+        message: "Compiling the policy failed inside permitkit.",
+        hint: "Check for changed built-in prototypes in this process, then compile again.",
+      },
+    ]);
+  }
+}
+
+/**
+ * The error codes that compilePolicy itself throws. Any other error becomes policy_invalid.
+ * The catch reads the code only from an own data property: a subclass can redefine `code` as a
+ * getter, and a polluted built-in can throw such an instance from inside compilePolicy. The
+ * brand check in PermitkitError.is excludes a Proxy, so that read runs no trap.
+ * Plain comparisons, no Set: a polluted Set.prototype.has would throw here.
+ */
+function isCompileCode(code: unknown): code is ErrorCode {
+  return (
+    code === "catalog_invalid" || code === "policy_invalid" || code === "policy_schema_unsupported"
+  );
+}
+
+function compileChecked(catalog: Catalog, input: unknown): CompiledPolicy {
   if (!isCatalog(catalog)) {
     throw new PermitkitError(
       "catalog_invalid",
@@ -328,16 +154,21 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
       ],
     );
   }
-  const parsed = safeParse(policySchema, snapshot);
-  if (!parsed.success) {
-    const issues = parsed.error.issues.map((item) => ({
-      path: item.path.join("."),
-      message: item.message,
-      hint: "Fix the field shape. Unknown keys are rejected, so check the spelling.",
-    }));
+  const found: Issue[] = [];
+  const document = validated(snapshot, found);
+  if (document === invalid) {
+    const issues: PolicyIssue[] = [];
+    for (let index = 0; index < found.length; index += 1) {
+      const item = found[index];
+      if (item === undefined) continue;
+      issues.push({
+        path: joined(item.path, "."),
+        message: item.message,
+        hint: "Fix the field shape. Unknown keys are rejected, so check the spelling.",
+      });
+    }
     throw new PermitkitError("policy_invalid", "The policy document is not valid.", issues);
   }
-  const document = detach(parsed.data);
   const issues = checkReferences(catalog, document);
   if (issues.length > 0) {
     throw new PermitkitError("policy_invalid", "The policy document is not valid.", issues);
@@ -360,7 +191,8 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
     catalog,
     document,
   });
-  internals.set(
+  mapSet(
+    internals,
     policy,
     Object.freeze({
       roles: lookup(roles),
@@ -370,6 +202,20 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
     }),
   );
   return policy;
+}
+
+/**
+ * The validated document, a fresh copy in objects without a prototype, or `invalid` with at
+ * least one issue. Never throws: an input that breaks validation counts as invalid.
+ */
+function validated(snapshot: unknown, issues: Issue[]): PolicyDocument | typeof invalid {
+  try {
+    return policyDocument(snapshot, null, issues);
+  } catch {
+    issues.length = 0;
+    issues.push({ path: [], message: "The input could not be validated." });
+    return invalid;
+  }
 }
 
 /** The property names that a scope restricts. `all` restricts none. */
@@ -390,15 +236,16 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
   };
   const roleNames = new Set(Object.keys(document.roles));
   const checkRoles = (roles: readonly string[], path: string) => {
-    roles.forEach((role, roleIndex) => {
-      if (!roleNames.has(role)) {
+    for (let roleIndex = 0; roleIndex < roles.length; roleIndex += 1) {
+      const role = roles[roleIndex];
+      if (role === undefined || !roleNames.has(role)) {
         issues.push({
           path: `${path}.${roleIndex}`,
-          message: `Role ${role} is not defined.`,
+          message: `Role ${String(role)} is not defined.`,
           hint: "Define the role under roles, or fix the spelling.",
         });
       }
-    });
+    }
   };
 
   const checkPermissions = (
@@ -406,22 +253,23 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
     path: string,
     properties: { scope: readonly string[]; limits: readonly string[]; limitsKey: string },
   ) => {
-    permissions.forEach((permission, index) => {
-      const resource = catalog.resourceOf(permission);
+    for (let index = 0; index < permissions.length; index += 1) {
+      const permission = permissions[index];
+      const resource = permission === undefined ? undefined : catalog.resourceOf(permission);
       if (resource === undefined) {
         issues.push({
           path: `${path}.permissions.${index}`,
-          message: `Permission ${permission} is not in the catalogue.`,
+          message: `Permission ${String(permission)} is not in the catalogue.`,
           hint: "Add the action to the catalogue in code, or fix the spelling.",
         });
-        return;
+        continue;
       }
       for (const name of properties.scope) {
         if (!resource.scopes.includes(name)) {
           issues.push({
             path: `${path}.scope.properties.${name}`,
             message: `Resource type ${resource.type} has no scope property ${name}.`,
-            hint: `Use one of: ${resource.scopes.join(", ") || "(none)"}.`,
+            hint: `Use one of: ${joined(resource.scopes, ", ") || "(none)"}.`,
           });
         }
       }
@@ -430,17 +278,19 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
           issues.push({
             path: `${path}.${properties.limitsKey}.properties.${name}`,
             message: `Resource type ${resource.type} has no limit property ${name}.`,
-            hint: `Use one of: ${resource.limits.join(", ") || "(none)"}.`,
+            hint: `Use one of: ${joined(resource.limits, ", ") || "(none)"}.`,
           });
         }
       }
-    });
+    }
   };
 
   for (const roleName of Object.keys(document.roles)) {
     const role = document.roles[roleName];
     if (role === undefined) continue;
-    role.grants.forEach((grant, index) => {
+    for (let index = 0; index < role.grants.length; index += 1) {
+      const grant = role.grants[index];
+      if (grant === undefined) continue;
       const path = `roles.${roleName}.grants.${index}`;
       claimId(grant.id, path);
       checkPermissions(grant.permissions, path, {
@@ -448,10 +298,12 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
         limits: grant.limits.kind === "range" ? Object.keys(grant.limits.properties) : [],
         limitsKey: "limits",
       });
-    });
+    }
   }
 
-  document.denies.forEach((deny, index) => {
+  for (let index = 0; index < document.denies.length; index += 1) {
+    const deny = document.denies[index];
+    if (deny === undefined) continue;
     const path = `denies.${index}`;
     claimId(deny.id, path);
     checkPermissions(deny.permissions, path, {
@@ -460,10 +312,12 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
       limitsKey: "limits",
     });
     if (deny.roles !== undefined) checkRoles(deny.roles, `${path}.roles`);
-  });
+  }
 
   const ruled = new Map<string, string>();
-  document.approvalRules.forEach((rule, index) => {
+  for (let index = 0; index < document.approvalRules.length; index += 1) {
+    const rule = document.approvalRules[index];
+    if (rule === undefined) continue;
     const path = `approvalRules.${index}`;
     claimId(rule.id, path);
     checkPermissions(rule.permissions, path, {
@@ -509,7 +363,7 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
         hint: 'Use eligibleApprovers: { kind: "roles", roles: [...] }, or switch off exclusiveRequestAndApproveRoles.',
       });
     }
-  });
+  }
 
   return issues;
 }

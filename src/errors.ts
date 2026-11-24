@@ -29,13 +29,27 @@ const errorHints: Record<ErrorCode, string> = {
 };
 
 export class PermitkitError extends Error {
+  // A class field, so the name is defined on the instance. An assignment would throw if
+  // Error.prototype.name were made read-only or a getter.
+  override name: string = "PermitkitError";
   readonly code: ErrorCode;
   readonly hint: string;
   readonly issues: readonly PolicyIssue[];
+  /** Set only by this constructor. `#brand in value` runs no Proxy trap, unlike instanceof. */
+  // Read by `#brand in value` in is(); the rule does not see that use.
+  // oxlint-disable-next-line eslint/no-unused-private-class-members
+  readonly #brand = true;
+
+  /**
+   * True if the value is a PermitkitError from this module. Safe for any value: unlike
+   * instanceof, it runs no Proxy trap and reads no prototype.
+   */
+  static is(value: unknown): value is PermitkitError {
+    return typeof value === "object" && value !== null && #brand in value;
+  }
 
   constructor(code: ErrorCode, message: string, issues: readonly PolicyIssue[] = []) {
     super(message);
-    this.name = "PermitkitError";
     this.code = code;
     this.hint = errorHints[code];
     this.issues = issues;

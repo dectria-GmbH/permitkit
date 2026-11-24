@@ -15,8 +15,13 @@ import { safeParse } from "./parse.js";
 import { PermitkitError } from "./errors.js";
 import { internalsOf, type CompiledPolicy } from "./policy.js";
 import type { ApprovalReasonCode, ApprovalRejectionCode } from "./reasons.js";
-import { accessRequestSchema, subjectSchema } from "./request.js";
-import { instant, requestTimeSchema, timestampSchema } from "./time.js";
+import { instant } from "./time.js";
+import {
+  accessRequestSchema,
+  requestTimeSchema,
+  subjectSchema,
+  timestampSchema,
+} from "./zod-schemas.js";
 
 const hexDigest = z.string().regex(/^[0-9a-f]{64}$/, "Use a lowercase hex SHA-256 digest.");
 const timestamp = timestampSchema;

@@ -1,5 +1,4 @@
-import { boundedSnapshot, detach, requestBounds } from "./bounds.js";
-import { safeParse } from "./parse.js";
+import { boundedSnapshot, requestBounds } from "./bounds.js";
 import { digest } from "./canonical.js";
 import {
   limitsHold,
@@ -13,13 +12,15 @@ import { PermitkitError } from "./errors.js";
 import { internalsOf, type CompiledPolicy, type DenyRule, type PolicyInternals } from "./policy.js";
 import { reasonHints, type ReasonCode } from "./reasons.js";
 import {
-  accessRequestSchema,
+  accessRequest,
   type AccessRequest,
   type Actor,
   type Scalar,
   type Subject,
 } from "./request.js";
 import { instant } from "./time.js";
+import { mapGet, mapSet } from "./intrinsics.js";
+import { invalid, joined, type Issue } from "./validate.js";
 
 export type Outcome = "allow" | "deny" | "approval_required";
 
@@ -126,7 +127,7 @@ export function requestDigest(policy: CompiledPolicy, request: unknown): string 
 export type ParsedRequest =
   { ok: true; request: AccessRequest } | { ok: false; issues: { path: string; message: string }[] };
 
-/** Size guard plus schema validation. Never throws, also not for hostile getters or proxies. */
+/** Size guard plus validation. Never throws, also not for hostile getters or proxies. */
 export function parseRequest(input: unknown): ParsedRequest {
   try {
     return parseRequestUnguarded(input);
@@ -139,15 +140,15 @@ export function parseRequest(input: unknown): ParsedRequest {
 function parseRequestUnguarded(input: unknown): ParsedRequest {
   const snapshot = boundedSnapshot(input, requestBounds);
   if (snapshot === undefined) return { ok: false, issues: [{ path: "", message: oversized }] };
-  const parsed = safeParse(accessRequestSchema, snapshot);
-  if (parsed.success) return { ok: true, request: detach(parsed.data) };
-  return {
-    ok: false,
-    issues: parsed.error.issues.map((item) => ({
-      path: item.path.join("."),
-      message: item.message,
-    })),
-  };
+  const found: Issue[] = [];
+  const request = accessRequest(snapshot, null, found);
+  if (request !== invalid) return { ok: true, request };
+  const issues: { path: string; message: string }[] = [];
+  for (let index = 0; index < found.length; index += 1) {
+    const item = found[index];
+    if (item !== undefined) issues.push({ path: joined(item.path, "."), message: item.message });
+  }
+  return { ok: false, issues };
 }
 
 /** True if a deny rule applies to the subject for this permission and resource. */
@@ -169,12 +170,12 @@ const subjectFacts = new WeakMap<Subject, { types: Set<string>; held: Set<string
 
 /** Subject types and held roles, computed once per validated subject object. */
 function factsOf(subject: Subject): { types: Set<string>; held: Set<string> } {
-  let facts = subjectFacts.get(subject);
+  let facts = mapGet(subjectFacts, subject);
   if (facts === undefined) {
     const types = new Set<string>([subject.type]);
     if (subject.act !== null) types.add("agent");
     facts = { types, held: new Set(subject.roles.map((assignment) => assignment.role)) };
-    subjectFacts.set(subject, facts);
+    mapSet(subjectFacts, subject, facts);
   }
   return facts;
 }
@@ -289,7 +290,13 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
 
   const properties = request.resource.properties;
   const heldRoles = new Set(request.subject.roles.map((assignment) => assignment.role));
-  for (const rule of internal.denies) {
+  // Index loops, no for-of: an early exit closes an iterator, and closing reads `return`
+  // through the prototype chain, which a polluted Object.prototype supplies.
+  for (let index = 0; index < internal.denies.length; index += 1) {
+    const rule = internal.denies[index];
+    // An unreadable deny rule is an internal failure: guarded() turns it into the documented
+    // deny with reason invalid_request. It is never skipped.
+    if (rule === undefined) throw new Error("A deny rule could not be read.");
     const matched = denyRuleMatches(rule, request.subject, permission, properties);
     trace?.push({ step: "deny_rule", id: rule.id, matched });
     if (matched) return deny("denied_by_rule", requestDigestValue, { kind: "deny", id: rule.id });
@@ -297,12 +304,15 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
 
   let matchedGrant: MatchedRule | null = null;
   let closestFailure: "scope_mismatch" | "limit_exceeded" | null = null;
-  search: for (const assignment of request.subject.roles) {
+  search: for (let index = 0; index < request.subject.roles.length; index += 1) {
+    const assignment = request.subject.roles[index];
+    if (assignment === undefined) continue;
     const role = internal.roles.get(assignment.role);
     trace?.push({ step: "role", role: assignment.role, known: role !== undefined });
     if (role === undefined) continue;
-    for (const grant of role.grants) {
-      if (!grant.permissions.includes(permission)) continue;
+    for (let grantIndex = 0; grantIndex < role.grants.length; grantIndex += 1) {
+      const grant = role.grants[grantIndex];
+      if (grant === undefined || !grant.permissions.includes(permission)) continue;
       const assignmentScope = scopeCovers(assignment.scope, properties);
       if (!assignmentScope.ok) {
         trace?.push({
@@ -432,15 +442,21 @@ function agentGrantValidity(actor: Actor, principal: Subject, now: number): Reas
 }
 
 /**
- * Runs a decision and turns any failure that is not a PermitkitError into a deny. Data-valued
- * pollution of built-in prototypes can make library internals throw; the result must still be a
- * deny, built here without array methods that such pollution can break.
+ * Runs a decision and turns any failure into a deny. Pollution of built-in prototypes can make
+ * library internals throw; the result must still be a deny, built here without array methods
+ * that such pollution can break.
  */
 function guarded(policy: CompiledPolicy, evaluate: () => Decision): Decision {
+  // The documented error of decide() and explain(), decided before the try from the registry
+  // alone. Inside the try, no error can become a throw.
+  if (internalsOf(policy) === undefined) {
+    throw new PermitkitError("policy_unknown", "decide() needs a policy from compilePolicy().");
+  }
   try {
     return evaluate();
-  } catch (error) {
-    if (error instanceof PermitkitError) throw error;
+  } catch {
+    // Every error denies, also a PermitkitError, and no property of it is read. Under accessor
+    // pollution, internals can throw a caller-made error whose code getter lies or throws.
     return {
       outcome: "deny",
       allowed: false,

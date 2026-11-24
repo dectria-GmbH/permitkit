@@ -74,7 +74,10 @@ that would be valid.
 ## Errors
 
 permitkit throws only for programming and configuration errors. Decisions never throw for bad
-requests, including throwing getters and revoked proxies; they deny. `catalog_invalid` is also
+requests, including throwing getters and revoked proxies; they deny. `decide`, `explain` and
+`evaluate` throw only `policy_unknown`. Any other failure inside them, for example from a
+changed built-in prototype, gives a deny with reason `invalid_request`, `rule: null` and
+`requestDigest: null`. `catalog_invalid` is also
 thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
 `canonicalJson` and `digest` throw `not_canonical`, never a raw error: for objects whose prototype
 is not `Object.prototype`, `null` or `Array.prototype`, built-ins that the runtime's checks identify
@@ -106,7 +109,32 @@ the checks per runtime. Pass plain JSON data.
 | `not_canonical`             | `canonicalJson`, `digest`                                                                              | The value has no exact JSON form, or is not plain data.                    |
 
 Each `PermitkitError` has `code`, `hint` and, for validation errors, `issues` with `path`,
-`message` and `hint`.
+`message` and `hint`. The codes are stable. The wording of issue messages is not part of the API
+and can change in any release, so match on `code`, and on the reason code of a decision.
+
+`PermitkitError.is(value)` returns `true` for every instance that the `PermitkitError`
+constructor of this copy of permitkit built: the errors that permitkit throws, errors that you
+create with `new PermitkitError(...)`, and instances of subclasses. It returns `false` for an
+error from another copy of the package (a second install or another bundle), for an object made
+with `Object.create(PermitkitError.prototype)`, for object literals, `null` and primitives. It
+never throws. It checks a private field, so it runs no caller code: no Proxy trap and no getter,
+and it does not read the prototype chain.
+`instanceof` reads the prototype and runs the `getPrototypeOf` trap of a thrown Proxy, which can
+throw inside your `catch` block. Use `PermitkitError.is(error)` in a `catch` block that can see
+errors from code you do not control, and wherever a check must not throw:
+
+```ts
+try {
+  policy = compilePolicy(catalog, document);
+} catch (error) {
+  if (!PermitkitError.is(error)) throw error;
+  log(error.code, error.issues);
+}
+```
+
+The private field also makes the `PermitkitError` type nominal. An object literal with `code`,
+`hint` and `issues` no longer satisfies the type; create errors with `new PermitkitError(...)`.
+`name` stays a writable `string`, so a subclass can set its own name.
 
 ## Size bounds
 
@@ -128,6 +156,9 @@ that throws could identify, with a swapped prototype, also copies as its own key
 it has none; Node refuses it (see the README threat model). An error is identified there only
 where the runtime has `Error.isError`. A swapped typed array or boxed string is refused before
 its keys are read, on both paths, so its size costs nothing.
+The guard stays in front of every validator. Requests and policy documents use hand-written
+validators. Approval inputs and decision records still use Zod 3, which validates every item of
+an oversized array and keeps one issue per failing item (GHSA-mrhx-c7xc-m3w5, no fix in Zod 3).
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Audit records: 300,000 values, and the request inside meets the request
 bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.
@@ -156,6 +187,4 @@ normalized time is again a valid timestamp. A request time (`context.now`, and `
 The request digest has the format tag `permitkit.request/2`. It covers the agent grant entries,
 including their `scope` and `limits` in the schema 2 shape, so digests from the earlier format do
 not match. Audit records have the format tag `permitkit.decision/2`; a record with another tag is
-`not_replayable`. The
-guard exists because Zod 3 validates every item of an oversized array and keeps one issue per
-failing item (GHSA-mrhx-c7xc-m3w5, no fix in Zod 3).
+`not_replayable`.
