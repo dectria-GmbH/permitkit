@@ -1,7 +1,9 @@
 // A tripwire for plain uses of Node built-ins in code meant for a runtime without them (Cloudflare
-// workerd without nodejs_compat). It is not a proof. The scan is raw: comments and strings are not
-// stripped, so a template literal, a regex with a quote or an import with a comment cannot hide a
-// plain use. It works on the whole file text, so a match may span lines. Every match must be on
+// workerd without nodejs_compat). It is not a proof. Strings are not parsed, so a template
+// literal or a regex with a quote cannot hide a plain use. The scan reads the raw text and three
+// more views of it: with comments removed, with JS escape sequences decoded, and with both. A
+// match in any view counts. Comment removal is naive and may cut inside a string, which is why the
+// raw view stays. It works on whole file text, so a match may span lines. Every match must be on
 // the allowlist in portable-allowlist.json, with its exact line, as often as listed. A new match
 // fails, and so does a listed one that is gone.
 // A text scan cannot see names that code computes at run time, for example
@@ -19,7 +21,7 @@ const byCodeUnit = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 
 /**
  * Plain uses of Node globals and module syntax, as raw text. `\u` catches escapes in identifiers
- * (`process` is `process`). `Function(` and `eval` mark code built from strings, and
+ * (`\u0070rocess` is `process`). `Function(` and `eval` mark code built from strings, and
  * `import(` marks every dynamic import, also one split over lines; each needs a review. `node:`
  * catches a Node specifier written as one literal.
  */
@@ -29,6 +31,27 @@ const rawPattern =
 /** Static import and export specifiers, so that a bare `fs` or `crypto` is caught too. */
 const specifierPattern = /\b(?:from|import)\s*["']([^"']+)["']/g;
 
+/** Removes `//` and block comments. A comment becomes one space; a line comment keeps its newline. */
+function stripComments(source) {
+  return source.replaceAll(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, " ");
+}
+
+/**
+ * Decodes `\xHH`, `\uHHHH` and `\u{...}`. A backslash before any other character is dropped, as
+ * in a string literal; a backslash before a line break removes both.
+ */
+function decodeEscapes(source) {
+  return source.replaceAll(
+    /\\(?:x([0-9a-fA-F]{2})|u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|(\r\n|[\s\S]))/g,
+    (whole, hex, braces, unicode, other) => {
+      const code = hex ?? braces ?? unicode;
+      if (code === undefined) return /^[\n\r\u2028\u2029]/.test(other) ? "" : other;
+      const point = Number.parseInt(code, 16);
+      return point > 0x10ffff ? whole : String.fromCodePoint(point);
+    },
+  );
+}
+
 /** The trimmed text of the line where `index` lies. */
 function lineAt(source, index) {
   const start = source.lastIndexOf("\n", index - 1) + 1;
@@ -37,7 +60,7 @@ function lineAt(source, index) {
 }
 
 /** Each match as "<match> | <trimmed line where it starts>", over the whole file text. */
-export function portabilityFindings(source) {
+function findingsIn(source) {
   const findings = [];
   for (const match of source.matchAll(rawPattern)) {
     findings.push(`${match[0].replaceAll(/\s+/g, " ")} | ${lineAt(source, match.index)}`);
@@ -46,6 +69,37 @@ export function portabilityFindings(source) {
     const specifier = match[1];
     if (!specifier.startsWith("node:") && builtins.has(specifier.split("/")[0])) {
       findings.push(`${specifier} | ${lineAt(source, match.index)}`);
+    }
+  }
+  return findings;
+}
+
+/** The match part of a finding. */
+const keyOf = (finding) => finding.slice(0, finding.indexOf(" | "));
+
+/**
+ * Findings in the raw text, plus those that only show up in a view with comments removed or
+ * escapes decoded. A finding that the raw view already has is not listed twice.
+ */
+export function portabilityFindings(source) {
+  const findings = findingsIn(source);
+  const seen = new Map();
+  for (const finding of findings) seen.set(keyOf(finding), (seen.get(keyOf(finding)) ?? 0) + 1);
+  const views = [
+    stripComments(source),
+    decodeEscapes(source),
+    decodeEscapes(stripComments(source)),
+  ];
+  for (const view of views) {
+    const counts = new Map();
+    for (const finding of findingsIn(view)) {
+      const key = keyOf(finding);
+      const count = (counts.get(key) ?? 0) + 1;
+      counts.set(key, count);
+      if (count > (seen.get(key) ?? 0)) {
+        findings.push(finding);
+        seen.set(key, count);
+      }
     }
   }
   return findings;

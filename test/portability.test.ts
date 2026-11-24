@@ -31,6 +31,16 @@ describe("portability tripwire (a text scan, not a proof)", () => {
     bareCrypto: "import { createHash } from 'crypto';",
     importSplitOverLines: "const m = await import\n(name);",
     importSplitWithComment: "const m = await import /* a */\n  /* b */ (name);",
+    importSplitWithLineComment: "const m = await import // c\n(name);",
+    escapedColon: 'const m = "node\\:fs";',
+    escapedLetter: 'const m = "no\\de:os";',
+    escapedHex: 'const m = "node\\x3autil";',
+    escapedGlobalLetter: 'globalThis["proc\\ess"];',
+    escapedGlobalHex: 'globalThis["pro\\x63ess"];',
+    escapedGlobalBraces: 'globalThis["pro\\u{63}ess"];',
+    bareAfterComment: 'import fs from /* c */ "fs";',
+    bareSideEffectAfterComment: 'import /* c */ "fs";',
+    bareAfterLineComment: 'import fs from // c\n"fs";',
   };
 
   it("flags each plain-use bypass from the reviews", () => {
