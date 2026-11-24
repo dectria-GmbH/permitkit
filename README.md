@@ -323,26 +323,34 @@ copies, also of reactive objects from UI state libraries.
 How permitkit identifies objects that are not plain data depends on the runtime. It picks one of
 two ways when it loads:
 
-- **Node** (`process.getBuiltinModule` exists). permitkit uses `node:util`. A proxy is refused.
-  Every built-in that Node identifies by its engine slots is refused, also with a swapped
-  prototype: a `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `RegExp`, `Promise`, buffer, typed
-  array, `DataView`, boxed primitive, error, generator, `Map` or `Set` iterator, module namespace
-  and `arguments` object.
+- **Node** (and other runtimes whose `process.getBuiltinModule("node:util")` returns a working
+  `util.types`, such as Deno). permitkit uses `util.types`. A proxy is refused. Every built-in
+  that `util.types` identifies by its engine slots is refused, also with a swapped prototype: a
+  `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `RegExp`, `Promise`, buffer, typed array,
+  `DataView`, boxed primitive, error, generator, `Map` or `Set` iterator, module namespace and
+  `arguments` object.
 - **Other runtimes** (no `process`, for example Cloudflare Workers without `nodejs_compat`).
   permitkit calls built-in methods that fail for an object without the slot and run no caller
-  code. A `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `RegExp`, buffer, typed array, `DataView`,
-  boxed primitive and error are refused, also with a swapped prototype. These checks run only on
-  objects without own keys, because each failed check costs time on every plain object. So a
-  built-in with a swapped prototype and own keys copies as those own keys instead of being
-  refused: for example a `Map` or `Date` with keys added by hand, or a typed array, whose elements
-  are own keys. JSON input cannot produce such an object. The copy holds only the object's own
-  data, so the result is the same as for a plain object with those keys. The Node path still
-  refuses it. A `Promise`, generator or iterator has no check without side effects: with a
-  swapped prototype it copies as `{}`, like the gap above. A JavaScript program cannot tell a proxy from its target, so a proxy
-  is not refused. The size guard reads it once, as it reads any object: own data properties
-  only. The proxy's traps run during that read, and validation and the decision use the copy,
-  so the proxy cannot show one value to the guard and another to the decision. A proxy that
-  hides its keys copies as `{}`, which cannot widen access.
+  code. A `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `RegExp`, buffer, typed array, `DataView`
+  and boxed primitive are refused, also with a swapped prototype. An error is refused this way
+  only where the runtime has `Error.isError`. Elsewhere an error is refused only by its hidden
+  own keys (`stack`, `message`), and an error without own keys copies as `{}`.
+  These checks run only on objects without own keys, because each failed check costs time on
+  every plain object. So a built-in with a swapped prototype and own keys copies as those own
+  keys instead of being refused: for example a `Map` or `Date` with keys added by hand, or a
+  typed array, whose elements are own keys. JSON input cannot produce such an object. The copy
+  holds only the object's own data, so the result is the same as for a plain object with those
+  keys. The Node path still refuses it. A `Promise`, generator or iterator has no check without
+  side effects: with a swapped prototype it copies as `{}`, like the gap above.
+  A JavaScript program cannot tell a proxy from its target, so a proxy is not refused. The size
+  guard copies it like any object: own data properties only, and the proxy's traps run. Each
+  copy reads it once, and validation and the decision use that copy, so the proxy cannot show
+  one value to validation and another to the decision. A proxy that hides its keys copies as
+  `{}`, which cannot widen access. `evaluateApprovals` reads its input more than once, though:
+  it counts the approvals and checks the request size on separate reads before it copies the
+  whole input. A proxy can show a small input to those early checks and a larger one to the
+  copy. The copy still enforces the approval input bounds and the decision uses it, so this
+  costs only work up to those bounds, never access.
 
 The SHA-256 for digests is part of permitkit, so digests are the same in every runtime. Code
 that runs in your

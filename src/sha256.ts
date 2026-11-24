@@ -3,7 +3,21 @@
  * and Web Crypto `digest()` is asynchronous, so a decision could no longer be a synchronous
  * call. The input sizes are bounded (see bounds.ts), so a table-free implementation is fast
  * enough.
+ *
+ * Every built-in that a call uses is captured when the module loads: caller code that replaces
+ * a prototype method later (String.prototype.charAt, TypedArray.prototype.set, Reflect.apply)
+ * would otherwise change every digest, and approvals bind to the request digest.
  */
+
+const apply = Reflect.apply;
+const floor = Math.floor;
+const ByteArray = Uint8Array;
+const WordArray = Int32Array;
+// The length getter of all typed arrays, read through %TypedArray%.prototype.
+const typedArrayLength: unknown = Reflect.getOwnPropertyDescriptor(
+  Reflect.getPrototypeOf(Uint8Array.prototype) ?? {},
+  "length",
+)?.get;
 
 const roundConstants = Int32Array.from([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -27,33 +41,46 @@ const encoder = new TextEncoder();
 const encode = TextEncoder.prototype.encode;
 
 const hexDigits = "0123456789abcdef";
+/** Two hex digits per byte value, built once with string indexing only. */
+const hexOfByte: string[] = [];
+for (let value = 0; value < 256; value += 1) {
+  hexOfByte.push(`${hexDigits[value >>> 4] ?? ""}${hexDigits[value & 15] ?? ""}`);
+}
+
+function lengthOf(bytes: Uint8Array): number {
+  if (typeof typedArrayLength !== "function") throw new TypeError("No typed array length getter.");
+  const length: unknown = apply(typedArrayLength, bytes, []);
+  if (typeof length !== "number") throw new TypeError("Not a typed array.");
+  return length;
+}
 
 /** Lowercase hex SHA-256 over the UTF-8 encoding of a string. Lone surrogates become U+FFFD. */
 export function sha256Hex(text: string): string {
-  return sha256HexOfBytes(Reflect.apply(encode, encoder, [text]));
+  return sha256HexOfBytes(apply(encode, encoder, [text]));
 }
 
 /** Lowercase hex SHA-256 over bytes. */
 export function sha256HexOfBytes(bytes: Uint8Array): string {
-  const length = bytes.length;
+  const length = lengthOf(bytes);
   // The message, one 0x80 byte, zero padding and the 64-bit length fill whole 64-byte blocks.
-  const padded = new Uint8Array((((length + 8) >>> 6) + 1) << 6);
-  padded.set(bytes);
+  const end = (((length + 8) >>> 6) + 1) << 6;
+  const padded = new ByteArray(end);
+  for (let index = 0; index < length; index += 1) padded[index] = bytes[index] ?? 0;
   padded[length] = 0x80;
-  const bitLengthHigh = Math.floor(length / 0x20000000);
+  const bitLengthHigh = floor(length / 0x20000000);
   const bitLengthLow = (length << 3) >>> 0;
-  const end = padded.length;
   writeWord(padded, end - 8, bitLengthHigh);
   writeWord(padded, end - 4, bitLengthLow);
 
-  const state = Int32Array.from(initialState);
-  const schedule = new Int32Array(64);
+  const state = new WordArray(8);
+  for (let index = 0; index < 8; index += 1) state[index] = initialState[index] ?? 0;
+  const schedule = new WordArray(64);
   for (let offset = 0; offset < end; offset += 64) compress(state, schedule, padded, offset);
 
   let hex = "";
   for (let index = 0; index < 8; index += 1) {
-    const word = (state[index] ?? 0) >>> 0;
-    for (let shift = 28; shift >= 0; shift -= 4) hex += hexDigits.charAt((word >>> shift) & 15);
+    const word = state[index] ?? 0;
+    for (let shift = 24; shift >= 0; shift -= 8) hex += hexOfByte[(word >>> shift) & 255] ?? "";
   }
   return hex;
 }

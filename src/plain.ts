@@ -63,6 +63,9 @@ const nodeSlotCheckNames = [
   "isExternal",
 ] as const;
 
+/** The only check that may be missing: Deno's util.types has no isExternal. */
+const optionalNodeCheck = "isExternal";
+
 /**
  * The Node checks, read from `host.getBuiltinModule("node:util")`, or undefined if the host
  * does not provide a working `util.types`. The host is untrusted: it may be absent, a polyfill,
@@ -84,6 +87,9 @@ export function nodeChecks(host: unknown): PlainDataChecks | undefined {
     const slotChecks: unknown[] = [];
     for (const name of nodeSlotCheckNames) {
       const check: unknown = Reflect.get(types, name);
+      // An External is a native handle that JavaScript code cannot create or receive from
+      // permitkit's callers, so a util.types without isExternal (Deno) still takes this path.
+      if (check === undefined && name === optionalNodeCheck) continue;
       if (typeof check !== "function") return undefined;
       slotChecks.push(check);
     }

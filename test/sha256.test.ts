@@ -12,6 +12,8 @@ const nodeSha256 = (input: string | Uint8Array): string =>
 
 const propertyTimeout = { timeout: 60_000 };
 
+function notAConstructor(): void {}
+
 describe("sha256Hex", propertyTimeout, () => {
   it("matches the FIPS 180-4 example vectors", () => {
     expect(sha256Hex("")).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
@@ -58,6 +60,64 @@ describe("sha256Hex", propertyTimeout, () => {
         expect(sha256HexOfBytes(bytes)).toBe(nodeSha256(bytes));
       }),
       { numRuns: 500 },
+    );
+  });
+});
+
+describe("sha256Hex with built-ins replaced after load", () => {
+  // Caller code that replaces a built-in must not change a digest: approvals bind to it.
+  const typedArrayPrototype = Reflect.getPrototypeOf(Uint8Array.prototype) as object;
+  const text = "Grüße 😀 ".repeat(20);
+  const value = { request: text, items: [1, 2, 3] };
+  const expectedText = nodeSha256(text);
+  const expectedValue = nodeSha256(canonicalJson(value));
+
+  /** Replaces one property for the length of `run`, then restores it. */
+  function withReplaced(target: object, key: PropertyKey, replacement: PropertyDescriptor) {
+    // Int32Array.from is inherited: the replacement shadows it and is deleted afterwards.
+    const original = Reflect.getOwnPropertyDescriptor(target, key);
+    if (!Reflect.defineProperty(target, key, { ...replacement, configurable: true })) {
+      throw new Error(`could not replace ${String(key)}`);
+    }
+    try {
+      return { text: sha256Hex(text), value: digest(value) };
+    } finally {
+      if (original === undefined) Reflect.deleteProperty(target, key);
+      else Reflect.defineProperty(target, key, original);
+    }
+  }
+
+  const realApply = Reflect.apply;
+  // Compared by identity only, never called unbound.
+  // oxlint-disable-next-line typescript/unbound-method
+  const realEncode = TextEncoder.prototype.encode;
+  const replacements: [string, object, PropertyKey, PropertyDescriptor][] = [
+    [
+      "Reflect.apply",
+      Reflect,
+      "apply",
+      {
+        value: (fn: (...args: unknown[]) => unknown, self: unknown, args: unknown[]) =>
+          fn === realEncode ? new Uint8Array(0) : realApply(fn, self, args),
+      },
+    ],
+    ["String.prototype.charAt", String.prototype, "charAt", { value: () => "0" }],
+    ["TypedArray.prototype.set", typedArrayPrototype, "set", { value: () => undefined }],
+    ["TypedArray.prototype.length", typedArrayPrototype, "length", { get: () => 0 }],
+    ["Int32Array.from", Int32Array, "from", { value: () => new Int32Array(8) }],
+    ["Math.floor", Math, "floor", { value: () => 0 }],
+    ["Uint8Array", globalThis, "Uint8Array", { value: notAConstructor }],
+    ["Int32Array", globalThis, "Int32Array", { value: notAConstructor }],
+    ["TextEncoder.prototype.encode", TextEncoder.prototype, "encode", { value: () => [] }],
+  ];
+
+  it("gives the node:crypto digest with each one replaced", () => {
+    const results = replacements.map(([label, target, key, replacement]) => ({
+      label,
+      ...withReplaced(target, key, replacement),
+    }));
+    expect(results).toEqual(
+      replacements.map(([label]) => ({ label, text: expectedText, value: expectedValue })),
     );
   });
 });

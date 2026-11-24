@@ -113,9 +113,12 @@ threat model in the README for the one gap) is
 unusable as a whole and gives a deny. Getters and setters count as not plain data; the guard reads
 data properties only, so no caller code runs during the copy. On Node, a proxy is also unusable. In
 a runtime without `process`, a proxy cannot be detected: the guard copies it like a plain object,
-its traps run during that one read, and validation runs on the copy. There, a built-in with a
+its traps run during that read, and validation runs on the copy. `evaluateApprovals` reads a proxy
+input more than once there (the early approval count and request check, then the full copy), so
+the early checks can see a smaller input than the copy. The full copy still enforces the approval
+input bounds, so this costs work up to those bounds, never access. There, a built-in with a
 swapped prototype and own keys also copies as those own keys; Node refuses it (see the README
-threat model).
+threat model). An error is identified there only where the runtime has `Error.isError`.
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Audit records: 300,000 values, and the request inside meets the request
 bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.

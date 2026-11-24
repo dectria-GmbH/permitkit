@@ -417,7 +417,7 @@ describe("nodeChecks with an untrusted host", () => {
       "returns a types object with a check missing",
       () => {
         const partial: Record<string, unknown> = { ...types };
-        delete partial["isExternal"];
+        delete partial["isPromise"];
         return { getBuiltinModule: () => ({ types: partial }) };
       },
     ],
@@ -446,6 +446,19 @@ describe("nodeChecks with an untrusted host", () => {
     for (const [label, make] of hosts) {
       expect({ label, checks: nodeChecks(make()) }).toEqual({ label, checks: undefined });
     }
+  });
+
+  it("takes the Node path when only isExternal is missing, as in Deno", () => {
+    const partial: Record<string, unknown> = { ...types };
+    delete partial["isExternal"];
+    const checks = nodeChecks({ getBuiltinModule: () => ({ types: partial }) });
+    expect(checks?.runtime).toBe("node");
+    const reference = resultsOf(types.isProxy, referenceHasInternalSlots);
+    const results = resultsOf(
+      (value) => checks?.isProxy(value),
+      (value) => checks?.hasInternalSlots(value, hasOwnKeys(value)),
+    );
+    expect(results).toEqual(reference);
   });
 
   it("keeps the checks it captured when util.types is changed later", () => {

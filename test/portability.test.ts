@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { builtinModules } from "node:module";
 
 import { describe, expect, it } from "vitest";
+
+import { portabilityFindings } from "../scripts/portable-scan.mjs";
 
 const sourceRoot = new URL("../src/", import.meta.url);
 
@@ -12,26 +13,8 @@ function sourceFiles(directory: URL): URL[] {
   });
 }
 
-/** Module specifiers in static imports and exports, dynamic import() and require(). */
-function moduleSpecifiers(source: string): string[] {
-  const patterns = [
-    /\b(?:import|export)\s[^;]*?\bfrom\s*["']([^"']+)["']/g,
-    /\bimport\s*["']([^"']+)["']/g,
-    /\b(?:import|require)\s*\(\s*["'`]([^"'`]+)["'`]/g,
-  ];
-  return patterns.flatMap((pattern) =>
-    [...source.matchAll(pattern)].map((match) => match[1] ?? ""),
-  );
-}
-
-const builtins = new Set(builtinModules);
-
-function isNodeBuiltin(specifier: string): boolean {
-  return specifier.startsWith("node:") || builtins.has(specifier.split("/")[0] ?? "");
-}
-
 describe("portability", () => {
-  it("finds the specifiers it looks for", () => {
+  it("finds Node specifiers and Node globals, but not words in comments or strings", () => {
     const sample = [
       'import { a } from "node:util";',
       "import type { B } from 'crypto';",
@@ -40,24 +23,35 @@ describe("portability", () => {
       'const c = await import("node:path");',
       'const d = require("os");',
       'import { e } from "./e.js";',
+      "const f = process.env;",
+      "const g = Buffer.from(text);",
+      "const h = typeof global;",
+      "// process, Buffer and require in a comment",
+      '/* process */ const i = "process Buffer require";',
+      "const j = Reflect.get(globalThis, `process`);",
+      "const k = object.process + globalThis.Buffer;",
     ].join("\n");
-    expect(moduleSpecifiers(sample).filter(isNodeBuiltin)).toEqual([
-      "node:util",
-      "crypto",
-      "node:fs",
-      "node:process",
-      "node:path",
-      "os",
+    expect(portabilityFindings(sample)).toEqual([
+      "import: node:util",
+      "import: crypto",
+      "import: node:fs",
+      "import: node:process",
+      "import: node:path",
+      "import: os",
+      "global: require",
+      "global: process",
+      "global: Buffer",
+      "global: global",
     ]);
   });
 
-  it("imports no Node built-in module anywhere under src", () => {
+  it("finds nothing that needs Node anywhere under src", () => {
     const files = sourceFiles(sourceRoot);
     expect(files.length).toBeGreaterThan(10);
     const found = files.flatMap((file) =>
-      moduleSpecifiers(readFileSync(file, "utf8"))
-        .filter(isNodeBuiltin)
-        .map((specifier) => `${file.pathname.slice(sourceRoot.pathname.length)}: ${specifier}`),
+      portabilityFindings(readFileSync(file, "utf8")).map(
+        (finding) => `${file.pathname.slice(sourceRoot.pathname.length)}: ${finding}`,
+      ),
     );
     expect(found).toEqual([]);
   });
