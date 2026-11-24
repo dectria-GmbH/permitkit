@@ -11,6 +11,7 @@ import {
   type PolicyDocument,
   type Scope,
 } from "./policy-document.js";
+import { mapGet, mapSet } from "./intrinsics.js";
 import { invalid, joined, type Issue } from "./validate.js";
 
 export { policySchemaVersion } from "./policy-document.js";
@@ -70,7 +71,7 @@ const internals = new WeakMap<object, PolicyInternals>();
 /** The lookup tables of a compiled policy, or undefined for any other value. */
 export function internalsOf(value: unknown): PolicyInternals | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  return internals.get(value);
+  return mapGet(internals, value);
 }
 
 /** True only for objects that compilePolicy returned in this process. */
@@ -187,7 +188,8 @@ function compileChecked(catalog: Catalog, input: unknown): CompiledPolicy {
     catalog,
     document,
   });
-  internals.set(
+  mapSet(
+    internals,
     policy,
     Object.freeze({
       roles: lookup(roles),

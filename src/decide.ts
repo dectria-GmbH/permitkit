@@ -19,6 +19,7 @@ import {
   type Subject,
 } from "./request.js";
 import { instant } from "./time.js";
+import { mapGet, mapSet } from "./intrinsics.js";
 import { invalid, joined, type Issue } from "./validate.js";
 
 export type Outcome = "allow" | "deny" | "approval_required";
@@ -169,12 +170,12 @@ const subjectFacts = new WeakMap<Subject, { types: Set<string>; held: Set<string
 
 /** Subject types and held roles, computed once per validated subject object. */
 function factsOf(subject: Subject): { types: Set<string>; held: Set<string> } {
-  let facts = subjectFacts.get(subject);
+  let facts = mapGet(subjectFacts, subject);
   if (facts === undefined) {
     const types = new Set<string>([subject.type]);
     if (subject.act !== null) types.add("agent");
     facts = { types, held: new Set(subject.roles.map((assignment) => assignment.role)) };
-    subjectFacts.set(subject, facts);
+    mapSet(subjectFacts, subject, facts);
   }
   return facts;
 }
