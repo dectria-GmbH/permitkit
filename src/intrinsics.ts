@@ -1,18 +1,31 @@
 /**
  * Built-in methods captured when this module loads, before caller code can replace them. The
  * registries that tell a compiled policy or a catalogue from a forged one go through these, so
- * a data-valued WeakMap.prototype.get or WeakSet.prototype.has cannot make them throw.
+ * a data-valued WeakMap.prototype.get or WeakSet.prototype.has cannot make them throw. Code in
+ * a catch path uses them too, so a replaced static such as Object.hasOwn cannot break it.
  * Pollution that happens before permitkit loads is not covered.
  */
 
+const apply = Reflect.apply;
+const getOwnPropertyDescriptor = Reflect.getOwnPropertyDescriptor;
+const hasOwn = Object.hasOwn;
 // Unbound on purpose: each one is called through apply with its receiver.
 /* oxlint-disable typescript/unbound-method */
-const apply = Reflect.apply;
 const weakMapGet = WeakMap.prototype.get;
 const weakMapSet = WeakMap.prototype.set;
 const weakSetHas = WeakSet.prototype.has;
 const weakSetAdd = WeakSet.prototype.add;
 /* oxlint-enable typescript/unbound-method */
+
+/**
+ * The value of an own data property, or undefined for an accessor or a missing key. Runs no
+ * getter. On a Proxy it runs the getOwnPropertyDescriptor trap, so pass only checked objects.
+ */
+export function ownDataValue(value: object, key: PropertyKey): unknown {
+  const descriptor = getOwnPropertyDescriptor(value, key);
+  // hasOwn, not `in`: `in` would also find a polluted Object.prototype.value.
+  return descriptor !== undefined && hasOwn(descriptor, "value") ? descriptor.value : undefined;
+}
 
 export function mapGet<K extends WeakKey, V>(map: WeakMap<K, V>, key: K): V | undefined {
   // The captured method returns the value type of the map it is called on.

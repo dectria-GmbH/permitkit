@@ -131,3 +131,55 @@ describe("compilePolicy under accessor pollution", () => {
     expect(result).toBe("policy_invalid");
   });
 });
+
+// Object.hasOwn and Reflect.getOwnPropertyDescriptor run inside compilePolicy, so replacing
+// them fails the compile. The catch reads the error code through copies captured at load, so
+// the failure is still policy_invalid. catalog_invalid comes first, from the captured registry.
+const statics: [label: string, target: object, key: string][] = [
+  ["Object.hasOwn", Object, "hasOwn"],
+  ["Reflect.getOwnPropertyDescriptor", Reflect, "getOwnPropertyDescriptor"],
+];
+const replacements: [label: string, descriptor: () => PropertyDescriptor][] = [
+  ["= 1", () => ({ value: 1, configurable: true, writable: true })],
+  ["= undefined", () => ({ value: undefined, configurable: true, writable: true })],
+  [
+    "as a getter that throws a raw error",
+    () => ({
+      get(): never {
+        throw new Error("raw error from a static");
+      },
+      configurable: true,
+    }),
+  ],
+  [
+    "as a getter that throws policy_unknown",
+    () => ({
+      get(): never {
+        throw new PermitkitError("policy_unknown", "made by the caller");
+      },
+      configurable: true,
+    }),
+  ],
+];
+const staticCases = statics.flatMap(([name, target, key]) =>
+  replacements.map(([how, descriptor]) => [`${name} ${how}`, target, key, descriptor] as const),
+);
+
+describe("compilePolicy under a replaced static", () => {
+  it.each(staticCases)("%s gives no raw error", (_label, target, key, descriptor) => {
+    const saved = Object.getOwnPropertyDescriptor(target, key);
+    Object.defineProperty(target, key, descriptor());
+    let result: string[];
+    try {
+      result = outcomes();
+    } finally {
+      if (saved !== undefined) Object.defineProperty(target, key, saved);
+    }
+    expect(result).toEqual([
+      "policy_invalid",
+      "policy_invalid",
+      "catalog_invalid",
+      "policy_invalid",
+    ]);
+  });
+});
