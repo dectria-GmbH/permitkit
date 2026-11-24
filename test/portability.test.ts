@@ -1,58 +1,61 @@
-import { readdirSync, readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
-import { portabilityFindings } from "../scripts/portable-scan.mjs";
+import {
+  allowlist,
+  compareWithAllowlist,
+  filesUnder,
+  portabilityFindings,
+} from "../scripts/portable-scan.mjs";
 
-const sourceRoot = new URL("../src/", import.meta.url);
-
-function sourceFiles(directory: URL): URL[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    if (entry.isDirectory()) return sourceFiles(new URL(`${entry.name}/`, directory));
-    return entry.name.endsWith(".ts") ? [new URL(entry.name, directory)] : [];
-  });
-}
+const root = new URL("../", import.meta.url);
 
 describe("portability", () => {
-  it("finds Node specifiers and Node globals, but not words in comments or strings", () => {
-    const sample = [
-      'import { a } from "node:util";',
-      "import type { B } from 'crypto';",
-      'export * from "node:fs";',
-      'import "node:process";',
-      'const c = await import("node:path");',
-      'const d = require("os");',
-      'import { e } from "./e.js";',
-      "const f = process.env;",
-      "const g = Buffer.from(text);",
-      "const h = typeof global;",
-      "// process, Buffer and require in a comment",
-      '/* process */ const i = "process Buffer require";',
-      "const j = Reflect.get(globalThis, `process`);",
-      "const k = object.process + globalThis.Buffer;",
-    ].join("\n");
-    expect(portabilityFindings(sample)).toEqual([
-      "import: node:util",
-      "import: crypto",
-      "import: node:fs",
-      "import: node:process",
-      "import: node:path",
-      "import: os",
-      "global: require",
-      "global: process",
-      "global: Buffer",
-      "global: global",
-    ]);
+  // From the review: each of these hid a Node dependency from the first scanner.
+  const bypasses: Record<string, string> = {
+    templateSubstitution: "const a = `${process.env.HOME}`;",
+    templateBuffer: "const b = `x${Buffer.from('a').length}`;",
+    regexQuote: "const q = /'/; const v = process.env.X; const r = /'/;",
+    regexQuote2: 'const q = /"/.test(s); Buffer.alloc(1); const r = /"/;',
+    regexSlashSlash: "const re = /\\/\\//; process.exit();",
+    regexWithBacktick: "const re = /`/; require('fs'); const t = `x`;",
+    dynamicSpecifier: "const m = 'node:' + 'fs'; await import(m);",
+    dotted: "globalThis.process.exit();",
+    newFunction: "new Function('return process')();",
+    optionalChain: "globalThis?.process?.env;",
+    importMetaResolve: "import.meta.resolve('node:fs');",
+    bareModule: "import { createRequire } from 'module';",
+    unicodeEscape: "const a = \\u0070rocess.env;",
+    importWithComment: "import /* x */ ('node:fs');",
+    importAttribute: "import fs from 'node:fs' with { type: 'json' };",
+    exportFromMultiline: "export {\n  a,\n} from 'node:fs';",
+    bareCrypto: "import { createHash } from 'crypto';",
+  };
+
+  it("finds every known bypass", () => {
+    const missed = Object.entries(bypasses)
+      .filter(([, source]) => portabilityFindings(source).length === 0)
+      .map(([name]) => name);
+    expect(missed).toEqual([]);
+    // Not a match: names that only contain a Node global. Member access does match, so that
+    // globalThis.process is found.
+    expect(portabilityFindings("const a = processes + ArrayBuffer + requireProof;")).toEqual([]);
   });
 
-  it("finds nothing that needs Node anywhere under src", () => {
-    const files = sourceFiles(sourceRoot);
+  it("finds in src only the listed occurrences", () => {
+    const files = filesUnder(root, "src/", ".ts");
     expect(files.length).toBeGreaterThan(10);
-    const found = files.flatMap((file) =>
-      portabilityFindings(readFileSync(file, "utf8")).map(
-        (finding) => `${file.pathname.slice(sourceRoot.pathname.length)}: ${finding}`,
-      ),
-    );
-    expect(found).toEqual([]);
+    expect(compareWithAllowlist(root, files, allowlist.src)).toEqual([]);
+  });
+
+  it("fails on a new occurrence and on a listed one that is gone", () => {
+    const files = filesUnder(root, "src/", ".ts");
+    const shorter = { ...allowlist.src, "src/catalog.ts": [] };
+    expect(compareWithAllowlist(root, files, shorter)).toEqual([
+      "unexpected src/catalog.ts: process | /** True only for objects that defineCatalog returned in this process. */",
+    ]);
+    const longer = { ...allowlist.src, "src/decide.ts": ["process | nothing"] };
+    expect(compareWithAllowlist(root, files, longer)).toEqual([
+      "missing src/decide.ts: process | nothing",
+    ]);
   });
 });

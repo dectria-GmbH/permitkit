@@ -335,13 +335,18 @@ two ways when it loads:
   and boxed primitive are refused, also with a swapped prototype. An error is refused this way
   only where the runtime has `Error.isError`. Elsewhere an error is refused only by its hidden
   own keys (`stack`, `message`), and an error without own keys copies as `{}`.
-  These checks run only on objects without own keys, because each failed check costs time on
-  every plain object. So a built-in with a swapped prototype and own keys copies as those own
-  keys instead of being refused: for example a `Map` or `Date` with keys added by hand, or a
-  typed array, whose elements are own keys. JSON input cannot produce such an object. The copy
+  The checks for typed arrays, `DataView`s and errors never fail with an exception, so they run
+  on every object. The other checks fail with an exception for every plain object, which costs
+  time, so they run only on objects without own keys or with an own `length` (a boxed string, an
+  `arguments` object). So a `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `ArrayBuffer` or boxed
+  number, boolean, symbol or bigint with a swapped prototype and own keys added by hand copies
+  as those own keys instead of being refused. JSON input cannot produce such an object. The copy
   holds only the object's own data, so the result is the same as for a plain object with those
-  keys. The Node path still refuses it. A `Promise`, generator or iterator has no check without
-  side effects: with a swapped prototype it copies as `{}`, like the gap above.
+  keys. The Node path still refuses it. Typed arrays, `DataView`s, boxed strings and errors
+  (where `Error.isError` exists) are refused also with own keys. An `arguments` object of a
+  sloppy-mode function with `length`, `callee` and `Symbol.iterator` deleted copies as its index
+  data, for example `{"0": 1}`; Node refuses it. A `Promise`, generator or iterator has no check
+  without side effects: with a swapped prototype it copies as `{}`, like the gap above.
   A JavaScript program cannot tell a proxy from its target, so a proxy is not refused. The size
   guard copies it like any object: own data properties only, and the proxy's traps run. Each
   copy reads it once, and validation and the decision use that copy, so the proxy cannot show
@@ -352,8 +357,10 @@ two ways when it loads:
   copy. The copy still enforces the approval input bounds and the decision uses it, so this
   costs only work up to those bounds, never access.
 
-The SHA-256 for digests is part of permitkit, so digests are the same in every runtime. Code
-that runs in your
+The SHA-256 for digests is part of permitkit, so digests are the same in every runtime. It and
+`canonicalJson` capture every built-in they use when they load, so a built-in that caller code
+replaces later (`JSON.stringify`, `Array.prototype.toSorted`) does not change a digest. The size
+guard does not capture its built-ins. Code that runs in your
 process with its own functions (a replaced `Array.prototype.map`, a function on
 `Object.prototype.then`) is not covered. permitkit hardens the paths it knows about, but such
 code can change the behaviour of any library in the process.

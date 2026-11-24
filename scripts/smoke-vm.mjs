@@ -4,36 +4,79 @@
 // Fails with a non-zero exit code if dist needs Node, or if a result differs from Node.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
 
-import { portabilityFindings } from "./portable-scan.mjs";
+import { allowlist, compareWithAllowlist, filesUnder } from "./portable-scan.mjs";
 
 const root = new URL("../", import.meta.url);
 const dist = new URL("dist/", root);
 
-// 1. Nothing in dist imports a Node module or uses a Node global.
-function jsFiles(directory) {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    if (entry.isDirectory()) return jsFiles(new URL(`${entry.name}/`, directory));
-    return entry.name.endsWith(".js") ? [new URL(entry.name, directory)] : [];
-  });
-}
-const files = jsFiles(dist);
+// 1. Every Node global or specifier in dist is a listed one (portable-allowlist.json).
+const files = filesUnder(root, "dist/", ".js");
 assert.ok(files.length > 10, "dist has too few files; run the build first");
-const findings = files.flatMap((file) =>
-  portabilityFindings(readFileSync(file, "utf8")).map(
-    (finding) => `${file.pathname.slice(dist.pathname.length)}: ${finding}`,
-  ),
+assert.deepEqual(
+  compareWithAllowlist(root, files, allowlist.dist),
+  [],
+  "dist needs Node built-ins",
 );
-assert.deepEqual(findings, [], "dist needs Node built-ins");
 
-// 2. Load dist in a context that has only TextEncoder, which workerd also provides.
-const context = vm.createContext({ TextEncoder });
+// 2. Load dist in a context that holds no Node object. workerd provides TextEncoder; this one is
+// written in plain JavaScript and evaluated inside the context, because Node's TextEncoder
+// reaches Node's process through its constructor.
+const encoderSource = `globalThis.TextEncoder = class TextEncoder {
+  get encoding() { return "utf-8"; }
+  encode(input = "") {
+    const text = \`\${input}\`;
+    const bytes = [];
+    for (let index = 0; index < text.length; index += 1) {
+      let code = text.charCodeAt(index);
+      if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+        const low = text.charCodeAt(index + 1);
+        if (low >= 0xdc00 && low <= 0xdfff) {
+          code = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+          index += 1;
+        } else {
+          code = 0xfffd;
+        }
+      } else if (code >= 0xd800 && code <= 0xdfff) {
+        code = 0xfffd;
+      }
+      if (code < 0x80) bytes.push(code);
+      else if (code < 0x800) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 63));
+      else if (code < 0x10000) {
+        bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 63), 0x80 | (code & 63));
+      } else {
+        bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 63));
+        bytes.push(0x80 | ((code >> 6) & 63), 0x80 | (code & 63));
+      }
+    }
+    return new Uint8Array(bytes);
+  }
+};`;
+const context = vm.createContext({});
+vm.runInContext(encoderSource, context);
 for (const name of ["process", "Buffer", "require", "global"]) {
   assert.equal(vm.runInContext(`typeof ${name}`, context), "undefined", `${name} in the context`);
+}
+assert.equal(
+  vm.runInContext("TextEncoder.constructor('return typeof process')()", context),
+  "undefined",
+  "the context reaches Node's process",
+);
+// The encoder in the context gives the same bytes as Node's, also for lone surrogates.
+for (const text of ["", "abc", "Grüße", "😀 𝔘", "a\ud800b", "\udc00", "x\ud83d"]) {
+  const inside = vm.runInContext(
+    `Array.from(new TextEncoder().encode(${JSON.stringify(text)}))`,
+    context,
+  );
+  assert.deepEqual(
+    [...inside],
+    [...new TextEncoder().encode(text)],
+    `encoding of ${JSON.stringify(text)}`,
+  );
 }
 const requireFromRoot = createRequire(new URL("package.json", root));
 const zodEntry = pathToFileURL(requireFromRoot.resolve("zod").replace(/index\.cjs$/, "index.js"));

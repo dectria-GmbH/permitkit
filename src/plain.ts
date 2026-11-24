@@ -9,11 +9,13 @@
  *   and every slot kind below. This is not an `import`, so bundlers for Workers do not try to
  *   resolve it.
  * - Portable (no usable `process`, for example Cloudflare workerd without `nodejs_compat`):
- *   brand checks through built-in getters and methods that throw for a wrong receiver and run no
- *   caller code. They run only on objects without own keys, because a throw costs microseconds
- *   and every plain object would throw in each check. A built-in with a swapped prototype and own
- *   keys added by hand therefore copies as those own keys. JSON input cannot produce such an
- *   object. A proxy cannot be detected in JavaScript; it is read like a plain object.
+ *   ArrayBuffer.isView and Error.isError (where it exists) on every object, then brand checks
+ *   through built-in getters and methods that throw for a wrong receiver and run no caller code.
+ *   The throwing checks run only on objects without own keys or with an own `length`, because a
+ *   throw costs microseconds and every plain object would throw in each check. A Map, Set, Date or other
+ *   built-in of a throwing kind with a swapped prototype and own keys added by hand therefore
+ *   copies as those own keys. JSON input cannot produce such an object. A proxy cannot be
+ *   detected in JavaScript; it is read like a plain object.
  *
  * Every built-in function is captured at module load, so later pollution or replacement of a
  * prototype method cannot change a check.
@@ -32,9 +34,17 @@ export interface PlainDataChecks {
   /** True for a proxy. Always false on the portable path, where a proxy cannot be detected. */
   readonly isProxy: Check;
   /**
-   * True for a built-in object that keeps its data in internal slots. The Node path ignores
-   * `hasOwnKeys`. The portable path answers false for an object with own keys.
+   * The part of the slot check that runs before the caller reads the object's keys, in O(1).
+   * A typed array or a boxed string can have millions of own keys, so it must be refused before
+   * they are listed. The Node path runs all of util.types here.
    */
+  readonly slotsBeforeKeys: Check;
+  /**
+   * The part that runs after the caller has listed the own keys. The Node path answers false:
+   * it decided before. The portable path runs its throwing checks only if `hasOwnKeys` is false.
+   */
+  readonly slotsAfterKeys: SlotCheck;
+  /** Both parts together, for callers that do not list keys themselves. */
   readonly hasInternalSlots: SlotCheck;
 }
 
@@ -99,15 +109,18 @@ export function nodeChecks(host: unknown): PlainDataChecks | undefined {
     if (!call(proxyCheck, new Proxy({}, {})) || call(proxyCheck, {})) return undefined;
     if (!call(slotChecks[0], new Map()) || call(slotChecks[0], {})) return undefined;
     const count = slotChecks.length;
+    const slots = (value: object): boolean => {
+      for (let index = 0; index < count; index += 1) {
+        if (call(slotChecks[index], value)) return true;
+      }
+      return false;
+    };
     return freeze({
       runtime: "node",
       isProxy: (value: object) => call(proxyCheck, value),
-      hasInternalSlots: (value: object, _hasOwnKeys: boolean) => {
-        for (let index = 0; index < count; index += 1) {
-          if (call(slotChecks[index], value)) return true;
-        }
-        return false;
-      },
+      slotsBeforeKeys: slots,
+      slotsAfterKeys: () => false,
+      hasInternalSlots: (value: object, _hasOwnKeys: boolean) => slots(value),
     });
   } catch {
     return undefined;
@@ -162,11 +175,34 @@ const isView: unknown = getOwnPropertyDescriptor(ArrayBuffer, "isView")?.value;
 const isError: unknown = getOwnPropertyDescriptor(Error, "isError")?.value;
 const brandCount = brandChecks.length;
 
-function hasBrand(value: object, hasOwnKeys: boolean): boolean {
-  // Decided 2026-11-24: brand checks only for objects without own keys. See the file comment.
-  if (hasOwnKeys) return false;
+/**
+ * Before the keys are listed: the two checks that never throw, on every object. An own `length`
+ * marks the keyed built-ins whose keys are indices (a boxed string, an `arguments` object); for
+ * those the throwing checks run too, so that a boxed string with millions of characters is
+ * refused before its keys are listed. A plain object with a `length` key only pays the checks.
+ */
+function portableBeforeKeys(value: object): boolean {
   if (typeof isView === "function" && apply(isView, undefined, [value]) === true) return true;
   if (typeof isError === "function" && apply(isError, undefined, [value]) === true) return true;
+  let length: PropertyDescriptor | undefined;
+  try {
+    length = getOwnPropertyDescriptor(value, "length");
+  } catch {
+    // A revoked proxy. The caller fails on its next read of the value and refuses it.
+    return false;
+  }
+  return length !== undefined && throwingBrandChecks(value);
+}
+
+/**
+ * After the keys are listed. Decided 2026-11-24: the throwing checks run only on objects without
+ * own keys. See the file comment.
+ */
+function portableAfterKeys(value: object, hasOwnKeys: boolean): boolean {
+  return !hasOwnKeys && throwingBrandChecks(value);
+}
+
+function throwingBrandChecks(value: object): boolean {
   for (let index = 0; index < brandCount; index += 1) {
     const check = brandChecks[index];
     if (check === undefined || typeof check[0] !== "function") continue;
@@ -184,7 +220,10 @@ function hasBrand(value: object, hasOwnKeys: boolean): boolean {
 export const portableChecks: PlainDataChecks = freeze({
   runtime: "portable",
   isProxy: () => false,
-  hasInternalSlots: hasBrand,
+  slotsBeforeKeys: portableBeforeKeys,
+  slotsAfterKeys: portableAfterKeys,
+  hasInternalSlots: (value: object, hasOwnKeys: boolean) =>
+    portableBeforeKeys(value) || portableAfterKeys(value, hasOwnKeys),
 });
 
 function hostProcess(): unknown {
@@ -206,11 +245,23 @@ export function isProxy(value: object): boolean {
 }
 
 /**
- * True for built-in objects that keep their data in internal slots. On Node this is
- * `util.types`, and `hasOwnKeys` is not used. On the portable path it covers fewer kinds and
- * answers false if `hasOwnKeys` is true (see portableChecks). Pass whether
- * `Reflect.ownKeys(value)` is not empty.
+ * The first part of the check for built-in objects that keep their data in internal slots.
+ * Call it before listing the object's keys. On Node this is all of `util.types`.
  */
+export function slotsBeforeKeys(value: object): boolean {
+  return active.slotsBeforeKeys(value);
+}
+
+/**
+ * The second part, after the caller listed the own keys. Pass whether `Reflect.ownKeys(value)`
+ * is not empty. Always false on Node. On the portable path it runs the throwing brand checks
+ * only for an object without own keys.
+ */
+export function slotsAfterKeys(value: object, hasOwnKeys: boolean): boolean {
+  return active.slotsAfterKeys(value, hasOwnKeys);
+}
+
+/** Both parts. Pass whether `Reflect.ownKeys(value)` is not empty. */
 export function hasInternalSlots(value: object, hasOwnKeys: boolean): boolean {
   return active.hasInternalSlots(value, hasOwnKeys);
 }

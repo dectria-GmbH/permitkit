@@ -1,0 +1,54 @@
+{
+  "src": {
+    "src/canonical.ts": [
+      "node: | * No caller code runs: only data properties are read. In a runtime without node:util a proxy"
+    ],
+    "src/catalog.ts": [
+      "process | /** True only for objects that defineCatalog returned in this process. */"
+    ],
+    "src/errors.ts": [
+      "process | \"Pass a policy that compilePolicy returned in this process. Do not build policy objects by hand.\","
+    ],
+    "src/plain.ts": [
+      "process | * - Node: `process.getBuiltinModule(\"node:util\")` gives `util.types`, which identifies proxies",
+      "node: | * - Node: `process.getBuiltinModule(\"node:util\")` gives `util.types`, which identifies proxies",
+      "process | * - Portable (no usable `process`, for example Cloudflare workerd without `nodejs_compat`):",
+      "node: | * The Node checks, read from `host.getBuiltinModule(\"node:util\")`, or undefined if the host",
+      "node: | const util: unknown = apply(load, host, [\"node:util\"]);",
+      "node: | /** The checks for runtimes without `node:util`. Proxies cannot be detected. */",
+      "process | return Reflect.get(globalThis, \"process\");"
+    ],
+    "src/policy.ts": [
+      "process | /** True only for objects that compilePolicy returned in this process. */"
+    ],
+    "src/sha256.ts": [
+      "node: | * SHA-256 (FIPS 180-4) in plain TypeScript. permitkit runs in runtimes without `node:crypto`,"
+    ]
+  },
+  "dist": {
+    "dist/canonical.js": [
+      "node: | * No caller code runs: only data properties are read. In a runtime without node:util a proxy"
+    ],
+    "dist/catalog.js": [
+      "process | /** True only for objects that defineCatalog returned in this process. */"
+    ],
+    "dist/errors.js": [
+      "process | policy_unknown: \"Pass a policy that compilePolicy returned in this process. Do not build policy objects by hand.\","
+    ],
+    "dist/plain.js": [
+      "process | * - Node: `process.getBuiltinModule(\"node:util\")` gives `util.types`, which identifies proxies",
+      "node: | * - Node: `process.getBuiltinModule(\"node:util\")` gives `util.types`, which identifies proxies",
+      "process | * - Portable (no usable `process`, for example Cloudflare workerd without `nodejs_compat`):",
+      "node: | * The Node checks, read from `host.getBuiltinModule(\"node:util\")`, or undefined if the host",
+      "node: | const util = apply(load, host, [\"node:util\"]);",
+      "node: | /** The checks for runtimes without `node:util`. Proxies cannot be detected. */",
+      "process | return Reflect.get(globalThis, \"process\");"
+    ],
+    "dist/policy.js": [
+      "process | /** True only for objects that compilePolicy returned in this process. */"
+    ],
+    "dist/sha256.js": [
+      "node: | * SHA-256 (FIPS 180-4) in plain TypeScript. permitkit runs in runtimes without `node:crypto`,"
+    ]
+  }
+}

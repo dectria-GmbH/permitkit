@@ -84,9 +84,10 @@ proxies, and input too deep to walk. On Node, every proxy is refused too. In a r
 `process` (for example Cloudflare Workers without `nodejs_compat`), a proxy cannot be detected:
 it serializes as the data it reports, and its traps run. There, a `Promise`, generator or
 iterator with its prototype set to `Object.prototype` serializes as `{}`; Node refuses them. A
-built-in with a swapped prototype and own keys (a `Map` or `Date` with keys added by hand, or a
-typed array, whose elements are own keys) serializes as those own keys there; Node refuses it.
-JSON input cannot produce such an object. An
+`Map`, `Set`, `Date` or other built-in of a kind that only an exception identifies, with a swapped
+prototype and own keys added by hand, serializes as those own keys there; Node refuses it. JSON
+input cannot produce such an object. Typed arrays, `DataView`s, boxed strings and errors (where
+`Error.isError` exists) are refused also with own keys. An
 object that keeps its data in `#private` fields or in slots that permitkit cannot identify (a
 `URL`, a `WeakRef`, an `Intl` object), with its prototype set to `Object.prototype`, serializes
 as `{}` in every runtime. The threat model in the README lists the checks per runtime. Pass plain
@@ -116,9 +117,11 @@ a runtime without `process`, a proxy cannot be detected: the guard copies it lik
 its traps run during that read, and validation runs on the copy. `evaluateApprovals` reads a proxy
 input more than once there (the early approval count and request check, then the full copy), so
 the early checks can see a smaller input than the copy. The full copy still enforces the approval
-input bounds, so this costs work up to those bounds, never access. There, a built-in with a
-swapped prototype and own keys also copies as those own keys; Node refuses it (see the README
-threat model). An error is identified there only where the runtime has `Error.isError`.
+input bounds, so this costs work up to those bounds, never access. There, a `Map`, `Set`, `Date`
+or other built-in of a kind that only an exception identifies, with a swapped prototype and own
+keys added by hand, also copies as those own keys; Node refuses it (see the README threat model).
+An error is identified there only where the runtime has `Error.isError`. A swapped typed array or
+boxed string is refused before its keys are read, on both paths, so its size costs nothing.
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Audit records: 300,000 values, and the request inside meets the request
 bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.
