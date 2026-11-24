@@ -450,8 +450,10 @@ function guarded(policy: CompiledPolicy, evaluate: () => Decision): Decision {
   try {
     return evaluate();
   } catch (error) {
-    // A brand check, not instanceof: a thrown Proxy could run a getPrototypeOf trap.
-    if (PermitkitError.is(error)) throw error;
+    // Only the documented error of decide() and explain() passes. Any other error, also a
+    // PermitkitError such as not_canonical from a polluted built-in, becomes the deny below:
+    // decisions never throw. A brand check, not instanceof, so a thrown Proxy runs no trap.
+    if (PermitkitError.is(error) && error.code === "policy_unknown") throw error;
     return {
       outcome: "deny",
       allowed: false,
