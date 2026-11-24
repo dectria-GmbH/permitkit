@@ -22,6 +22,7 @@ import {
   within,
 } from "../src/testing/index.js";
 import { catalog, editablePolicyInput, policy } from "./fixtures.js";
+import { expectedRuntime } from "./runtime.js";
 
 const polluted: string[] = [];
 
@@ -576,7 +577,6 @@ describe("condition engine fails toward less access on an unknown kind", () => {
 
 describe("canonicalJson refuses non-plain data with a coded error", () => {
   const variants: [string, () => unknown][] = [
-    ["proxy", () => new Proxy({ a: 1 }, {})],
     [
       "revoked proxy",
       () => {
@@ -635,6 +635,17 @@ describe("canonicalJson refuses non-plain data with a coded error", () => {
       },
     ],
   ];
+
+  // Only Node can detect a proxy. Without node:util, a proxy serializes as the data it reports.
+  it.runIf(expectedRuntime === "node")("throws not_canonical for a proxy on Node", () => {
+    expect(codeOf(() => canonicalJson(new Proxy({ a: 1 }, {})))).toBe("not_canonical");
+    expect(codeOf(() => digest({ nested: new Proxy({ a: 1 }, {}) }))).toBe("not_canonical");
+  });
+
+  it.runIf(expectedRuntime === "portable")("serializes a proxy as its data elsewhere", () => {
+    expect(canonicalJson(new Proxy({ a: 1 }, {}))).toBe('{"a":1}');
+    expect(digest({ nested: new Proxy({ a: 1 }, {}) })).toBe(digest({ nested: { a: 1 } }));
+  });
 
   it("throws not_canonical for every non-plain value, in canonicalJson and digest", () => {
     for (const [label, make] of variants) {

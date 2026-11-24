@@ -1,17 +1,16 @@
-import { createHash } from "node:crypto";
-import { types } from "node:util";
-
 import { PermitkitError } from "./errors.js";
-import { hasInternalSlots } from "./plain.js";
+import { hasInternalSlots, isProxy } from "./plain.js";
+import { sha256Hex } from "./sha256.js";
 
 /**
  * Serializes a JSON value with sorted object keys and no insignificant whitespace.
  * The same value always gives the same string, so a digest over it is stable across
  * processes and releases. Values that JSON cannot represent exactly are rejected with
- * `not_canonical`: non-plain objects (class instances, a Map or Date, proxies), symbol or
+ * `not_canonical`: non-plain objects (class instances, a Map or Date, proxies on Node), symbol or
  * non-enumerable keys, getters and setters, array holes and named array properties. Nothing is
  * dropped silently, except a key set to `undefined`, which counts as absent as in JSON.
- * No caller code runs: only data properties are read.
+ * No caller code runs: only data properties are read. In a runtime without node:util a proxy
+ * cannot be detected: it is read like a plain object, and its traps run.
  */
 export function canonicalJson(value: unknown): string {
   try {
@@ -34,7 +33,7 @@ export function compareText(left: string, right: string): number {
 
 /** Lowercase hex SHA-256 over the canonical JSON form of a value. */
 export function digest(value: unknown): string {
-  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+  return sha256Hex(canonicalJson(value));
 }
 
 function notCanonical(message: string): never {
@@ -73,8 +72,9 @@ function dataProperty(object: object, key: string): unknown {
 }
 
 function serializeObject(object: object, seen: Set<object>): string {
-  // A proxy can report any shape and run code on every read.
-  if (types.isProxy(object)) return notCanonical("Proxies have no canonical JSON form.");
+  // A proxy can report any shape and run code on every read. Only Node can detect one; see
+  // plain.ts for the other runtimes.
+  if (isProxy(object)) return notCanonical("Proxies have no canonical JSON form.");
   if (seen.has(object)) return notCanonical("Cyclic values have no JSON form.");
   seen.add(object);
   try {

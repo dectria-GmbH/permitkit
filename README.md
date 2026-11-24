@@ -314,11 +314,33 @@ proxies, array
 holes, huge values, and data-valued pollution of `Object.prototype` from a bug elsewhere in the
 process. Data-valued pollution of `Array.prototype` also gives a deny, but is tested less.
 Such input gives a deny, never an exception from a decision function. One gap remains: a
-built-in or class instance that keeps its data in `#private` fields or engine slots that Node
-cannot identify (for example a `URL`, a `WeakRef` or an `Intl` object), with its prototype set to
-`Object.prototype` by caller code, copies as `{}`. A `{}` is refused as a scope, limit or
-condition and narrows as `resource.properties`, so it cannot widen access. Proxies count as not plain
-data, also reactive ones from UI state libraries: pass a plain copy. Code that runs in your
+built-in or class instance that keeps its data in `#private` fields or engine slots that
+permitkit cannot identify (for example a `URL`, a `WeakRef` or an `Intl` object), with its
+prototype set to `Object.prototype` by caller code, copies as `{}`. A `{}` is refused as a scope,
+limit or condition and narrows as `resource.properties`, so it cannot widen access. Pass plain
+copies, also of reactive objects from UI state libraries.
+
+How permitkit identifies objects that are not plain data depends on the runtime. It picks one of
+two ways when it loads:
+
+- **Node** (`process.getBuiltinModule` exists). permitkit uses `node:util`. A proxy is refused.
+  Every built-in that Node identifies by its engine slots is refused, also with a swapped
+  prototype: a `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `RegExp`, `Promise`, buffer, typed
+  array, `DataView`, boxed primitive, error, generator, `Map` or `Set` iterator, module namespace
+  and `arguments` object.
+- **Other runtimes** (no `process`, for example Cloudflare Workers without `nodejs_compat`).
+  permitkit calls built-in methods that fail for an object without the slot and run no caller
+  code. A `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `RegExp`, buffer, typed array, `DataView`,
+  boxed primitive and error are refused, also with a swapped prototype. A `Promise`, generator
+  or iterator has no such check without side effects: with a swapped prototype it copies as
+  `{}`, like the gap above. A JavaScript program cannot tell a proxy from its target, so a proxy
+  is not refused. The size guard reads it once, as it reads any object: own data properties
+  only. The proxy's traps run during that read, and validation and the decision use the copy,
+  so the proxy cannot show one value to the guard and another to the decision. A proxy that
+  hides its keys copies as `{}`, which cannot widen access.
+
+The SHA-256 for digests is part of permitkit, so digests are the same in every runtime. Code
+that runs in your
 process with its own functions (a replaced `Array.prototype.map`, a function on
 `Object.prototype.then`) is not covered. permitkit hardens the paths it knows about, but such
 code can change the behaviour of any library in the process.

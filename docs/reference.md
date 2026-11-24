@@ -76,13 +76,18 @@ that would be valid.
 permitkit throws only for programming and configuration errors. Decisions never throw for bad
 requests, including throwing getters and revoked proxies; they deny. `catalog_invalid` is also
 thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
-`canonicalJson` and `digest` throw `not_canonical`, never a raw error: for proxies, objects
-whose prototype is not `Object.prototype`, `null` or `Array.prototype`, built-ins that Node
-identifies by their internal slots (a `Map` or `Date`, also with a swapped prototype), symbol or
-non-enumerable keys, getters and setters (which are not run), array holes and named array
-properties, and input too deep to walk. An object that keeps its data in `#private` fields or in
-slots that Node cannot identify (a `URL`, a `WeakRef`, an `Intl` object), with its prototype set
-to `Object.prototype`, serializes as `{}`. Pass plain JSON data.
+`canonicalJson` and `digest` throw `not_canonical`, never a raw error: for objects whose
+prototype is not `Object.prototype`, `null` or `Array.prototype`, built-ins identified by their
+internal slots (a `Map` or `Date`, also with a swapped prototype), symbol or non-enumerable keys,
+getters and setters (which are not run), array holes and named array properties, revoked
+proxies, and input too deep to walk. On Node, every proxy is refused too. In a runtime without
+`process` (for example Cloudflare Workers without `nodejs_compat`), a proxy cannot be detected:
+it serializes as the data it reports, and its traps run. There, a `Promise`, generator or
+iterator with its prototype set to `Object.prototype` serializes as `{}`; Node refuses them. An
+object that keeps its data in `#private` fields or in slots that permitkit cannot identify (a
+`URL`, a `WeakRef`, an `Intl` object), with its prototype set to `Object.prototype`, serializes
+as `{}` in every runtime. The threat model in the README lists the checks per runtime. Pass plain
+JSON data.
 
 | Code                        | Thrown by                                                                                              | Meaning                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
@@ -103,7 +108,9 @@ Before schema validation, every input is copied through a size guard (`src/bound
 that is not plain data (objects other than plain objects and arrays, hidden keys, holes; see the
 threat model in the README for the one gap) is
 unusable as a whole and gives a deny. Getters and setters count as not plain data; the guard reads
-data properties only, so no caller code runs during the copy.
+data properties only, so no caller code runs during the copy. On Node, a proxy is also unusable. In
+a runtime without `process`, a proxy cannot be detected: the guard copies it like a plain object,
+its traps run during that one read, and validation runs on the copy.
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Audit records: 300,000 values, and the request inside meets the request
 bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.
