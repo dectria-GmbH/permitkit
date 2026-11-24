@@ -57,9 +57,10 @@ const cases: [target: string, method: string, valid: string][] = [
   // No such call on the compile path any more, so the valid document compiles.
   ["Array", "map", "compiled"],
   ["Array", "forEach", "compiled"],
-  // Still used by compilePolicy and the canonical digest; the failure becomes policy_invalid.
+  // The canonical digest does not call join any more.
+  ["Array", "join", "compiled"],
+  // Still used by compilePolicy; the failure becomes policy_invalid.
   ["Array", "toSorted", "policy_invalid"],
-  ["Array", "join", "policy_invalid"],
   // Used by checkReferences. The check of the error code itself must not use it.
   ["Set", "has", "policy_invalid"],
 ];

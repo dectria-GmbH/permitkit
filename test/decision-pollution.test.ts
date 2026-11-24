@@ -92,14 +92,23 @@ const granted = ["granted", "granted", "granted"];
 
 /** Each pollution and the decisions it gives. Before the fix, the first four cases threw. */
 const cases: [label: string, target: object, key: string, value: unknown, expected: string[]][] = [
-  ['Object.prototype["1"] read-only', Object.prototype, "1", "x", denied],
-  ["Array.prototype.join = 1", Array.prototype, "join", 1, denied],
-  ["Array.prototype.toSorted = 1", Array.prototype, "toSorted", 1, denied],
-  ["JSON.stringify = 1", JSON, "stringify", 1, denied],
+  // explain still writes an array index; decide and evaluate do not.
+  [
+    'Object.prototype["1"] read-only',
+    Object.prototype,
+    "1",
+    "x",
+    ["granted", "invalid_request", "granted"],
+  ],
+  // The canonical digest captures these at load or does not call them, so the decision holds.
+  ["Array.prototype.join = 1", Array.prototype, "join", 1, granted],
+  ["Array.prototype.toSorted = 1", Array.prototype, "toSorted", 1, granted],
+  ["JSON.stringify = 1", JSON, "stringify", 1, granted],
+  // Still called on the decision path; the failure becomes the internal-failure deny.
   ["Set.prototype.has = 1", Set.prototype, "has", 1, denied],
   ["Set.prototype.add = 1", Set.prototype, "add", 1, denied],
-  // Used by the cycle check of the canonical digest.
-  ["Set.prototype.delete = 1", Set.prototype, "delete", 1, denied],
+  // Used by the cycle check of the canonical digest, through a method captured at load.
+  ["Set.prototype.delete = 1", Set.prototype, "delete", 1, granted],
   // Captured at load: the registry of compiled policies still works.
   ["WeakMap.prototype.get = 1", WeakMap.prototype, "get", 1, granted],
   ["WeakMap.prototype.set = 1", WeakMap.prototype, "set", 1, granted],
