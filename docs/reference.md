@@ -188,3 +188,19 @@ The request digest has the format tag `permitkit.request/2`. It covers the agent
 including their `scope` and `limits` in the schema 2 shape, so digests from the earlier format do
 not match. Audit records have the format tag `permitkit.decision/2`; a record with another tag is
 `not_replayable`.
+
+## Plain-data path (`plainDataRuntime`)
+
+`plainDataRuntime` is `"node"` or `"portable"`: the way permitkit tells plain data from objects
+that only look plain, chosen once when the package loads (see the threat model in the README).
+`"node"` means `process.getBuiltinModule("node:util")` gave a working `util.types`: proxies are
+refused, and so is every built-in that `util.types` identifies by its engine slots, also with a
+swapped prototype. `"portable"` means the package found no such `util.types` and uses the
+checks that work without it, which do not detect a proxy. permitkit switches to the portable path
+without an error or a log line. If your service needs the Node checks, assert the value at boot:
+
+```ts
+import { plainDataRuntime } from "permitkit";
+
+if (plainDataRuntime !== "node") throw new Error("permitkit runs without node:util checks");
+```

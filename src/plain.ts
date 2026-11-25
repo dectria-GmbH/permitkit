@@ -172,8 +172,13 @@ function hostProcess(): unknown {
 
 const active: PlainDataChecks = nodeChecks(hostProcess()) ?? portableChecks;
 
-/** The path chosen at module load. Tests read it to confirm which path they cover. */
-export const plainDataRuntime = active.runtime;
+/**
+ * The path chosen at module load: "node" if `util.types` is in use, "portable" otherwise.
+ * Exported from the package root, so an application that needs the Node checks (proxies and
+ * every built-in with engine slots refused) can assert the value at boot instead of running on
+ * the weaker path without notice.
+ */
+export const plainDataRuntime: "node" | "portable" = active.runtime;
 
 /** True for a proxy on Node. Always false on the portable path. */
 export function isProxy(value: object): boolean {

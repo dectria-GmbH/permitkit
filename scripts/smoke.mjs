@@ -39,4 +39,6 @@ const denied = core.decide(policy, testing.accessRequest(testing.human("u"), "ti
 assert.equal(allowed.outcome, "allow");
 assert.equal(denied.outcome, "deny");
 assert.equal(denied.reason, "no_grant");
+// Node gives util.types, so the package must not fall back to the portable checks.
+assert.equal(core.plainDataRuntime, "node");
 console.log("smoke ok: permitkit and permitkit/testing load from dist");

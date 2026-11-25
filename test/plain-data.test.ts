@@ -4,7 +4,13 @@ import { types } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import { boundedSnapshot, requestBounds, snapshotOf } from "../src/bounds.js";
-import { canonicalJson, decide, type AccessRequest, type Scope } from "../src/index.js";
+import {
+  canonicalJson,
+  decide,
+  plainDataRuntime as rootRuntime,
+  type AccessRequest,
+  type Scope,
+} from "../src/index.js";
 import {
   hasInternalSlots,
   isProxy,
@@ -156,6 +162,7 @@ function referenceResults() {
 describe("plain-data checks", () => {
   it("runs on the path that this vitest project forces", () => {
     expect(plainDataRuntime).toBe(expectedRuntime);
+    expect(rootRuntime).toBe(expectedRuntime);
   });
 
   it("gives today's node:util results on the Node path, for every item", () => {
