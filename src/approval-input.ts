@@ -72,7 +72,7 @@ export type SeparationRule = {
    * The principals who contributed to the subject of the request, from the consumer's records.
    * Required: an empty list means "no contributors".
    */
-  contributors?: readonly string[] | undefined;
+  contributors: readonly string[];
 };
 
 export type ApprovalInput = {
@@ -162,6 +162,14 @@ const priorRequest: Check<PriorRequest> = (value, path, issues) => {
   return bare({ principalId, permission });
 };
 
+/**
+ * A separation rule as the validator returns it. `contributors` stays optional here, because a
+ * caller in plain JavaScript can omit it, and the evaluation refuses that with its own reason.
+ */
+export type CheckedSeparationRule = Omit<SeparationRule, "contributors"> & {
+  contributors?: readonly string[] | undefined;
+};
+
 const ruleVersion = text({ min: 1, max: 128 });
 const roleSeparation = oneOf(["off", "simple", "strict"]);
 const contributorList = list(approverId);
@@ -170,7 +178,7 @@ const contributorList = list(approverId);
  * A separation rule, copied into a frozen object without a prototype. Unknown keys are refused.
  * `contributors` is optional in the shape so that its absence gets its own reason later.
  */
-export const separationRule: Check<SeparationRule> = (value, path, issues) => {
+export const separationRule: Check<CheckedSeparationRule> = (value, path, issues) => {
   if (!isObject(value)) return fail(issues, path, "Expected a separation rule object.");
   const version = required(value, "version", path, issues, ruleVersion);
   const mayApprove = required(value, "requesterMayApprove", path, issues, bool);

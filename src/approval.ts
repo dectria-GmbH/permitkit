@@ -4,6 +4,7 @@ import {
   separationRule,
   type Approval,
   type ApprovalProof,
+  type CheckedSeparationRule,
   type SeparationRule,
 } from "./approval-input.js";
 import {
@@ -263,7 +264,7 @@ async function evaluateApprovalsUnguarded(
   const priorRequests = data.priorRequests;
   // The rule is validated into a frozen copy before any use. An invalid rule never falls back
   // to the policy flags.
-  let separation: SeparationRule | undefined;
+  let separation: CheckedSeparationRule | undefined;
   if (data.separation !== undefined) {
     const checked = separationRule(data.separation, null, []);
     if (checked === invalid) return result("deny", "separation_invalid");
@@ -658,7 +659,7 @@ function expectation(approverId: string, digestValue: string): VerifierExpectati
   return freeze(value);
 }
 
-function appliedOf(rule: SeparationRule): AppliedSeparation {
+function appliedOf(rule: CheckedSeparationRule): AppliedSeparation {
   const applied = bareObject<{
     version: string;
     requesterMayApprove: boolean;
