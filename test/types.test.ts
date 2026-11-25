@@ -7,6 +7,9 @@ import type { z } from "zod";
 import type {
   AccessRequest,
   Actor,
+  Approval,
+  ApprovalInput,
+  ApprovalProof,
   AgentGrant,
   AgentGrantEntry,
   ApprovalRule,
@@ -25,6 +28,9 @@ import type {
 import type {
   accessRequestSchema,
   agentGrantEntrySchema,
+  approvalInputSchema,
+  approvalProofSchema,
+  approvalSchema,
   agentGrantSchema,
   approvalRuleSchema,
   denySchema,
@@ -59,5 +65,8 @@ describe("exported types", () => {
     expectTypeOf<RoleAssignment>().toEqualTypeOf<z.output<typeof roleAssignmentSchema>>();
     expectTypeOf<Scalar>().toEqualTypeOf<z.output<typeof scalarSchema>>();
     expectTypeOf<Subject>().toEqualTypeOf<z.output<typeof subjectSchema>>();
+    expectTypeOf<ApprovalProof>().toEqualTypeOf<z.output<typeof approvalProofSchema>>();
+    expectTypeOf<Approval>().toEqualTypeOf<z.output<typeof approvalSchema>>();
+    expectTypeOf<ApprovalInput>().toEqualTypeOf<z.input<typeof approvalInputSchema>>();
   });
 });

@@ -1,24 +1,19 @@
-import { z } from "zod";
-
+import {
+  approval as approvalCheck,
+  approvalInput,
+  type Approval,
+  type ApprovalProof,
+} from "./approval-input.js";
 import {
   approvalInputBounds,
-  detach,
   maxApprovals,
   ownArrayLength,
   ownDataValue,
   requestBounds,
   snapshotOf,
 } from "./bounds.js";
-import {
-  decide,
-  denyRuleMatches,
-  parseRequest,
-  permissionOf,
-  requestDigest,
-  type Decision,
-} from "./decide.js";
+import { decide, denyRuleMatches, permissionOf, requestDigest, type Decision } from "./decide.js";
 import { scopeCovers } from "./engine/conditions.js";
-import { safeParse } from "./parse.js";
 import { isPermitkitError, PermitkitError } from "./errors.js";
 import {
   append,
@@ -41,33 +36,10 @@ import {
 } from "./intrinsics.js";
 import { internalsOf, type CompiledPolicy, type DenyRule } from "./policy.js";
 import type { ApprovalReasonCode, ApprovalRejectionCode } from "./reasons.js";
-import { instant, requestTime } from "./time.js";
-import { invalid } from "./validate.js";
-import {
-  accessRequestSchema,
-  requestTimeSchema,
-  subjectSchema,
-  timestampSchema,
-} from "./zod-schemas.js";
+import { instant } from "./time.js";
+import { invalid, type Checked, type Issue } from "./validate.js";
 
-const hexDigest = z.string().regex(/^[0-9a-f]{64}$/, "Use a lowercase hex SHA-256 digest.");
-const timestamp = timestampSchema;
-
-/**
- * Evidence that a specific person approved a specific request, for example a WebAuthn
- * assertion whose challenge is the request digest. permitkit does not interpret `payload`;
- * a verifier for the proof `type` does.
- */
-export const approvalProofSchema = z
-  .object({
-    type: z.string().min(1).max(64),
-    approverId: z.string().min(1).max(256),
-    requestDigest: hexDigest,
-    payload: z.unknown(),
-  })
-  .strict();
-
-export type ApprovalProof = z.output<typeof approvalProofSchema>;
+export type { Approval, ApprovalInput, ApprovalProof, PriorRequest } from "./approval-input.js";
 
 export type ProofVerification =
   | { readonly valid: true; readonly approverId: string; readonly requestDigest: string }
@@ -88,45 +60,6 @@ export interface ApprovalProofVerifier {
     expected: { readonly approverId: string; readonly requestDigest: string },
   ): ProofVerification | Promise<ProofVerification>;
 }
-
-export const approvalSchema = z
-  .object({
-    /** The approving principal, as one identity with its roles. */
-    approver: subjectSchema,
-    approvedAt: timestamp,
-    /** The digest of the request this approval is for. */
-    requestDigest: hexDigest,
-    proof: approvalProofSchema.optional(),
-  })
-  .strict();
-
-export type Approval = z.output<typeof approvalSchema>;
-
-export const approvalInputSchema = z
-  .object({
-    /** The original request. Its context.now is the request time. */
-    request: accessRequestSchema,
-    approvals: z.array(z.unknown()).max(maxApprovals),
-    /** Evaluation time. The requester's rights and the window are checked at this time. */
-    now: requestTimeSchema,
-    /**
-     * Earlier requests by the approvers, as the consumer's records show them. Required if the
-     * operator switched on requesterNeverApprovesSameType.
-     */
-    priorRequests: z
-      .array(
-        z
-          .object({
-            principalId: z.string().min(1),
-            permission: z.string().min(1),
-          })
-          .strict(),
-      )
-      .optional(),
-  })
-  .strict();
-
-export type ApprovalInput = z.input<typeof approvalInputSchema>;
 
 export interface ApprovalRejection {
   readonly index: number;
@@ -257,21 +190,20 @@ async function evaluateApprovalsUnguarded(
     return result("deny", whole.reason === "too_large" ? "input_too_large" : "invalid_input");
   }
   const snapshot = whole.value;
-  // The request and the evaluation time come from the hand-written validators, read from the
-  // plain-data copy before any Zod call. Zod calls built-ins at call time and passes them the
-  // objects it validates: a replaced push or Array.isArray could add a role to the request that
-  // Zod returns, swap it, or change the validated objects in place. So Zod gets its own copy and
-  // never sees the snapshot, and its output for these two keys is not used.
-  const checked = parseRequest(ownDataValue(snapshot, "request"));
-  if (!checked.ok) return result("deny", "invalid_input");
-  const request = checked.request;
-  const nowChecked = requestTime(ownDataValue(snapshot, "now"), null, []);
-  if (nowChecked === invalid) return result("deny", "invalid_input");
-  const nowText: string = nowChecked;
-  const parsed = safeParse(approvalInputSchema, detach(snapshot));
-  if (!parsed.success) return result("deny", "invalid_input");
-  const data = detach(parsed.data);
+  // Hand-written validators on the plain-data copy: every value below is read from it, and no
+  // built-in runs that caller code could have replaced after load.
+  const issues: Issue[] = [];
+  const data = approvalInput(snapshot, null, issues);
+  if (data === invalid) return result("deny", "invalid_input");
+  const request = data.request;
+  const nowText = data.now;
   const priorRequests = data.priorRequests;
+  // Every approval is validated into a new object before any further step and before any
+  // verifier runs, so no caller code runs between the check of a value and its use.
+  const approvals: Checked<Approval>[] = [];
+  for (let index = 0; index < data.approvals.length; index += 1) {
+    append(approvals, approvalCheck(data.approvals[index], null, []));
+  }
   const now = instant(nowText);
   const requestedAt = instant(request.context.now);
   // Written so that an unreadable time fails the check.
@@ -348,14 +280,12 @@ async function evaluateApprovalsUnguarded(
 
   const counted: string[] = [];
   const rejected: ApprovalRejection[] = [];
-  for (let index = 0; index < data.approvals.length; index += 1) {
-    const raw = data.approvals[index];
-    const parsedApproval = safeParse(approvalSchema, raw);
-    if (!parsedApproval.success) {
+  for (let index = 0; index < approvals.length; index += 1) {
+    const approval = approvals[index];
+    if (approval === undefined || approval === invalid) {
       append(rejected, { index, approverId: null, reason: "approval_invalid" });
       continue;
     }
-    const approval = detach(parsedApproval.data);
     const approver = approval.approver;
     const reject = (reason: ApprovalRejectionCode, detail?: string) => {
       append(rejected, { index, approverId: approver.id, reason, ...(detail ? { detail } : {}) });

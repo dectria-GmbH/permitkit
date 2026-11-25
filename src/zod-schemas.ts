@@ -1,9 +1,7 @@
 /**
- * The Zod 3 schemas that permitkit used before its hand-written validators. Only
- * `src/approval.ts`, `src/audit.ts` and the differential tests import this module: approval
- * inputs and decision records still use Zod until their own validators replace it. The
- * request and policy schemas here are the reference that the differential tests compare the
- * hand-written validators with. Do not change them to match a validator.
+ * The Zod 3 schemas that permitkit used before its hand-written validators. Only the
+ * differential tests import this module. The schemas here are the reference that those tests
+ * compare the hand-written validators with. Do not change them to match a validator.
  */
 
 import { z } from "zod";
@@ -431,3 +429,55 @@ function ownAct(value: unknown): unknown {
   const act: unknown = Reflect.get(value, "act");
   return typeof act === "object" ? act : null;
 }
+
+// The approval schemas, verbatim from src/approval.ts as of f04df14.
+// maxApprovals is from src/bounds.ts.
+
+/** The most approvals that one evaluateApprovals call reads. Twice the largest `approvers`. */
+const maxApprovals = 20;
+
+const hexDigest = z.string().regex(/^[0-9a-f]{64}$/, "Use a lowercase hex SHA-256 digest.");
+
+export const approvalProofSchema = z
+  .object({
+    type: z.string().min(1).max(64),
+    approverId: z.string().min(1).max(256),
+    requestDigest: hexDigest,
+    payload: z.unknown(),
+  })
+  .strict();
+
+export const approvalSchema = z
+  .object({
+    /** The approving principal, as one identity with its roles. */
+    approver: subjectSchema,
+    approvedAt: timestamp,
+    /** The digest of the request this approval is for. */
+    requestDigest: hexDigest,
+    proof: approvalProofSchema.optional(),
+  })
+  .strict();
+
+export const approvalInputSchema = z
+  .object({
+    /** The original request. Its context.now is the request time. */
+    request: accessRequestSchema,
+    approvals: z.array(z.unknown()).max(maxApprovals),
+    /** Evaluation time. The requester's rights and the window are checked at this time. */
+    now: requestTimeSchema,
+    /**
+     * Earlier requests by the approvers, as the consumer's records show them. Required if the
+     * operator switched on requesterNeverApprovesSameType.
+     */
+    priorRequests: z
+      .array(
+        z
+          .object({
+            principalId: z.string().min(1),
+            permission: z.string().min(1),
+          })
+          .strict(),
+      )
+      .optional(),
+  })
+  .strict();

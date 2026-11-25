@@ -208,7 +208,7 @@ const actor: Check<Actor> = (value, path, issues) => {
 
 const roleAssignments = list(roleAssignment, { max: 256 });
 
-const subject: Check<Subject> = (value, path, issues) => {
+export const subject: Check<Subject> = (value, path, issues) => {
   if (!isObject(value)) return fail(issues, path, "Expected a subject object.");
   const type = required(value, "type", path, issues, principalType);
   const subjectId = required(value, "id", path, issues, id);
