@@ -7,7 +7,7 @@
  * copy captured at load (see intrinsics.ts), and lists are read by index.
  */
 
-import { contains, hasOwn, isFiniteNumber, objectKeys } from "../intrinsics.js";
+import { contains, freeze, hasOwn, isFiniteNumber, objectKeys } from "../intrinsics.js";
 import type { Scalar } from "../request.js";
 
 export type Properties = Readonly<Record<string, Scalar>> | undefined;
@@ -49,7 +49,13 @@ export function ownValue(properties: Properties, name: string): Scalar | undefin
   return properties[name];
 }
 
-const unknownScope: ScopeResult = { ok: false, property: null, allowed: [], actual: undefined };
+// Shared sentinels, frozen, so a caller that changes one result cannot change later ones.
+const unknownScope: ScopeResult = freeze({
+  ok: false,
+  property: null,
+  allowed: freeze([]),
+  actual: undefined,
+});
 
 /**
  * A scope covers a resource if it is `all`, or if it is `match` and every listed property is
@@ -97,13 +103,13 @@ export function scopeTouches(scope: ScopeLike, properties: Properties): boolean 
   return true;
 }
 
-const unknownLimits: LimitResult = {
+const unknownLimits: LimitResult = freeze({
   ok: false,
   property: null,
   min: null,
   max: null,
   actual: undefined,
-};
+});
 
 /**
  * Limits hold if they are `unlimited`, or if they are `range` and every listed property is a

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { detach } from "../src/bounds.js";
+import { limitsHold, scopeCovers } from "../src/engine/conditions.js";
 import { evaluateApprovals, type ApprovalDecision } from "../src/index.js";
 import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
 import { policy } from "./fixtures.js";
@@ -74,5 +75,19 @@ describe("detach", () => {
     expect(copy).toHaveLength(2);
     expect(copy[0]).toBeUndefined();
     expect(copy[1]).toBe("own");
+  });
+});
+
+describe("shared result sentinels", () => {
+  it("are frozen, so a caller cannot change later results", () => {
+    const scope = scopeCovers({ kind: "unknown" } as never, undefined);
+    const limits = limitsHold({ kind: "unknown" } as never, undefined);
+    expect(scope.ok).toBe(false);
+    expect(Object.isFrozen(scope)).toBe(true);
+    const allowed: unknown = Reflect.get(scope, "allowed");
+    expect(Array.isArray(allowed)).toBe(true);
+    expect(Object.isFrozen(allowed)).toBe(true);
+    expect(limits.ok).toBe(false);
+    expect(Object.isFrozen(limits)).toBe(true);
   });
 });
