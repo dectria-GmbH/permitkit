@@ -40,5 +40,10 @@ jobs:
         run: pnpm build
       - name: Import built entry points
         run: pnpm smoke
+      # The same checks as the tail of `pnpm check`, so a PR cannot break the release build.
+      - name: Bundle without Node built-ins
+        run: pnpm bundle-check
+      - name: Compile a consumer file against the built types
+        run: pnpm consumer-types
       - name: Dependency audit
         run: pnpm audit --audit-level=moderate
