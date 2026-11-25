@@ -26,6 +26,8 @@ function targets(value) {
   return Object.values(value).flatMap(targets);
 }
 for (const target of targets(packageJson.exports)) {
+  // Node refuses an exports target that does not start with "./".
+  assert.ok(target.startsWith("./"), `exports target ${target} does not start with ./`);
   const file = path.posix.normalize(target);
   assert.ok(files.has(file), `exports target ${target} is not in the tarball`);
 }
@@ -42,12 +44,14 @@ for (const file of files) {
 const refused = [
   /(^|\/)\.npmrc$/,
   /(^|\/)\.env/,
-  /(^|\/)\.dev\.vars$/,
+  /(^|\/)\.dev\.vars/,
+  /(^|\/)wrangler[^/]*\.(json|jsonc|toml)$/,
   /^\.github\//,
   /^test\//,
   /^scripts\//,
   /^docs\/releasing\.md$/,
-  /\.test\.[cm]?[jt]s$/,
+  /(^|\/)__tests__\//,
+  /\.(test|spec)\.[cm]?[jt]sx?$/,
 ];
 for (const file of files) {
   const rule = refused.find((pattern) => pattern.test(file));
