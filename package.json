@@ -6,8 +6,11 @@
     "type": "git",
     "url": "git+https://github.com/dectria-GmbH/permitkit.git"
   },
+  "homepage": "https://github.com/dectria-GmbH/permitkit#readme",
+  "bugs": {
+    "url": "https://github.com/dectria-GmbH/permitkit/issues"
+  },
   "license": "MIT",
-  "private": true,
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -28,11 +31,16 @@
   "files": [
     "dist",
     "src",
-    "docs",
+    "docs/reference.md",
+    "docs/database-enforcement.md",
     "AGENTS.md",
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
