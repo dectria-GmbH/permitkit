@@ -455,9 +455,11 @@ Not covered:
 
 - `defineCatalog`. It calls built-ins when it runs, once at startup. The catalogue it returns uses
   the captured ones.
-- Promises in `evaluateApprovals`. permitkit gives its own promises an own `constructor`, so
-  `await` on them reads neither `Promise.prototype.constructor` nor `then`. A verifier's result
-  is caller code and is awaited as it is.
+- Promises in `evaluateApprovals`. permitkit gives an own `constructor` to the promise that
+  `evaluateApprovals` returns and to the promises that it awaits itself. So `await` on them reads
+  neither `Promise.prototype.constructor` nor `then`. A caller that calls `.then()`, `.catch()`
+  or `.finally()` on the returned promise calls the method that it finds, which can be a
+  replaced one. A verifier's result is caller code and is awaited as it is.
 - Proxies on the portable path, as described above, and changes to permitkit's own exports.
 - Code with its own functions in the process can still change any other library and your own
   code around permitkit, for example the code that builds the request.

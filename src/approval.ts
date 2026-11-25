@@ -162,10 +162,21 @@ export interface ApprovalOptions {
  * rule says so, has a verified proof. The function does not track single use: the consumer
  * must mark a request as executed once.
  */
-export async function evaluateApprovals(
+export function evaluateApprovals(
   policy: CompiledPolicy,
   input: unknown,
   options: ApprovalOptions = {},
+): Promise<ApprovalDecision> {
+  // A plain function, not async: the promise of an async function has no own constructor, so
+  // the caller's `await` would read Promise.prototype.constructor and then, which caller code
+  // can replace. awaitable gives the returned promise an own constructor.
+  return awaitable(evaluateApprovalsGuarded(policy, input, options));
+}
+
+async function evaluateApprovalsGuarded(
+  policy: CompiledPolicy,
+  input: unknown,
+  options: ApprovalOptions,
 ): Promise<ApprovalDecision> {
   try {
     return await awaitable(evaluateApprovalsUnguarded(policy, input, options));
