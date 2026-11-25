@@ -1,8 +1,9 @@
-// compilePolicy under data-valued pollution of built-in methods. It may refuse the document,
-// but only with a PermitkitError, never a raw error. Its own codes (catalog_invalid,
-// policy_invalid, policy_schema_unsupported) pass through unchanged; any other failure is
-// policy_invalid with a fixed text. The pollution also breaks the test framework, so each case
-// captures first and asserts after clean-up.
+// compilePolicy under data-valued pollution of built-in methods. Every built-in it calls is
+// captured at load, so the pollution changes no outcome: the invalid document, the fake catalogue
+// and schema 3 are refused with their own codes, and the valid document compiles. Its catch block
+// (any other failure is policy_invalid with a fixed text) is tested in catch-paths.test.ts. The
+// pollution also breaks the test framework, so each case captures first and asserts after
+// clean-up.
 import { describe, expect, it } from "vitest";
 
 import { compilePolicy, defineCatalog, PermitkitError } from "../src/index.js";
@@ -54,21 +55,18 @@ function outcomes(): string[] {
 }
 
 const cases: [target: string, method: string, valid: string][] = [
-  // No such call on the compile path any more, so the valid document compiles.
   ["Array", "map", "compiled"],
   ["Array", "forEach", "compiled"],
-  // The canonical digest does not call join any more.
   ["Array", "join", "compiled"],
-  // Still used by compilePolicy; the failure becomes policy_invalid.
-  ["Array", "toSorted", "policy_invalid"],
-  // Used by checkReferences. The check of the error code itself must not use it.
-  ["Set", "has", "policy_invalid"],
+  // Called through a copy captured at load. Until then the compile failed with policy_invalid.
+  ["Array", "toSorted", "compiled"],
+  ["Set", "has", "compiled"],
 ];
 
 const prototypes: Record<string, object> = { Array: Array.prototype, Set: Set.prototype };
 
 describe("compilePolicy under a polluted prototype", () => {
-  it.each(cases)("%s.prototype.%s = 1 gives no raw error", (target, method, valid) => {
+  it.each(cases)("%s.prototype.%s = 1 changes no outcome", (target, method, valid) => {
     const prototype = prototypes[target] as object;
     const saved = Object.getOwnPropertyDescriptor(prototype, method);
     // The test simulates a prototype-pollution bug elsewhere in the process.
@@ -90,7 +88,9 @@ describe("compilePolicy under a polluted prototype", () => {
 });
 
 describe("compilePolicy under accessor pollution", () => {
-  it("gives no raw error for a thrown PermitkitError with a throwing code getter", () => {
+  // The compile used to call Set.prototype.has, and the catch turned what the getter threw into
+  // policy_invalid (now in catch-paths.test.ts). The getter no longer runs.
+  it("never reads Set.prototype.has", () => {
     class ThrowingCode extends PermitkitError {
       constructor() {
         super("policy_invalid", "made by the caller");
@@ -128,14 +128,13 @@ describe("compilePolicy under accessor pollution", () => {
       // oxlint-disable-next-line no-extend-native
       if (saved !== undefined) Object.defineProperty(Set.prototype, "has", saved);
     }
-    expect(calls).toBeGreaterThan(0);
-    expect(result).toBe("policy_invalid");
+    expect([result, calls]).toEqual(["compiled", 0]);
   });
 });
 
-// Object.hasOwn and Reflect.getOwnPropertyDescriptor run inside compilePolicy, so replacing
-// them fails the compile. The catch reads the error code through copies captured at load, so
-// the failure is still policy_invalid. catalog_invalid comes first, from the captured registry.
+// compilePolicy calls Object.hasOwn and Reflect.getOwnPropertyDescriptor through copies captured
+// at load, so replacing them changes no outcome. Until then, each case failed the compile with
+// policy_invalid, also for schema 3.
 const statics: [label: string, target: object, key: string][] = [
   ["Object.hasOwn", Object, "hasOwn"],
   ["Reflect.getOwnPropertyDescriptor", Reflect, "getOwnPropertyDescriptor"],
@@ -167,7 +166,7 @@ const staticCases = statics.flatMap(([name, target, key]) =>
 );
 
 describe("compilePolicy under a replaced static", () => {
-  it.each(staticCases)("%s gives no raw error", (_label, target, key, descriptor) => {
+  it.each(staticCases)("%s changes no outcome", (_label, target, key, descriptor) => {
     const saved = Object.getOwnPropertyDescriptor(target, key);
     Object.defineProperty(target, key, descriptor());
     let result: string[];
@@ -178,9 +177,9 @@ describe("compilePolicy under a replaced static", () => {
     }
     expect(result).toEqual([
       "policy_invalid",
-      "policy_invalid",
+      "compiled",
       "catalog_invalid",
-      "policy_invalid",
+      "policy_schema_unsupported",
     ]);
   });
 });

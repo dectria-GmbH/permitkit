@@ -9,13 +9,40 @@ import {
   requestBounds,
   snapshotOf,
 } from "./bounds.js";
-import { decide, denyRuleMatches, permissionOf, requestDigest, type Decision } from "./decide.js";
+import {
+  decide,
+  denyRuleMatches,
+  parseRequest,
+  permissionOf,
+  requestDigest,
+  type Decision,
+} from "./decide.js";
 import { scopeCovers } from "./engine/conditions.js";
 import { safeParse } from "./parse.js";
-import { PermitkitError } from "./errors.js";
-import { internalsOf, type CompiledPolicy } from "./policy.js";
+import { isPermitkitError, PermitkitError } from "./errors.js";
+import {
+  append,
+  apply,
+  awaitable,
+  bareObject,
+  contains,
+  defineData,
+  field,
+  freeze,
+  hasOwn,
+  isArray,
+  mapGet,
+  mapSet,
+  newMap,
+  newSet,
+  objectKeys,
+  setAdd,
+  setHas,
+} from "./intrinsics.js";
+import { internalsOf, type CompiledPolicy, type DenyRule } from "./policy.js";
 import type { ApprovalReasonCode, ApprovalRejectionCode } from "./reasons.js";
-import { instant } from "./time.js";
+import { instant, requestTime } from "./time.js";
+import { invalid } from "./validate.js";
 import {
   accessRequestSchema,
   requestTimeSchema,
@@ -135,20 +162,31 @@ export interface ApprovalOptions {
  * rule says so, has a verified proof. The function does not track single use: the consumer
  * must mark a request as executed once.
  */
-export async function evaluateApprovals(
+export function evaluateApprovals(
   policy: CompiledPolicy,
   input: unknown,
   options: ApprovalOptions = {},
 ): Promise<ApprovalDecision> {
+  // A plain function, not async: the promise of an async function has no own constructor, so
+  // the caller's `await` would read Promise.prototype.constructor and then, which caller code
+  // can replace. awaitable gives the returned promise an own constructor.
+  return awaitable(evaluateApprovalsGuarded(policy, input, options));
+}
+
+async function evaluateApprovalsGuarded(
+  policy: CompiledPolicy,
+  input: unknown,
+  options: ApprovalOptions,
+): Promise<ApprovalDecision> {
   try {
-    return await evaluateApprovalsUnguarded(policy, input, options);
+    return await awaitable(evaluateApprovalsUnguarded(policy, input, options));
   } catch (error) {
-    if (error instanceof PermitkitError) throw error;
+    if (isPermitkitError(error)) throw error;
     // Internals can fail under polluted built-in prototypes. Deny, built without array methods.
-    return Object.assign(emptyDecision(), {
-      outcome: "deny" as const,
+    return decisionOf({
+      outcome: "deny",
       allowed: false,
-      reason: "invalid_input" as const,
+      reason: "invalid_input",
       ruleId: null,
       required: 0,
       counted: [],
@@ -177,7 +215,7 @@ async function evaluateApprovalsUnguarded(
   try {
     verifiers = verifierMap(options);
   } catch (error) {
-    if (error instanceof PermitkitError) throw error;
+    if (isPermitkitError(error)) throw error;
     // A hostile options object (proxy, throwing getter) is still a programming error.
     throw new PermitkitError("options_invalid", "The options could not be read.");
   }
@@ -187,9 +225,7 @@ async function evaluateApprovalsUnguarded(
     reason: ApprovalReasonCode,
     rest: Partial<ApprovalDecision> = {},
   ): ApprovalDecision =>
-    // A null prototype: an inherited `then` on Object.prototype must not turn the result into a
-    // thenable, which would keep the returned promise pending forever.
-    Object.assign(emptyDecision(), {
+    decisionOf({
       outcome,
       allowed: outcome === "allow",
       reason,
@@ -221,10 +257,21 @@ async function evaluateApprovalsUnguarded(
     return result("deny", whole.reason === "too_large" ? "input_too_large" : "invalid_input");
   }
   const snapshot = whole.value;
-  const parsed = safeParse(approvalInputSchema, snapshot);
+  // The request and the evaluation time come from the hand-written validators, read from the
+  // plain-data copy before any Zod call. Zod calls built-ins at call time and passes them the
+  // objects it validates: a replaced push or Array.isArray could add a role to the request that
+  // Zod returns, swap it, or change the validated objects in place. So Zod gets its own copy and
+  // never sees the snapshot, and its output for these two keys is not used.
+  const checked = parseRequest(ownDataValue(snapshot, "request"));
+  if (!checked.ok) return result("deny", "invalid_input");
+  const request = checked.request;
+  const nowChecked = requestTime(ownDataValue(snapshot, "now"), null, []);
+  if (nowChecked === invalid) return result("deny", "invalid_input");
+  const nowText: string = nowChecked;
+  const parsed = safeParse(approvalInputSchema, detach(snapshot));
   if (!parsed.success) return result("deny", "invalid_input");
   const data = detach(parsed.data);
-  const { request, now: nowText, priorRequests } = data;
+  const priorRequests = data.priorRequests;
   const now = instant(nowText);
   const requestedAt = instant(request.context.now);
   // Written so that an unreadable time fails the check.
@@ -234,7 +281,8 @@ async function evaluateApprovalsUnguarded(
   try {
     digestValue = requestDigest(policy, request);
   } catch (error) {
-    if (error instanceof PermitkitError && error.code === "request_invalid") {
+    // requestDigest throws only PermitkitErrors that it built, so `code` is its own data.
+    if (isPermitkitError(error) && error.code === "request_invalid") {
       return result("deny", "invalid_input");
     }
     throw error;
@@ -267,22 +315,35 @@ async function evaluateApprovalsUnguarded(
     return result("deny", "sod_history_missing", ruleBase);
   }
   // A misspelt permission in the history would match nothing and let a prior requester approve.
-  if (
-    sod.requesterNeverApprovesSameType &&
-    (priorRequests ?? []).some((prior) => !policy.catalog.isPermission(prior.permission))
-  ) {
-    return result("deny", "invalid_input", ruleBase);
+  const history = priorRequests ?? [];
+  if (sod.requesterNeverApprovesSameType) {
+    for (let index = 0; index < history.length; index += 1) {
+      const prior = history[index];
+      if (prior === undefined || !policy.catalog.isPermission(prior.permission)) {
+        return result("deny", "invalid_input", ruleBase);
+      }
+    }
   }
-  const requestingRoles = new Set(
-    [...internal.roles.values()]
-      .filter((role) => role.grants.some((grant) => grant.permissions.includes(permission)))
-      .map((role) => role.name),
-  );
+  // Roles with a grant for the permission. Index loops over the compiled role list.
+  const requestingRoles = newSet<string>();
+  const roleList = internal.roles.list;
+  for (let index = 0; index < roleList.length; index += 1) {
+    const role = roleList[index];
+    if (role === undefined) continue;
+    for (let grantIndex = 0; grantIndex < role.grants.length; grantIndex += 1) {
+      const grant = role.grants[grantIndex];
+      if (grant !== undefined && contains(grant.permissions, permission)) {
+        setAdd(requestingRoles, role.name);
+        break;
+      }
+    }
+  }
   const properties = request.resource.properties;
   // The requester is the principal and every agent in its actor chain.
-  const requesterIds = new Set<string>([request.subject.id]);
+  const requesterIds = newSet<string>();
+  setAdd(requesterIds, request.subject.id);
   for (let actor = request.subject.act; actor !== null; actor = actor.act) {
-    requesterIds.add(actor.id);
+    setAdd(requesterIds, actor.id);
   }
 
   const counted: string[] = [];
@@ -291,13 +352,13 @@ async function evaluateApprovalsUnguarded(
     const raw = data.approvals[index];
     const parsedApproval = safeParse(approvalSchema, raw);
     if (!parsedApproval.success) {
-      rejected.push({ index, approverId: null, reason: "approval_invalid" });
+      append(rejected, { index, approverId: null, reason: "approval_invalid" });
       continue;
     }
     const approval = detach(parsedApproval.data);
     const approver = approval.approver;
     const reject = (reason: ApprovalRejectionCode, detail?: string) => {
-      rejected.push({ index, approverId: approver.id, reason, ...(detail ? { detail } : {}) });
+      append(rejected, { index, approverId: approver.id, reason, ...(detail ? { detail } : {}) });
     };
     if (approver.type !== "human") {
       reject("approver_not_human");
@@ -307,11 +368,11 @@ async function evaluateApprovalsUnguarded(
       reject("approver_is_delegated");
       continue;
     }
-    if (requesterIds.has(approver.id)) {
+    if (setHas(requesterIds, approver.id)) {
       reject("requester_cannot_approve");
       continue;
     }
-    if (counted.includes(approver.id)) {
+    if (contains(counted, approver.id)) {
       reject("duplicate_approver");
       continue;
     }
@@ -332,9 +393,16 @@ async function evaluateApprovalsUnguarded(
       reject("approved_in_future");
       continue;
     }
-    const denyRule = internal.denies.find((candidate) =>
-      denyRuleMatches(candidate, approver, permission, properties),
-    );
+    let denyRule: DenyRule | undefined;
+    for (let denyIndex = 0; denyIndex < internal.denies.length; denyIndex += 1) {
+      const candidate = internal.denies[denyIndex];
+      // An unreadable deny rule is an internal failure; the catch above denies.
+      if (candidate === undefined) throw new TypeError("A deny rule could not be read.");
+      if (denyRuleMatches(candidate, approver, permission, properties)) {
+        denyRule = candidate;
+        break;
+      }
+    }
     if (denyRule !== undefined) {
       reject("approver_denied_by_rule", denyRule.id);
       continue;
@@ -342,10 +410,14 @@ async function evaluateApprovalsUnguarded(
     const eligibility = rule.eligibleApprovers;
     if (eligibility.kind === "roles") {
       const approverRoles = eligibility.roles;
-      const eligible = approver.roles.some(
-        (assignment) =>
-          approverRoles.includes(assignment.role) && scopeCovers(assignment.scope, properties).ok,
-      );
+      let eligible = false;
+      for (let roleIndex = 0; roleIndex < approver.roles.length && !eligible; roleIndex += 1) {
+        const assignment = approver.roles[roleIndex];
+        eligible =
+          assignment !== undefined &&
+          contains(approverRoles, assignment.role) &&
+          scopeCovers(assignment.scope, properties).ok;
+      }
       if (!eligible) {
         reject("approver_role_missing");
         continue;
@@ -367,35 +439,43 @@ async function evaluateApprovalsUnguarded(
       continue;
     }
     if (sod.exclusiveRequestAndApproveRoles) {
-      const conflict = approver.roles.find((assignment) => requestingRoles.has(assignment.role));
+      let conflict: string | undefined;
+      for (let roleIndex = 0; roleIndex < approver.roles.length; roleIndex += 1) {
+        const assignment = approver.roles[roleIndex];
+        if (assignment !== undefined && setHas(requestingRoles, assignment.role)) {
+          conflict = assignment.role;
+          break;
+        }
+      }
       if (conflict !== undefined) {
-        reject("sod_role_conflict", conflict.role);
+        reject("sod_role_conflict", conflict);
         continue;
       }
     }
-    if (
-      sod.requesterNeverApprovesSameType &&
-      (priorRequests ?? []).some(
-        (prior) => prior.principalId === approver.id && prior.permission === permission,
-      )
-    ) {
-      reject("sod_prior_request");
-      continue;
+    if (sod.requesterNeverApprovesSameType) {
+      let requestedBefore = false;
+      for (let priorIndex = 0; priorIndex < history.length && !requestedBefore; priorIndex += 1) {
+        const prior = history[priorIndex];
+        requestedBefore =
+          prior !== undefined &&
+          prior.principalId === approver.id &&
+          prior.permission === permission;
+      }
+      if (requestedBefore) {
+        reject("sod_prior_request");
+        continue;
+      }
     }
     if (rule.requireProof) {
-      const rejection = await checkProof(
-        approval,
-        approver.id,
-        digestValue,
-        verifiers,
-        rule.proofTypes,
+      const rejection = await awaitable(
+        checkProof(approval, approver.id, digestValue, verifiers, rule.proofTypes),
       );
       if (rejection !== null) {
         reject(rejection.reason, rejection.detail);
         continue;
       }
     }
-    counted.push(approver.id);
+    append(counted, approver.id);
   }
 
   const rest = { ...ruleBase, counted, rejected };
@@ -412,13 +492,13 @@ async function checkProof(
 ): Promise<ProofRejection | null> {
   const proof = approval.proof;
   if (proof === undefined) return proofRejection("proof_missing");
-  if (proofTypes !== undefined && !proofTypes.includes(proof.type)) {
+  if (proofTypes !== undefined && !contains(proofTypes, proof.type)) {
     return proofRejection("proof_type_not_allowed", proof.type);
   }
   if (proof.approverId !== approverId || proof.requestDigest !== digestValue) {
     return proofRejection("proof_mismatch");
   }
-  const verifier = verifiers.get(proof.type);
+  const verifier = mapGet(verifiers, proof.type);
   if (verifier === undefined) return proofRejection("proof_verifier_missing", proof.type);
   try {
     const verification: unknown = await verifier.verify(proof, {
@@ -477,8 +557,10 @@ interface ProofRejection {
  * into null, and null means "counted".
  */
 function proofRejection(reason: ApprovalRejectionCode, detail?: string): ProofRejection {
-  const value: ProofRejection = Object.create(null);
-  return Object.assign(value, detail === undefined ? { reason } : { reason, detail });
+  const value = bareObject<{ reason: ApprovalRejectionCode; detail?: string }>();
+  value.reason = reason;
+  if (detail !== undefined) value.detail = detail;
+  return value;
 }
 
 /**
@@ -487,34 +569,47 @@ function proofRejection(reason: ApprovalRejectionCode, detail?: string): ProofRe
  */
 function verifierMap(options: unknown): ReadonlyMap<string, BoundVerifier> {
   if (!isRecord(options)) return failOptions("The options must be an object.");
-  for (const key of Object.keys(options)) {
-    if (key !== "verifiers") return failOptions(`Unknown option: ${key}.`);
+  const keys = objectKeys(options);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key !== "verifiers") return failOptions(`Unknown option: ${key ?? ""}.`);
   }
-  const list: unknown = Object.hasOwn(options, "verifiers") ? options["verifiers"] : undefined;
-  if (list === undefined) return new Map();
-  if (!Array.isArray(list)) return failOptions("options.verifiers must be an array.");
-  const map = new Map<string, BoundVerifier>();
-  for (const item of list as unknown[]) {
+  const list: unknown = hasOwn(options, "verifiers") ? options["verifiers"] : undefined;
+  const map = newMap<string, BoundVerifier>();
+  if (list === undefined) return map;
+  if (!isArray(list)) return failOptions("options.verifiers must be an array.");
+  // By index, not for-of: a for-of reads the array iterator, which caller code can replace.
+  for (let index = 0; index < list.length; index += 1) {
+    const item: unknown = list[index];
     // Read type and verify once, from own properties, and keep the values read.
     const type = ownValue(item, "type");
     const verify = ownValue(item, "verify");
     if (typeof type !== "string" || typeof verify !== "function") {
       return failOptions("Each verifier needs an own string type and an own verify function.");
     }
-    if (map.has(type)) return failOptions(`Two verifiers have the type ${type}.`);
+    if (mapGet(map, type) !== undefined) return failOptions(`Two verifiers have the type ${type}.`);
     const bound = (proof: ApprovalProof, expected: VerifierExpectation): unknown =>
-      Reflect.apply(verify, item, [proof, expected]);
-    map.set(type, Object.freeze({ type, verify: bound }));
+      apply(verify, item, [proof, expected]);
+    mapSet(map, type, freeze({ type, verify: bound }));
   }
   return map;
 }
 
 function ownValue(value: unknown, key: string): unknown {
-  if (!isRecord(value) || !Object.hasOwn(value, key)) return undefined;
+  if (!isRecord(value) || !hasOwn(value, key)) return undefined;
   return value[key];
 }
 
-function emptyDecision(): ApprovalDecision {
-  const empty: ApprovalDecision = Object.create(null);
-  return empty;
+/**
+ * A copy of the decision without a prototype. An inherited `then` on Object.prototype must not
+ * turn the result into a thenable, which would keep the returned promise pending forever.
+ */
+function decisionOf(fields: ApprovalDecision): ApprovalDecision {
+  const decision = bareObject<ApprovalDecision>();
+  const keys = objectKeys(fields);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key !== undefined) defineData(decision, key, field(fields, key));
+  }
+  return decision;
 }

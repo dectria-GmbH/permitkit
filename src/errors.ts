@@ -55,3 +55,11 @@ export class PermitkitError extends Error {
     this.issues = issues;
   }
 }
+
+/**
+ * PermitkitError.is, captured at load. permitkit's own catch blocks use this copy, so a replaced
+ * static on the exported class cannot change how they treat an error.
+ */
+// The method reads only its argument and a private field, never `this`.
+// oxlint-disable-next-line typescript/unbound-method
+export const isPermitkitError = PermitkitError.is;

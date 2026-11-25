@@ -105,10 +105,13 @@ const id = text({ min: 1, max: 256 });
 const name = text({ min: 1, max: 128 });
 const principalType = oneOf(["human", "service"]);
 
+const scalarText = text({ max: 4096 });
+const scalarNumber = finiteNumber({});
+
 const scalar: Check<Scalar> = (value, path, issues) => {
   if (value === null || typeof value === "boolean") return value;
-  if (typeof value === "string") return text({ max: 4096 })(value, path, issues);
-  if (typeof value === "number") return finiteNumber({})(value, path, issues);
+  if (typeof value === "string") return scalarText(value, path, issues);
+  if (typeof value === "number") return scalarNumber(value, path, issues);
   return fail(issues, path, "Use a string, a finite number, true, false or null.");
 };
 
@@ -120,15 +123,11 @@ const roleAssignment: Check<RoleAssignment> = (value, path, issues) => {
   return role === invalid || where === invalid || !known ? invalid : bare({ role, scope: where });
 };
 
+const grantPermissions = list(text({ min: 1 }), { min: 1 });
+
 const agentGrantEntry: Check<AgentGrantEntry> = (value, path, issues) => {
   if (!isObject(value)) return fail(issues, path, "Expected an agent grant entry object.");
-  const permissions = required(
-    value,
-    "permissions",
-    path,
-    issues,
-    list(text({ min: 1 }), { min: 1 }),
-  );
+  const permissions = required(value, "permissions", path, issues, grantPermissions);
   const where = required(value, "scope", path, issues, scope);
   const bounds = required(value, "limits", path, issues, limits);
   const known = knownKeys(value, ["permissions", "scope", "limits"], path, issues);
@@ -136,13 +135,15 @@ const agentGrantEntry: Check<AgentGrantEntry> = (value, path, issues) => {
   return bare({ permissions, scope: where, limits: bounds });
 };
 
+const agentGrantEntries = list(agentGrantEntry, { min: 1 });
+
 const agentGrant: Check<AgentGrant> = (value, path, issues) => {
   if (!isObject(value)) return fail(issues, path, "Expected an agent grant object.");
   const grantId = required(value, "id", path, issues, id);
   const principalId = required(value, "principalId", path, issues, id);
   const type = required(value, "principalType", path, issues, principalType);
   const agentId = required(value, "agentId", path, issues, id);
-  const entries = required(value, "entries", path, issues, list(agentGrantEntry, { min: 1 }));
+  const entries = required(value, "entries", path, issues, agentGrantEntries);
   const notBefore = required(value, "notBefore", path, issues, nullable(timestamp));
   const expiresAt = required(value, "expiresAt", path, issues, timestamp);
   const revokedAt = required(value, "revokedAt", path, issues, nullable(timestamp));
@@ -205,11 +206,13 @@ const actor: Check<Actor> = (value, path, issues) => {
   return bare({ type, id: actorId, grant, act: prior });
 };
 
+const roleAssignments = list(roleAssignment, { max: 256 });
+
 const subject: Check<Subject> = (value, path, issues) => {
   if (!isObject(value)) return fail(issues, path, "Expected a subject object.");
   const type = required(value, "type", path, issues, principalType);
   const subjectId = required(value, "id", path, issues, id);
-  const roles = required(value, "roles", path, issues, list(roleAssignment, { max: 256 }));
+  const roles = required(value, "roles", path, issues, roleAssignments);
   const act = required(value, "act", path, issues, nullable(actor));
   const known = knownKeys(value, ["type", "id", "roles", "act"], path, issues);
   if (type === invalid || subjectId === invalid || roles === invalid || act === invalid || !known) {

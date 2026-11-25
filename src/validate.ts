@@ -13,8 +13,28 @@
  * - A refinement (a rule over a whole value) runs only if the value had no other issue.
  *
  * Only own properties are read, by index or key, never through an iterator, so a polluted
- * Object.prototype or Array.prototype cannot supply a field or an item.
+ * Object.prototype or Array.prototype cannot supply a field or an item. The rules of each
+ * checker are copied into an object without a prototype when the checker is made, so an
+ * absent rule such as `min` or `key` reads as undefined and never runs an inherited getter.
+ * Every built-in is called through a copy captured at load (see intrinsics.ts).
  */
+
+import {
+  append,
+  bareObject,
+  contains,
+  defineData,
+  field,
+  hasOwn,
+  isArray,
+  isFiniteNumber,
+  isInteger,
+  isNaNNumber,
+  jsonText,
+  matches,
+  objectKeys,
+  toText,
+} from "./intrinsics.js";
 
 /** A path into the input, built only when an issue needs it. */
 export type Path = { readonly parent: Path; readonly key: string | number } | null;
@@ -36,8 +56,14 @@ export function at(path: Path, key: string | number): Path {
 }
 
 export function pathOf(path: Path): (string | number)[] {
+  // The chain runs from the leaf to the root. Reversed by index, without unshift.
+  const leafFirst: (string | number)[] = [];
+  for (let node = path; node !== null; node = node.parent) append(leafFirst, node.key);
   const keys: (string | number)[] = [];
-  for (let node = path; node !== null; node = node.parent) keys.unshift(node.key);
+  for (let index = leafFirst.length - 1; index >= 0; index -= 1) {
+    const key = leafFirst[index];
+    if (key !== undefined) append(keys, key);
+  }
   return keys;
 }
 
@@ -45,42 +71,36 @@ export function pathOf(path: Path): (string | number)[] {
 export function joined(items: readonly (string | number)[], separator: string): string {
   let result = "";
   for (let index = 0; index < items.length; index += 1) {
-    result += `${index === 0 ? "" : separator}${String(items[index])}`;
+    result += `${index === 0 ? "" : separator}${toText(items[index])}`;
   }
   return result;
 }
 
 /** Adds an issue and returns `invalid`. */
 export function fail(issues: Issue[], path: Path, message: string): typeof invalid {
-  issues.push({ path: pathOf(path), message });
+  append(issues, { path: pathOf(path), message });
   return invalid;
 }
 
 /** A plain object, an object without a prototype, or any other non-array object. */
 export function isObject(value: unknown): value is object {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === "object" && value !== null && !isArray(value);
 }
 
 /** The own value of a key, or undefined. Never an inherited value. */
 export function own(value: object, key: string): unknown {
-  if (!Object.hasOwn(value, key)) return undefined;
-  const item: unknown = Reflect.get(value, key);
-  return item;
+  if (!hasOwn(value, key)) return undefined;
+  return field(value, key);
 }
 
 /** A copy of the object in an object without a prototype, so absent keys read as undefined. */
 export function bare<T extends object>(value: T): T {
-  const result: Record<string, unknown> = Object.create(null);
-  const keys = Object.keys(value);
+  const result = bareObject();
+  const keys = objectKeys(value);
   for (let index = 0; index < keys.length; index += 1) {
     const key = keys[index];
     if (key === undefined) continue;
-    Object.defineProperty(result, key, {
-      value: Reflect.get(value, key),
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
+    defineData(result, key, field(value, key));
   }
   // The copy has exactly the keys and values of the input.
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
@@ -94,11 +114,11 @@ export function knownKeys(
   path: Path,
   issues: Issue[],
 ): boolean {
-  const present = Object.keys(value);
+  const present = objectKeys(value);
   const unknown: string[] = [];
   for (let index = 0; index < present.length; index += 1) {
     const key = present[index];
-    if (key !== undefined && !keys.includes(key)) unknown.push(JSON.stringify(key));
+    if (key !== undefined && !contains(keys, key)) append(unknown, jsonText(key));
   }
   if (unknown.length === 0) return true;
   fail(issues, path, `Unknown key(s): ${joined(unknown, ", ")}.`);
@@ -128,7 +148,7 @@ export function optional<T>(
   check: Check<T>,
 ): { readonly present: boolean; readonly value: Checked<T | undefined> } {
   const item = own(value, key);
-  const present = Object.hasOwn(value, key);
+  const present = hasOwn(value, key);
   if (item === undefined) return { present, value: undefined };
   return { present, value: check(item, at(path, key), issues) };
 }
@@ -141,7 +161,8 @@ export interface StringRules {
 }
 
 /** A string. Lengths count UTF-16 code units, as `String.prototype.length` does. */
-export function text(rules: StringRules): Check<string> {
+export function text(options: StringRules): Check<string> {
+  const rules = bare(options);
   return (value, path, issues) => {
     if (typeof value !== "string") return fail(issues, path, "Expected a string.");
     const before = issues.length;
@@ -151,7 +172,7 @@ export function text(rules: StringRules): Check<string> {
     if (rules.max !== undefined && value.length > rules.max) {
       fail(issues, path, `Use at most ${rules.max} character(s).`);
     }
-    if (rules.pattern !== undefined && !rules.pattern.test(value)) {
+    if (rules.pattern !== undefined && !matches(rules.pattern, value)) {
       fail(issues, path, rules.patternMessage ?? "The text has the wrong format.");
     }
     return issues.length === before ? value : invalid;
@@ -165,13 +186,14 @@ export interface NumberRules {
 }
 
 /** A finite number (NaN and infinities are refused), optionally an integer within bounds. */
-export function finiteNumber(rules: NumberRules): Check<number> {
+export function finiteNumber(options: NumberRules): Check<number> {
+  const rules = bare(options);
   return (value, path, issues) => {
-    if (typeof value !== "number" || Number.isNaN(value)) {
+    if (typeof value !== "number" || isNaNNumber(value)) {
       return fail(issues, path, "Expected a number.");
     }
     const before = issues.length;
-    if (rules.integer === true && !Number.isInteger(value)) {
+    if (rules.integer === true && !isInteger(value)) {
       fail(issues, path, "Expected an integer.");
     }
     if (rules.min !== undefined && value < rules.min) {
@@ -180,7 +202,7 @@ export function finiteNumber(rules: NumberRules): Check<number> {
     if (rules.max !== undefined && value > rules.max) {
       fail(issues, path, `Use a number of at most ${rules.max}.`);
     }
-    if (!Number.isFinite(value)) fail(issues, path, "The number must be finite.");
+    if (!isFiniteNumber(value)) fail(issues, path, "The number must be finite.");
     return issues.length === before ? value : invalid;
   };
 }
@@ -213,9 +235,10 @@ export interface ArrayRules {
  * An array whose items pass `item`. Length issues come first, then item issues; every item is
  * checked, as before. Items are read by index, not through the array iterator.
  */
-export function list<T>(item: Check<T>, rules: ArrayRules = {}): Check<T[]> {
+export function list<T>(item: Check<T>, options: ArrayRules = {}): Check<T[]> {
+  const rules = bare(options);
   return (value, path, issues) => {
-    if (!Array.isArray(value)) return fail(issues, path, "Expected a list.");
+    if (!isArray(value)) return fail(issues, path, "Expected a list.");
     const before = issues.length;
     const length: number = value.length;
     if (rules.min !== undefined && length < rules.min) {
@@ -226,8 +249,8 @@ export function list<T>(item: Check<T>, rules: ArrayRules = {}): Check<T[]> {
     }
     const result: T[] = [];
     for (let index = 0; index < length; index += 1) {
-      const checked = item(own(value, String(index)), at(path, index), issues);
-      if (checked !== invalid) result.push(checked);
+      const checked = item(own(value, toText(index)), at(path, index), issues);
+      if (checked !== invalid) append(result, checked);
     }
     return issues.length === before ? result : invalid;
   };
@@ -246,12 +269,13 @@ export interface RecordRules {
  * An object used as a map from key to value. For each key in own-key order, the key is checked,
  * then the value. The output is an object without a prototype.
  */
-export function dictionary<T>(item: Check<T>, rules: RecordRules = {}): Check<Record<string, T>> {
+export function dictionary<T>(item: Check<T>, options: RecordRules = {}): Check<Record<string, T>> {
+  const rules = bare(options);
   return (value, path, issues) => {
     if (!isObject(value)) return fail(issues, path, "Expected an object.");
     const before = issues.length;
-    const result: Record<string, T> = Object.create(null);
-    const keys = Object.keys(value);
+    const result = bareObject<Record<string, T>>();
+    const keys = objectKeys(value);
     for (let index = 0; index < keys.length; index += 1) {
       const key = keys[index];
       if (key === undefined) continue;
@@ -259,15 +283,10 @@ export function dictionary<T>(item: Check<T>, rules: RecordRules = {}): Check<Re
       if (rules.key !== undefined) rules.key(key, keyPath, issues);
       const checked = item(own(value, key), keyPath, issues);
       if (checked === invalid || (key === "__proto__" && rules.dropProtoKey === true)) continue;
-      Object.defineProperty(result, key, {
-        value: checked,
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
+      defineData(result, key, checked);
     }
     if (issues.length !== before) return invalid;
-    if (rules.nonEmpty !== undefined && Object.keys(result).length === 0) {
+    if (rules.nonEmpty !== undefined && objectKeys(result).length === 0) {
       return fail(issues, path, rules.nonEmpty);
     }
     return result;

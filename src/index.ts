@@ -58,6 +58,8 @@ export type { ActorChainEntry, DecisionRecord, ReevaluationResult } from "./audi
 
 export { canonicalJson, digest } from "./canonical.js";
 
+export { plainDataRuntime } from "./plain.js";
+
 export { PermitkitError } from "./errors.js";
 export type { ErrorCode, PolicyIssue } from "./errors.js";
 

@@ -1,6 +1,6 @@
 import { compareText, digest } from "./canonical.js";
 import { PermitkitError, type PolicyIssue } from "./errors.js";
-import { setAdd, setHas } from "./intrinsics.js";
+import { indexOfText, mapGet, setHas, sliceText, weakSetAdd, weakSetHas } from "./intrinsics.js";
 
 const namePattern = /^[a-z][a-z0-9_-]*$/;
 
@@ -42,7 +42,7 @@ const catalogs = new WeakSet<object>();
 
 /** True only for objects that defineCatalog returned in this process. */
 export function isCatalog(value: unknown): value is Catalog {
-  return typeof value === "object" && value !== null && setHas(catalogs, value);
+  return typeof value === "object" && value !== null && weakSetHas(catalogs, value);
 }
 
 export function defineCatalog(definition: CatalogDefinition): Catalog {
@@ -123,16 +123,17 @@ export function defineCatalog(definition: CatalogDefinition): Catalog {
       [...resources.keys()].toSorted(compareText).map((type) => resources.get(type)!),
     ),
     digest: digest(normalized),
+    // Both run on the decision path, so they call the methods captured at load.
     isPermission(permission: string): boolean {
-      return permissions.has(permission);
+      return setHas(permissions, permission);
     },
     resourceOf(permission: string): ResourceEntry | undefined {
-      if (!permissions.has(permission)) return undefined;
-      const separator = permission.indexOf(":");
-      return resources.get(permission.slice(0, separator));
+      if (!setHas(permissions, permission)) return undefined;
+      const separator = indexOfText(permission, ":");
+      return mapGet(resources, sliceText(permission, 0, separator));
     },
   });
-  setAdd(catalogs, catalog);
+  weakSetAdd(catalogs, catalog);
   return catalog;
 }
 

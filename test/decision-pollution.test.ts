@@ -1,7 +1,7 @@
 // Decisions never throw. Under data-valued pollution of built-ins, decide, explain and evaluate
-// return the request's real decision or the internal-failure deny (invalid_request), and throw
-// only policy_unknown. The registries of compiled policies and catalogues use methods captured
-// at load, so pollution of WeakMap and WeakSet methods changes nothing. The pollution can break
+// return the request's real decision and throw only policy_unknown. Every built-in on the decision
+// path is captured at load, so pollution of its methods changes nothing; replacement-fuzz.test.ts
+// covers every built-in, and catch-paths.test.ts the internal-failure deny. The pollution can break
 // the test framework, so each case captures first and asserts after clean-up.
 import { describe, expect, it } from "vitest";
 
@@ -87,26 +87,23 @@ function withProperty<T>(target: object, key: string, value: unknown, run: () =>
   }
 }
 
-const denied = ["invalid_request", "invalid_request", "invalid_request"];
 const granted = ["granted", "granted", "granted"];
 
-/** Each pollution and the decisions it gives. Before the fix, the first four cases threw. */
+/**
+ * Each pollution and the decisions it gives. Before the first fix, the first four cases threw.
+ * Until arrays grew through defineProperty, the read-only index broke explain, and the Set cases
+ * gave the internal-failure deny.
+ */
 const cases: [label: string, target: object, key: string, value: unknown, expected: string[]][] = [
-  // explain still writes an array index; decide and evaluate do not.
-  [
-    'Object.prototype["1"] read-only',
-    Object.prototype,
-    "1",
-    "x",
-    ["granted", "invalid_request", "granted"],
-  ],
-  // The canonical digest captures these at load or does not call them, so the decision holds.
+  // explain appends its trace steps with defineProperty, so an inherited read-only index does
+  // not stop it.
+  ['Object.prototype["1"] read-only', Object.prototype, "1", "x", granted],
+  // Captured at load or not called, so the decision holds.
   ["Array.prototype.join = 1", Array.prototype, "join", 1, granted],
   ["Array.prototype.toSorted = 1", Array.prototype, "toSorted", 1, granted],
   ["JSON.stringify = 1", JSON, "stringify", 1, granted],
-  // Still called on the decision path; the failure becomes the internal-failure deny.
-  ["Set.prototype.has = 1", Set.prototype, "has", 1, denied],
-  ["Set.prototype.add = 1", Set.prototype, "add", 1, denied],
+  ["Set.prototype.has = 1", Set.prototype, "has", 1, granted],
+  ["Set.prototype.add = 1", Set.prototype, "add", 1, granted],
   // Used by the cycle check of the canonical digest, through a method captured at load.
   ["Set.prototype.delete = 1", Set.prototype, "delete", 1, granted],
   // Captured at load: the registry of compiled policies still works.
@@ -211,24 +208,22 @@ const spoofs: [label: string, make: () => unknown][] = [
 ];
 
 describe("decisions under accessor pollution", () => {
-  // Set.prototype.has runs inside the decision, so guarded() catches what it throws.
-  it.each(spoofs)("decide and explain deny %s", (_label, make) => {
+  // Set.prototype.has and Array.prototype.includes ran inside decide and evaluate until every
+  // built-in was captured at load. The getter now never runs, and the decision holds. How the
+  // catch blocks treat what such a getter threw is in catch-paths.test.ts.
+  it.each(spoofs)("decide and explain never read Set.prototype.has (%s)", (_label, make) => {
     const { result, calls } = withThrowingGetter(Set.prototype, "has", make, () => [
       captureSafe(() => decide(policy, request()).reason),
       captureSafe(() => explain(policy, request()).decision.reason),
     ]);
-    expect(calls).toBeGreaterThan(0);
-    expect(result).toEqual(["invalid_request", "invalid_request"]);
+    expect([result, calls]).toEqual([["granted", "granted"], 0]);
   });
 
-  // Array.prototype.includes runs in the AuthZEN key check, before decide(), so the catch in
-  // evaluate() handles what it throws.
-  it.each(spoofs)("evaluate denies %s", (_label, make) => {
+  it.each(spoofs)("evaluate never reads Array.prototype.includes (%s)", (_label, make) => {
     const { result, calls } = withThrowingGetter(Array.prototype, "includes", make, () =>
       captureSafe(() => evaluate(policy, authzen()).context.reason_codes[0] ?? "none"),
     );
-    expect(calls).toBeGreaterThan(0);
-    expect(result).toBe("invalid_request");
+    expect([result, calls]).toEqual(["granted", 0]);
   });
 
   it("still throw policy_unknown for a policy from elsewhere", () => {

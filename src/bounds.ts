@@ -1,3 +1,19 @@
+import {
+  append,
+  arrayPrototype,
+  bareObject,
+  defineData,
+  freeze,
+  getOwnPropertyDescriptor,
+  field,
+  getPrototypeOf,
+  hasOwn,
+  isArray,
+  objectKeys,
+  objectPrototype,
+  ownKeys,
+  toText,
+} from "./intrinsics.js";
 import { hasInternalSlots, isProxy } from "./plain.js";
 
 /**
@@ -5,7 +21,8 @@ import { hasInternalSlots, isProxy } from "./plain.js";
  * the array is longer than its `max()`, and keeps one issue per failing item, so a huge input
  * can exhaust memory before validation fails. The guard stops early, reads every property
  * exactly once, and returns a plain copy. Validation then runs on that copy, so getters and
- * proxies on the caller's object cannot return one value to the guard and another later.
+ * proxies on the caller's object cannot return one value to the guard and another later. Every
+ * built-in it calls is captured at load (see intrinsics.ts), and it walks keys by index.
  */
 
 export interface InputBounds {
@@ -16,7 +33,7 @@ export interface InputBounds {
 }
 
 /** Bounds for requests and approval inputs. */
-export const requestBounds: InputBounds = Object.freeze({
+export const requestBounds: InputBounds = freeze({
   maxDepth: 24,
   maxNodes: 20_000,
   maxArrayLength: 1_000,
@@ -27,7 +44,7 @@ export const requestBounds: InputBounds = Object.freeze({
  * Bounds for audit records, which wrap a request. The request inside is checked again with
  * requestBounds, so a request at the limit can still be replayed.
  */
-export const wrapperBounds: InputBounds = Object.freeze({
+export const wrapperBounds: InputBounds = freeze({
   maxDepth: 24,
   maxNodes: 300_000,
   maxArrayLength: 1_000,
@@ -41,7 +58,7 @@ export const maxApprovals = 20;
  * Bounds for approval inputs: the request (which must also meet requestBounds), up to
  * maxApprovals approvals and the prior-request history.
  */
-export const approvalInputBounds: InputBounds = Object.freeze({
+export const approvalInputBounds: InputBounds = freeze({
   maxDepth: 24,
   maxNodes: 100_000,
   maxArrayLength: 1_000,
@@ -49,7 +66,7 @@ export const approvalInputBounds: InputBounds = Object.freeze({
 });
 
 /** Bounds for policy documents, which are larger but come from the operator. */
-export const policyBounds: InputBounds = Object.freeze({
+export const policyBounds: InputBounds = freeze({
   maxDepth: 24,
   maxNodes: 500_000,
   maxArrayLength: 10_000,
@@ -66,20 +83,23 @@ const unusable = Symbol("unusable");
  */
 export function detach<T>(value: T): T {
   if (typeof value !== "object" || value === null) return value;
-  // The copy has the same structure as the input, so the type parameter still holds.
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-  if (Array.isArray(value)) return value.map((item: unknown) => detach(item)) as T;
-  const result: Record<string, unknown> = Object.create(null);
-  // Keys plus index access, no [key, value] destructuring: closing a destructured iterator reads
-  // `return` through the prototype chain, which a polluted Object.prototype supplies.
-  for (const key of Object.keys(value)) {
-    const item: unknown = Reflect.get(value, key);
-    Object.defineProperty(result, key, {
-      value: detach(item),
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
+  if (isArray(value)) {
+    const items: unknown[] = [];
+    // Own indices only: a hole would read through Array.prototype, which can be polluted.
+    for (let index = 0; index < value.length; index += 1) {
+      append(items, hasOwn(value, index) ? detach(value[index]) : undefined);
+    }
+    // The copy has the same structure as the input, so the type parameter still holds.
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+    return items as T;
+  }
+  const result = bareObject();
+  // Keys plus index access, no for-of or [key, value] destructuring: each runs the iterator
+  // protocol, whose methods caller code can replace.
+  const keys = objectKeys(value);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key !== undefined) defineData(result, key, detach(field(value, key)));
   }
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   return result as T;
@@ -120,7 +140,7 @@ export function snapshotOf(value: unknown, bounds: InputBounds): SnapshotResult 
 export function ownArrayLength(value: unknown, key: string): number | undefined {
   if (typeof value !== "object" || value === null || isProxy(value)) return undefined;
   const item = dataValue(value, key);
-  if (!Array.isArray(item) || isProxy(item)) return undefined;
+  if (!isArray(item) || isProxy(item)) return undefined;
   const length: unknown = dataValue(item, "length");
   return typeof length === "number" ? length : undefined;
 }
@@ -161,9 +181,9 @@ function clone(
   // Only plain data is copied. A Map, a Date, a class instance or hidden keys (non-enumerable or
   // symbol) would lose data in the copy, and a lost scope reads as "everywhere". Such input is
   // unusable as a whole.
-  const prototype: unknown = Object.getPrototypeOf(value);
-  if (Array.isArray(value)) {
-    if (prototype !== Array.prototype) return unusable;
+  const prototype: unknown = getPrototypeOf(value);
+  if (isArray(value)) {
+    if (prototype !== arrayPrototype) return unusable;
     const length: number = value.length;
     if (length > bounds.maxArrayLength) {
       state.tooLarge = true;
@@ -171,33 +191,34 @@ function clone(
     }
     // Own keys of a plain array are its indices plus "length". Fewer means holes, more means
     // named or symbol properties.
-    if (Reflect.ownKeys(value).length !== length + 1) return unusable;
+    if (ownKeys(value).length !== length + 1) return unusable;
     const items: unknown[] = [];
     for (let index = 0; index < length; index += 1) {
       // A hole or an accessor is not plain data. Data properties only, so no caller code runs.
-      const property = dataValue(value, String(index));
+      const property = dataValue(value, toText(index));
       if (property === unusable) return unusable;
       const item = clone(property, depth + 1, bounds, state);
       if (item === unusable) return unusable;
-      items.push(item);
+      append(items, item);
     }
     return items;
   }
-  if (prototype !== Object.prototype && prototype !== null) return unusable;
+  if (prototype !== objectPrototype && prototype !== null) return unusable;
   // A Map or Date with a swapped prototype has no own keys and would copy as `{}`. The check
   // runs before any key is listed: a swapped typed array or boxed string can have millions.
   // The portable path identifies fewer kinds (see plain.ts).
   if (hasInternalSlots(value)) return unusable;
-  const keys = Object.keys(value);
+  const keys = objectKeys(value);
   if (keys.length > bounds.maxArrayLength) {
     state.tooLarge = true;
     return unusable;
   }
-  const ownKeys = Reflect.ownKeys(value);
-  if (ownKeys.length !== keys.length) return unusable;
+  if (ownKeys(value).length !== keys.length) return unusable;
   // A null prototype: a missing key reads as undefined even if Object.prototype was polluted.
-  const result: Record<string, unknown> = Object.create(null);
-  for (const key of keys) {
+  const result = bareObject();
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key === undefined) return unusable;
     if (key.length > bounds.maxStringLength) {
       state.tooLarge = true;
       return unusable;
@@ -211,16 +232,11 @@ function clone(
     const item = property === undefined ? undefined : clone(property, depth + 1, bounds, state);
     if (item === unusable) return unusable;
     // defineProperty keeps a key named __proto__ as data instead of changing the prototype.
-    Object.defineProperty(result, key, {
-      value: item,
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
+    defineData(result, key, item);
   }
   // Nothing can change the object during the copy, because only data properties were read.
   // Check the prototype again anyway, as a guard against future changes to this function.
-  if (Object.getPrototypeOf(value) !== prototype) return unusable;
+  if (getPrototypeOf(value) !== prototype) return unusable;
   return result;
 }
 
@@ -230,10 +246,10 @@ function clone(
  * that an inherited value is read in its place.
  */
 function dataValue(value: object, key: string): unknown {
-  const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+  const descriptor = getOwnPropertyDescriptor(value, key);
   // Object.hasOwn, not `in`: a descriptor is a plain object, and `in` would also find a polluted
   // Object.prototype.value on an accessor descriptor.
-  if (descriptor === undefined || !Object.hasOwn(descriptor, "value")) return unusable;
+  if (descriptor === undefined || !hasOwn(descriptor, "value")) return unusable;
   const item: unknown = descriptor.value;
   return item;
 }

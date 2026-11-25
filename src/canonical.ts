@@ -1,4 +1,4 @@
-import { PermitkitError } from "./errors.js";
+import { isPermitkitError, PermitkitError } from "./errors.js";
 import { hasInternalSlots, isProxy } from "./plain.js";
 import { sha256Hex } from "./sha256.js";
 
@@ -43,7 +43,7 @@ export function canonicalJson(value: unknown): string {
   try {
     return serialize(value, new SetConstructor<object>());
   } catch (error) {
-    if (error instanceof PermitkitError) throw error;
+    if (isPermitkitError(error)) throw error;
     // For example a stack overflow on very deep input. Never a raw error.
     throw new PermitkitError("not_canonical", "The value could not be read as plain JSON data.");
   }
@@ -145,14 +145,18 @@ function serializeObject(object: object, seen: Set<object>): string {
     if (ownKeys.length !== keys.length) {
       return notCanonical("Symbol and non-enumerable keys have no JSON form.");
     }
-    // Keys plus index access, no [key, value] destructuring (see detach in bounds.ts).
-    const sorted: unknown = apply(toSorted, keys, [compareText]);
+    // Keys plus index access, no [key, value] destructuring (see detach in bounds.ts). V8's
+    // toSorted writes the item of a one-item array with an ordinary assignment, which an
+    // accessor or a read-only value on Array.prototype[0] catches. Fewer than two keys need no
+    // sort, and the fresh array from Object.keys holds them as own data.
+    const sorted: unknown = keys.length < 2 ? keys : apply(toSorted, keys, [compareText]);
     if (!isArray(sorted) || sorted.length !== keys.length) {
       return notCanonical("The keys could not be sorted.");
     }
     let members = "";
     for (let index = 0; index < sorted.length; index += 1) {
-      const key: unknown = sorted[index];
+      // Own data only: a hole would read through Array.prototype.
+      const key: unknown = hasOwn(sorted, index) ? sorted[index] : undefined;
       if (typeof key !== "string") return notCanonical("The keys could not be sorted.");
       const item = dataProperty(object, key);
       if (item === undefined) continue;

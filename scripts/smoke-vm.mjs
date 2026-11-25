@@ -108,6 +108,7 @@ const core = await namespaceOf("index.js");
 const testing = await namespaceOf("testing/index.js");
 const plain = await namespaceOf("plain.js");
 assert.equal(plain.plainDataRuntime, "portable");
+assert.equal(core.plainDataRuntime, "portable", "the package root reports the portable path");
 
 // 3. Decisions and digests in the context match the same calls in Node.
 const host = await import(new URL("index.js", dist).href);

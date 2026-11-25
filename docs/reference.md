@@ -28,11 +28,14 @@ an unknown decision reason as a deny. The exported objects `reasonCodes`, `reaso
 
 The order of checks is: input shape, pinned policy version, catalogue, agent grant validity,
 deny rules, grants of the principal, agent grant coverage, separation of duties, approval rule.
-The first failing check gives the reason. If the library fails internally (for example under
-polluted built-in prototypes), the result is a deny with `invalid_request`, also for a request
-that would be valid.
+The first failing check gives the reason. If the library fails internally (for example a bug in
+permitkit, or a built-in that was changed before permitkit loaded), the result is a deny with
+`invalid_request`, also for a request that would be valid. A built-in that caller code replaces
+after permitkit loads changes no decision (see the README threat model).
 
 ## Approval results (`evaluateApprovals`)
+
+How to await the result safely: see "Promises in `evaluateApprovals`" in the README threat model.
 
 | Code                             | Outcome   | Meaning                                                                       |
 | -------------------------------- | --------- | ----------------------------------------------------------------------------- |
@@ -48,6 +51,9 @@ that would be valid.
 | `invalid_input`                  | `deny`    | The input does not match the schema, is not plain data, or is inconsistent.   |
 
 ## Approval rejections (`ApprovalDecision.rejected`)
+
+An entry can have a `detail` string. It can hold text from the input (a proof type) or the
+`reason` that a verifier returned, so escape it before you render it.
 
 | Code                       | Meaning                                                               |
 | -------------------------- | --------------------------------------------------------------------- |
@@ -76,8 +82,8 @@ that would be valid.
 permitkit throws only for programming and configuration errors. Decisions never throw for bad
 requests, including throwing getters and revoked proxies; they deny. `decide`, `explain` and
 `evaluate` throw only `policy_unknown`. Any other failure inside them, for example from a
-changed built-in prototype, gives a deny with reason `invalid_request`, `rule: null` and
-`requestDigest: null`. `catalog_invalid` is also
+built-in that was changed before permitkit loaded, gives a deny with reason `invalid_request`,
+`rule: null` and `requestDigest: null`. `catalog_invalid` is also
 thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
 `canonicalJson` and `digest` throw `not_canonical`, never a raw error: for objects whose prototype
 is not `Object.prototype`, `null` or `Array.prototype`, built-ins that the runtime's checks identify
@@ -188,3 +194,19 @@ The request digest has the format tag `permitkit.request/2`. It covers the agent
 including their `scope` and `limits` in the schema 2 shape, so digests from the earlier format do
 not match. Audit records have the format tag `permitkit.decision/2`; a record with another tag is
 `not_replayable`.
+
+## Plain-data path (`plainDataRuntime`)
+
+`plainDataRuntime` is `"node"` or `"portable"`: the way permitkit tells plain data from objects
+that only look plain, chosen once when the package loads (see the threat model in the README).
+`"node"` means `process.getBuiltinModule("node:util")` gave a working `util.types`: proxies are
+refused, and so is every built-in that `util.types` identifies by its engine slots, also with a
+swapped prototype. `"portable"` means the package found no such `util.types` and uses the
+checks that work without it, which do not detect a proxy. permitkit switches to the portable path
+without an error or a log line. If your service needs the Node checks, assert the value at boot:
+
+```ts
+import { plainDataRuntime } from "permitkit";
+
+if (plainDataRuntime !== "node") throw new Error("permitkit runs without node:util checks");
+```

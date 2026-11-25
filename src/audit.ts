@@ -1,8 +1,9 @@
 import { z } from "zod";
 
-import { boundedSnapshot, detach, wrapperBounds } from "./bounds.js";
+import { boundedSnapshot, detach, ownDataValue, wrapperBounds } from "./bounds.js";
 import { canonicalJson } from "./canonical.js";
 import { decide, parseRequest, type Decision } from "./decide.js";
+import { append } from "./intrinsics.js";
 import type { AccessRequest } from "./request.js";
 
 const recordShapeSchema = z
@@ -18,7 +19,7 @@ const recordShapeSchema = z
     approval: z.unknown(),
   })
   .strict();
-import { PermitkitError } from "./errors.js";
+import { isPermitkitError, PermitkitError } from "./errors.js";
 import { safeParse } from "./parse.js";
 import { isCompiledPolicy, type CompiledPolicy } from "./policy.js";
 
@@ -48,9 +49,9 @@ export interface DecisionRecord {
 function actorChainOf(request: AccessRequest | null): ActorChainEntry[] {
   const chain: ActorChainEntry[] = [];
   if (request === null) return chain;
-  chain.push({ type: request.subject.type, id: request.subject.id, grantId: null });
+  append(chain, { type: request.subject.type, id: request.subject.id, grantId: null });
   for (let actor = request.subject.act; actor !== null; actor = actor.act) {
-    chain.push({ type: "agent", id: actor.id, grantId: actor.grant?.id ?? null });
+    append(chain, { type: "agent", id: actor.id, grantId: actor.grant?.id ?? null });
   }
   return chain;
 }
@@ -109,7 +110,7 @@ export function reevaluate(policy: CompiledPolicy, record: DecisionRecord): Reev
   try {
     return reevaluateChecked(policy, record);
   } catch (error) {
-    if (error instanceof PermitkitError && error.code === "policy_unknown") throw error;
+    if (isPermitkitError(error) && error.code === "policy_unknown") throw error;
     // Internals can fail under polluted built-in prototypes; such a record cannot be replayed.
     return { status: "not_replayable" };
   }
@@ -117,16 +118,21 @@ export function reevaluate(policy: CompiledPolicy, record: DecisionRecord): Reev
 
 function reevaluateChecked(policy: CompiledPolicy, record: DecisionRecord): ReevaluationResult {
   const loaded = { version: policy.version, digest: policy.digest };
-  const shape = safeParse(recordShapeSchema, boundedSnapshot(record, wrapperBounds));
+  const snapshot = boundedSnapshot(record, wrapperBounds);
+  // The request is read from the plain-data copy before any Zod call, not from the Zod output:
+  // Zod calls built-ins at call time and passes them the objects it validates, so a replaced
+  // push or Array.isArray could swap the request it returns or change it in place. Zod gets its
+  // own copy and never sees the snapshot. The status order stays: shape, policy, request.
+  const storedRequest = ownDataValue(snapshot, "request");
+  const parsed = storedRequest === null ? null : parseRequest(storedRequest);
+  const shape = safeParse(recordShapeSchema, detach(snapshot));
   if (!shape.success) return { status: "not_replayable" };
   // detach: a missing key must read as undefined, never as an inherited value.
   const stored = detach(shape.data);
   if (stored.policy.version !== loaded.version || stored.policy.digest !== loaded.digest) {
     return { status: "policy_mismatch", expected: stored.policy, loaded };
   }
-  if (stored.request === null) return { status: "not_replayable" };
-  const parsed = parseRequest(stored.request);
-  if (!parsed.ok) return { status: "not_replayable" };
+  if (parsed === null || !parsed.ok) return { status: "not_replayable" };
   const decision = decide(policy, parsed.request);
   let same: boolean;
   try {
