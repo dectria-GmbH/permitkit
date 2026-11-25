@@ -108,7 +108,7 @@ export function evaluateApprovals(
 ): Promise<ApprovalDecision> {
   // A plain function, not async: the promise of an async function has no own constructor, so
   // the caller's `await` would read Promise.prototype.constructor and then, which caller code
-  // can replace. awaitable gives the returned promise an own constructor.
+  // can replace. awaitable gives the returned promise an own constructor and an own then.
   return awaitable(evaluateApprovalsGuarded(policy, input, options));
 }
 
