@@ -447,7 +447,12 @@ two ways when it loads:
   `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `RegExp`, `Promise`, buffer, typed array,
   `DataView`, boxed primitive, error, generator, `Map` or `Set` iterator, module namespace and
   `arguments` object.
-- **Other runtimes** (no `process`, for example Cloudflare Workers without `nodejs_compat`).
+  Cloudflare Workers have a working `process` with `nodejs_compat`, and also without it from
+  compatibility date 2026-08-04 (measured in local workerd 1.20261019). They then take this path.
+  The flag `no_nodejs_compat_v2` turns it off. If your deployment depends on one path, read the
+  exported `plainDataRuntime` (`"node"` or `"portable"`) at startup.
+- **Other runtimes** (no `process`, for example Cloudflare Workers without `nodejs_compat` and
+  with a compatibility date before 2026-08-04).
   permitkit uses only checks that never fail with an exception and run no caller code. A typed
   array and a `DataView` are refused by `ArrayBuffer.isView`, also with a swapped prototype and
   with own keys. An error is refused by `Error.isError` where the runtime has it. Elsewhere an
