@@ -52,7 +52,7 @@ const sliceMethod = String.prototype.slice;
 const indexOfMethod = String.prototype.indexOf;
 const toISOStringMethod = Date.prototype.toISOString;
 const promiseThenMethod = Promise.prototype.then;
-// The key is captured: a replaced global Symbol must not point the check at another key.
+// The key is captured, so a replaced Symbol cannot point the check at another key.
 const speciesKey = Symbol.species;
 const speciesDescriptor = getOwnPropertyDescriptor(Promise, speciesKey);
 const setUTCFullYearMethod = Date.prototype.setUTCFullYear;
