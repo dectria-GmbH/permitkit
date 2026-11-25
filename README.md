@@ -4,7 +4,7 @@ Authorization toolkit for TypeScript: roles, scopes, limits, deny rules, dual ap
 delegated agent access. Every decision is a pure function of the policy and the request, so you
 can log it and re-evaluate it later against the same policy version.
 
-Status: 0.1, in development, not published. The API can change before 1.0.
+Status: 0.1, in development. The API can change before 1.0.
 
 ## Principles
 
@@ -27,12 +27,25 @@ Status: 0.1, in development, not published. The API can change before 1.0.
 
 ## Install
 
-The package is not on a registry yet. Build it from source with Node 24 and pnpm:
+Install an exact version from npm:
+
+```sh
+pnpm add --save-exact permitkit@0.1.0
+```
+
+Pin the exact version, because the API can change in any 0.x release. On Node, permitkit needs
+22.3 or newer. Each release is built and published by GitHub Actions with npm provenance, so
+`npm audit signatures` can check where a version came from.
+
+To work on the package itself, build it from source with Node 24 and pnpm:
 
 ```sh
 pnpm install
 pnpm build
 ```
+
+How a maintainer publishes a release:
+[docs/releasing.md](https://github.com/dectria-GmbH/permitkit/blob/main/docs/releasing.md).
 
 ## Quick start
 
@@ -772,6 +785,11 @@ Commit it as a snapshot, so that every policy change shows up as a reviewable di
 `permitkit/nestjs` (guard), `permitkit/react` (hooks over server-provided decisions) and
 `permitkit/kysely` (query helpers) are planned as separate entry points. The core stays free of
 framework dependencies.
+
+## Security
+
+Report a vulnerability in private, as described in
+[SECURITY.md](https://github.com/dectria-GmbH/permitkit/blob/main/SECURITY.md).
 
 ## Licence
 

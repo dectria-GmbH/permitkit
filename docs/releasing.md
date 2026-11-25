@@ -5,7 +5,8 @@ local machine, and the repository holds no npm token.
 
 ## Make a release
 
-1. On a branch, set `version` in `package.json` to the new version, for example `0.2.0`.
+1. On a branch, set `version` in `package.json` to the new version, for example `0.2.0`. Change
+   the version in the install command in `README.md` too.
 2. Merge the change to `main` after CI passes.
 3. Tag the commit on `main` that holds the new version, and push the tag:
 
