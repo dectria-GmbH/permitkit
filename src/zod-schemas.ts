@@ -430,7 +430,7 @@ function ownAct(value: unknown): unknown {
   return typeof act === "object" ? act : null;
 }
 
-// The approval schemas, verbatim from src/approval.ts as of f04df14.
+// The approval and record schemas, verbatim from src/approval.ts and src/audit.ts as of f04df14.
 // maxApprovals is from src/bounds.ts.
 
 /** The most approvals that one evaluateApprovals call reads. Twice the largest `approvers`. */
@@ -479,5 +479,19 @@ export const approvalInputSchema = z
           .strict(),
       )
       .optional(),
+  })
+  .strict();
+
+export const recordShapeSchema = z
+  .object({
+    schema: z.literal("permitkit.decision/2"),
+    policy: z.object({ version: z.string(), digest: z.string() }).strict(),
+    request: z.unknown(),
+    requestDigest: z.string().nullable(),
+    actorChain: z.array(z.unknown()),
+    outcome: z.string(),
+    reason: z.string(),
+    rule: z.unknown(),
+    approval: z.unknown(),
   })
   .strict();

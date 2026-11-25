@@ -40,7 +40,7 @@ async function bundle(names) {
 const isZodModule = (id) => /[\\/]zod[\\/]|zod-schemas/.test(id);
 
 // The exports that still use Zod, until the approval and audit validators replace it.
-const zodUsers = ["decideAndRecord", "reevaluate", "toDecisionRecord"];
+const zodUsers = [];
 const exported = Object.keys(await import(pathToFileURL(packageRoot).href));
 for (const name of zodUsers) assert.ok(exported.includes(name), `${name} is no longer exported`);
 const coreNames = exported.filter((name) => !zodUsers.includes(name));
