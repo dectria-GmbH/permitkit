@@ -1,8 +1,9 @@
 // evaluateApprovals and reevaluate decide on the request that the hand-written validator read
-// from the plain-data copy of the input, never on the request that Zod returned. Zod 3 calls
-// Array.prototype.push and other built-ins at call time. An input-dependent push, installed after
-// permitkit loads, can add a role to the request that Zod returns, or swap the whole request.
-// Each case records while the replacement is active and asserts after the restore.
+// from the plain-data copy of the input. Up to f04df14, Zod 3 validated these inputs too and
+// called Array.prototype.push and other built-ins at call time: an input-dependent push,
+// installed after permitkit loads, could add a role to the request that Zod returned, or swap the
+// whole request. No validator calls push now, so these cases keep the clean decision. Each case
+// records while the replacement is active and asserts after the restore.
 import { describe, expect, it } from "vitest";
 
 import {

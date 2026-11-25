@@ -22,8 +22,9 @@ function recorded(name: string): { header: string; lines: string[] } {
   return { header, lines };
 }
 
-// Generating and checking the larger corpora takes several seconds on a slow CI runner.
-const timeout = { timeout: 60_000 };
+// Generating and checking the larger corpora takes several seconds alone, and over a minute on
+// a loaded machine (seen at load 380 on the portable path).
+const timeout = { timeout: 180_000 };
 
 describe("hand-written validators against the recorded Zod verdicts", timeout, () => {
   it.each(verdictCorpora.map((corpus) => [corpus.name, corpus] as const))("%s", (_name, corpus) => {

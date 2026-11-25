@@ -63,10 +63,10 @@ describe("detach under Object.prototype.return", () => {
 });
 
 describe("Array.prototype.constructor", () => {
-  // decide, explain, evaluate and decideAndRecord create no arrays through species any more, so
-  // they give the clean decisions. evaluateApprovals still denies: Zod, which validates its
-  // input, uses Array.prototype methods that read the constructor.
-  it("changes no decision, and makes evaluateApprovals deny instead of throwing", async () => {
+  // decide, explain, evaluate, decideAndRecord and evaluateApprovals create no arrays through
+  // species, so they give the clean decisions. Up to f04df14, evaluateApprovals denied here:
+  // Zod, which validated its input, used Array.prototype methods that read the constructor.
+  it("changes no decision, also not in evaluateApprovals", async () => {
     const request = accessRequest(lead, "ticket:read");
     const refund = accessRequest(lead, "ticket:refund", { properties: { amount: 500 } });
     const authzen = {
@@ -117,7 +117,8 @@ describe("Array.prototype.constructor", () => {
         writable: true,
       });
     }
-    expect(outcomes).toEqual(["allow", "allow", false, "allow", "deny"]);
+    // The clean evaluateApprovals result: no approvals yet, so pending.
+    expect(outcomes).toEqual(["allow", "allow", false, "allow", "pending"]);
     const clean = await evaluateApprovals(policy, {
       request: refund,
       now: "2026-01-15T10:30:00.000Z",
