@@ -80,10 +80,39 @@ const invalidRequests: unknown[] = [
   },
 ];
 
+/**
+ * A valid policy with exactly one role. sorted() in intrinsics.ts copies a list of fewer than two
+ * items without toSorted; the role names are its only caller, so this reaches that branch.
+ */
+const singleRole = {
+  schema: 2,
+  version: "single-role",
+  roles: {
+    reader: {
+      grants: [
+        {
+          id: "reader-read",
+          permissions: ["ticket:read"],
+          scope: all,
+          limits: { kind: "unlimited" },
+        },
+      ],
+    },
+  },
+  denies: [],
+  approvalRules: [],
+  separationOfDuties: {
+    requesterNeverApprovesSameType: false,
+    exclusiveRequestAndApproveRoles: false,
+  },
+};
+const singleRolePolicy = compilePolicy(replacementCatalog, singleRole);
+
 /** Policy documents that each fail a different rule, after the valid ones. */
 const first = replacementPolicyInputs[0] as unknown as Record<string, unknown>;
 const policyInputs: unknown[] = [
   ...replacementPolicyInputs,
+  singleRole,
   { ...first, schema: 3 },
   { ...first, version: "" },
   { ...first, extra: true },
@@ -130,7 +159,7 @@ export function callTimeCorpus(count: number): CallTimeCorpus {
   const valid = replacementRequests(count);
   const requests: unknown[] = [...valid, ...invalidRequests];
   return {
-    policies: replacementPolicies,
+    policies: [...replacementPolicies, singleRolePolicy],
     requests,
     authzen: [...valid.map(asAuthZen), ...invalidAuthZen(valid[0] as AccessRequest)],
     policyInputs,
