@@ -3,6 +3,7 @@ import { z } from "zod";
 import { boundedSnapshot, detach, wrapperBounds } from "./bounds.js";
 import { canonicalJson } from "./canonical.js";
 import { decide, parseRequest, type Decision } from "./decide.js";
+import { append } from "./intrinsics.js";
 import type { AccessRequest } from "./request.js";
 
 const recordShapeSchema = z
@@ -18,7 +19,7 @@ const recordShapeSchema = z
     approval: z.unknown(),
   })
   .strict();
-import { PermitkitError } from "./errors.js";
+import { isPermitkitError, PermitkitError } from "./errors.js";
 import { safeParse } from "./parse.js";
 import { isCompiledPolicy, type CompiledPolicy } from "./policy.js";
 
@@ -48,9 +49,9 @@ export interface DecisionRecord {
 function actorChainOf(request: AccessRequest | null): ActorChainEntry[] {
   const chain: ActorChainEntry[] = [];
   if (request === null) return chain;
-  chain.push({ type: request.subject.type, id: request.subject.id, grantId: null });
+  append(chain, { type: request.subject.type, id: request.subject.id, grantId: null });
   for (let actor = request.subject.act; actor !== null; actor = actor.act) {
-    chain.push({ type: "agent", id: actor.id, grantId: actor.grant?.id ?? null });
+    append(chain, { type: "agent", id: actor.id, grantId: actor.grant?.id ?? null });
   }
   return chain;
 }
@@ -109,7 +110,7 @@ export function reevaluate(policy: CompiledPolicy, record: DecisionRecord): Reev
   try {
     return reevaluateChecked(policy, record);
   } catch (error) {
-    if (error instanceof PermitkitError && error.code === "policy_unknown") throw error;
+    if (isPermitkitError(error) && error.code === "policy_unknown") throw error;
     // Internals can fail under polluted built-in prototypes; such a record cannot be replayed.
     return { status: "not_replayable" };
   }
