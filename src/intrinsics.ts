@@ -139,11 +139,28 @@ export function contains<T>(list: readonly T[], item: T): boolean {
   return false;
 }
 
-/** A copy of the list sorted with the comparison, through the captured toSorted. */
+/**
+ * A copy of the list sorted with the comparison, through the captured toSorted. V8 writes the
+ * item of a one-item list with an ordinary assignment, which an accessor or a read-only value
+ * on Array.prototype[0] catches, so a list of fewer than two items is copied with append. Every
+ * item of the result must be an own property: a hole would read through Array.prototype.
+ */
 export function sorted<T>(list: readonly T[], compare: (left: T, right: T) => number): T[] {
+  if (list.length < 2) {
+    const copy: T[] = [];
+    for (let index = 0; index < list.length; index += 1) {
+      // The index is below the length, so the item is an item of the list.
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+      append(copy, list[index] as T);
+    }
+    return copy;
+  }
   const result: unknown = apply(toSortedMethod, list, [compare]);
   if (!isArray(result) || result.length !== list.length) {
     throw new TypeError("The list could not be sorted.");
+  }
+  for (let index = 0; index < result.length; index += 1) {
+    if (!hasOwn(result, index)) throw new TypeError("The list could not be sorted.");
   }
   // toSorted returns the same items in a new array.
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
