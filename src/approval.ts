@@ -9,7 +9,14 @@ import {
   requestBounds,
   snapshotOf,
 } from "./bounds.js";
-import { decide, denyRuleMatches, permissionOf, requestDigest, type Decision } from "./decide.js";
+import {
+  decide,
+  denyRuleMatches,
+  parseRequest,
+  permissionOf,
+  requestDigest,
+  type Decision,
+} from "./decide.js";
 import { scopeCovers } from "./engine/conditions.js";
 import { safeParse } from "./parse.js";
 import { isPermitkitError, PermitkitError } from "./errors.js";
@@ -34,7 +41,8 @@ import {
 } from "./intrinsics.js";
 import { internalsOf, type CompiledPolicy, type DenyRule } from "./policy.js";
 import type { ApprovalReasonCode, ApprovalRejectionCode } from "./reasons.js";
-import { instant } from "./time.js";
+import { instant, requestTime } from "./time.js";
+import { invalid } from "./validate.js";
 import {
   accessRequestSchema,
   requestTimeSchema,
@@ -240,8 +248,17 @@ async function evaluateApprovalsUnguarded(
   const snapshot = whole.value;
   const parsed = safeParse(approvalInputSchema, snapshot);
   if (!parsed.success) return result("deny", "invalid_input");
+  // The request and the evaluation time come from the hand-written validators, read from the
+  // plain-data copy. Zod calls built-ins at call time: a replaced push could add a role to the
+  // request that Zod returns, or swap the request. Its output for these two keys is not used.
+  const checked = parseRequest(ownDataValue(snapshot, "request"));
+  if (!checked.ok) return result("deny", "invalid_input");
+  const request = checked.request;
+  const nowChecked = requestTime(ownDataValue(snapshot, "now"), null, []);
+  if (nowChecked === invalid) return result("deny", "invalid_input");
+  const nowText: string = nowChecked;
   const data = detach(parsed.data);
-  const { request, now: nowText, priorRequests } = data;
+  const priorRequests = data.priorRequests;
   const now = instant(nowText);
   const requestedAt = instant(request.context.now);
   // Written so that an unreadable time fails the check.

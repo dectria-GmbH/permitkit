@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { boundedSnapshot, detach, wrapperBounds } from "./bounds.js";
+import { boundedSnapshot, detach, ownDataValue, wrapperBounds } from "./bounds.js";
 import { canonicalJson } from "./canonical.js";
 import { decide, parseRequest, type Decision } from "./decide.js";
 import { append } from "./intrinsics.js";
@@ -118,15 +118,19 @@ export function reevaluate(policy: CompiledPolicy, record: DecisionRecord): Reev
 
 function reevaluateChecked(policy: CompiledPolicy, record: DecisionRecord): ReevaluationResult {
   const loaded = { version: policy.version, digest: policy.digest };
-  const shape = safeParse(recordShapeSchema, boundedSnapshot(record, wrapperBounds));
+  const snapshot = boundedSnapshot(record, wrapperBounds);
+  const shape = safeParse(recordShapeSchema, snapshot);
   if (!shape.success) return { status: "not_replayable" };
   // detach: a missing key must read as undefined, never as an inherited value.
   const stored = detach(shape.data);
   if (stored.policy.version !== loaded.version || stored.policy.digest !== loaded.digest) {
     return { status: "policy_mismatch", expected: stored.policy, loaded };
   }
-  if (stored.request === null) return { status: "not_replayable" };
-  const parsed = parseRequest(stored.request);
+  // The request is read from the plain-data copy, not from the Zod output: Zod calls built-ins
+  // at call time, and a replaced push could swap the request that it returns.
+  const storedRequest = ownDataValue(snapshot, "request");
+  if (storedRequest === null) return { status: "not_replayable" };
+  const parsed = parseRequest(storedRequest);
   if (!parsed.ok) return { status: "not_replayable" };
   const decision = decide(policy, parsed.request);
   let same: boolean;
