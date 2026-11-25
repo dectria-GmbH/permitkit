@@ -778,6 +778,9 @@ describe("the expected object that the verifier gets", () => {
   });
 });
 
+/** Stand-in for a crypto call that says the signature is bad. */
+const checkSignature = async (): Promise<boolean> => false;
+
 describe("a replaced global Symbol does not hide a replaced Promise[Symbol.species]", () => {
   const speciesKey = Symbol.species;
   const RealSymbol = Symbol;
@@ -786,7 +789,7 @@ describe("a replaced global Symbol does not hide a replaced Promise[Symbol.speci
   /** Moves the real species accessor to another key and points a stand-in Symbol at it. */
   function swapSymbol(): void {
     if (original === undefined) throw new Error("Promise[Symbol.species] has no descriptor.");
-    define(Promise, "__species", { configurable: true, get: original.get, set: original.set });
+    define(Promise, "__species", original);
     Object.defineProperty(globalThis, "Symbol", {
       configurable: true,
       writable: true,
@@ -843,7 +846,7 @@ describe("a replaced global Symbol does not hide a replaced Promise[Symbol.speci
     const verifier: ApprovalProofVerifier = {
       type: "sig",
       verify: async () => {
-        await null;
+        await Promise.resolve();
         return { ...failing };
       },
     };
@@ -858,17 +861,14 @@ describe("a replaced global Symbol does not hide a replaced Promise[Symbol.speci
     // The getter cannot reach the result. It hijacks the next await inside the verifier instead,
     // so the check on the signature reads true. The verifier is yours; the entry is the species
     // check that the swapped Symbol bypassed.
-    const checkSignature = async (): Promise<boolean> => false;
     const verifier: ApprovalProofVerifier = {
       type: "sig",
       verify: async (_proof, expected) => {
-        await null;
+        await Promise.resolve();
         const ok = await checkSignature();
         return Object.assign(
           Object.create(null) as object,
-          ok
-            ? { valid: true, approverId: "bob", requestDigest: expected.requestDigest }
-            : failing,
+          ok ? { valid: true, approverId: "bob", requestDigest: expected.requestDigest } : failing,
         ) as typeof failing;
       },
     };
