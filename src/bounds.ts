@@ -17,9 +17,9 @@ import {
 import { hasInternalSlots, isProxy } from "./plain.js";
 
 /**
- * Size guard that runs before schema validation. Zod 3 parses every item of an array even when
- * the array is longer than its `max()`, and keeps one issue per failing item, so a huge input
- * can exhaust memory before validation fails. The guard stops early, reads every property
+ * Size guard that runs before validation. The validators check every item of a list, also of a
+ * list longer than its limit, as the Zod 3 schemas did, so a huge input could exhaust memory
+ * before validation fails. The guard stops early, reads every property
  * exactly once, and returns a plain copy. Validation then runs on that copy, so getters and
  * proxies on the caller's object cannot return one value to the guard and another later. Every
  * built-in it calls is captured at load (see intrinsics.ts), and it walks keys by index.
