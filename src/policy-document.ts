@@ -109,7 +109,7 @@ export type ApprovalRule = {
 };
 
 export type SeparationOfDuties = {
-  /** Who requested an action of a type before may never approve an action of that type. */
+  /** An approver whom `priorRequests` lists with the requested permission may not approve. */
   requesterNeverApprovesSameType: boolean;
   /** Nobody may hold both a requesting and an approving role for the same permission. */
   exclusiveRequestAndApproveRoles: boolean;

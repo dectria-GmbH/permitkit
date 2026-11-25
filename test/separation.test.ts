@@ -276,6 +276,59 @@ describe("Rule B: contributors and earlier requesters", () => {
   });
 });
 
+describe("priorRequests in the scope the caller chooses", () => {
+  // The caller decides which earlier requests it lists, for example only requests for the same
+  // subject. permitkit matches an entry by approver id and permission and filters nothing else.
+  const sameType = policyOf({ sameType: true });
+  const leadRequest = requestOf(person("u-lead-req", "lead"));
+  const cases: [
+    name: string,
+    prior: { principalId: string; permission: string }[],
+    refused: boolean,
+  ][] = [
+    [
+      "an entry for this permission",
+      [{ principalId: "u-prior", permission: "ticket:refund" }],
+      true,
+    ],
+    [
+      "an entry for another permission",
+      [{ principalId: "u-prior", permission: "ticket:read" }],
+      false,
+    ],
+    [
+      "an entry for another approver",
+      [{ principalId: "u-other", permission: "ticket:refund" }],
+      false,
+    ],
+    ["a narrower list without the entry", [], false],
+  ];
+
+  it("refuses an approver only for an entry with its id and the requested permission", async () => {
+    const outcomes: string[] = [];
+    for (const [name, prior, refused] of cases) {
+      for (const [on, separation] of [
+        [policy, rule(false, "simple", [])],
+        [sameType, undefined],
+      ] as const) {
+        const decision = await evaluateApprovals(on, {
+          request: leadRequest,
+          now,
+          approvals: [
+            approvalBy(priorRequester, leadRequest, on),
+            approvalBy(peerA, leadRequest, on),
+          ],
+          priorRequests: prior,
+          ...(separation === undefined ? {} : { separation }),
+        });
+        outcomes.push(`${name}: ${rejections(decision).join(",") || decision.outcome}`);
+        expect(rejections(decision)).toEqual(refused ? ["u-prior:sod_prior_request"] : []);
+      }
+    }
+    expect(outcomes).toHaveLength(cases.length * 2);
+  });
+});
+
 describe("missing Rule B inputs refuse, never read as empty", () => {
   it("refuses a rule without contributors", async () => {
     for (const separation of [

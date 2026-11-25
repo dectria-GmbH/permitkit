@@ -70,24 +70,31 @@ version is still current: the consumer checks the version at the decision, at th
 approval and at execution. The rule is not part of `requestDigest`, so the digest of a request
 does not change with the rule.
 
-| Field                 | Values                               | Effect                                                                                                                                                                                                                           |
-| --------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`             | 1 to 128 characters                  | The result and the record carry it.                                                                                                                                                                                              |
-| `requesterMayApprove` | `true` or `false`                    | Rule A. Only `true` allows the requester to count as one of the `approvers` distinct approvers. The required number does not change.                                                                                             |
-| `roleSeparation`      | `"off"`, `"simple"` or `"strict"`    | Rule B. `"simple"`: no contributor and no earlier requester of the same type approves. `"strict"`: the same, and no approver holds a role with a grant for the permission, and the requester holds no approver role of the rule. |
-| `contributors`        | list of principal ids, `[]` for none | Who contributed to the subject. Required: absent refuses with `sod_contributors_missing`, never read as empty.                                                                                                                   |
+| Field                 | Values                               | Effect                                                                                                                                                                                                                                                |
+| --------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`             | 1 to 128 characters                  | The result carries it.                                                                                                                                                                                                                                |
+| `requesterMayApprove` | `true` or `false`                    | Rule A. Only `true` allows the requester to count as one of the `approvers` distinct approvers. The required number does not change.                                                                                                                  |
+| `roleSeparation`      | `"off"`, `"simple"` or `"strict"`    | Rule B. `"simple"`: no contributor and no approver whom `priorRequests` lists with the permission approves. `"strict"`: the same, and no approver holds a role with a grant for the permission, and the requester holds no approver role of the rule. |
+| `contributors`        | list of principal ids, `[]` for none | Who contributed to the subject. Required: absent refuses with `sod_contributors_missing`, never read as empty.                                                                                                                                        |
 
 The same-type check reads the existing `priorRequests` input: earlier requests by the approvers,
-from the consumer's records. With a separation rule, `priorRequests` is required: absent refuses
-with `sod_history_missing`, never read as empty. Both lists are also required when the rule
+from the caller's records. The caller decides their scope, for example every request for the
+permission or only the requests for the same subject. permitkit refuses an approver only if an
+entry has the approver's id and the requested permission; it applies no other filter, so a
+narrower list refuses fewer approvers. With a separation rule, `priorRequests` is required:
+absent refuses with `sod_history_missing`, never read as empty. Both lists are also required when the rule
 waives Rule B, because the result reports each waived check.
 
-Where `requesterMayApprove` is `true`, simple Rule B does not apply: a contributor and an earlier
-requester of the same type may approve. `"strict"` with `requesterMayApprove: true` refuses with
+Where `requesterMayApprove` is `true`, simple Rule B does not apply: a contributor and an
+approver listed in `priorRequests` may approve. `"strict"` with `requesterMayApprove: true` refuses with
 `separation_conflict`. A request that an agent makes for a principal counts as the principal's own
 request: the principal approves it only where self-approval is allowed, and an agent in the chain
 never approves. An agent approver is refused under every rule (`approver_not_human`,
 `approver_is_delegated`).
+
+`decide()` does not see the per-request rule. Under a strict rule, a requester with an approver
+role gets `approval_required` from `decide()` and is refused only by `evaluateApprovals`
+(`requester_role_conflict`). A caller that wants the refusal at request time checks it itself.
 
 The rule only tightens the policy's `separationOfDuties` flags. A rule that waives what a flag
 requires refuses with `separation_policy_conflict`: `requesterNeverApprovesSameType` with
@@ -122,7 +129,7 @@ An entry can have a `detail` string. It can hold text from the input (a proof ty
 | `approver_denied_by_rule`  | A deny rule for the permission matches the approver.                                                                  |
 | `approver_not_permitted`   | The approver does not hold the permission (rules without roles).                                                      |
 | `sod_role_conflict`        | The approver also holds a requesting role (if configured).                                                            |
-| `sod_prior_request`        | The approver requested an action of this type before (if configured).                                                 |
+| `sod_prior_request`        | `priorRequests` lists the approver with this permission (if configured).                                              |
 | `sod_contributor`          | The separation rule lists the approver as a contributor, and Rule B applies.                                          |
 | `proof_missing`            | The rule requires a proof and the approval has none.                                                                  |
 | `proof_type_not_allowed`   | The rule's `proofTypes` do not include the proof's type.                                                              |

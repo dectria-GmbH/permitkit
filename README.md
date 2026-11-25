@@ -336,11 +336,13 @@ See "Replaced built-ins" in the threat model for what the check cannot see.
 
 The operator switches these settings in the policy:
 
-- `requesterNeverApprovesSameType`: who requested an action of a type before may never approve an
-  action of that type. Pass the history as `priorRequests`; without it, the result is a deny.
-  An empty list means "no earlier requests", so pass the full history for the approvers. Each
-  entry must name a permission of the current catalogue, or the result is `invalid_input`, so
-  filter out permissions that a later release removed.
+- `requesterNeverApprovesSameType`: an approver whom `priorRequests` lists with the requested
+  permission may not approve. Without `priorRequests`, the result is a deny. An empty list means
+  "no earlier requests". You decide which earlier requests the list holds: every request for
+  that permission, or a narrower set, for example only requests for the same subject. permitkit
+  matches each entry by approver id and permission only and applies no other filter. Each entry
+  must name a permission of the current catalogue, or the result is `invalid_input`, so filter
+  out permissions that a later release removed.
 - `exclusiveRequestAndApproveRoles`: nobody may hold both a role that grants the permission and an
   approver role for it. Requests and approvals from such subjects are refused. Every approval
   rule then needs `eligibleApprovers: { kind: "roles", ... }`.
@@ -355,7 +357,7 @@ await evaluateApprovals(policy, {
   request,
   approvals,
   now,
-  priorRequests, // earlier requests by the approvers; required with a rule
+  priorRequests, // earlier requests by the approvers, in the scope you choose; required with a rule
   separation: {
     version: "refund-approval@7",
     requesterMayApprove: false, // Rule A: true lets the requester be one of the approvers
@@ -372,7 +374,10 @@ both to `false` and set `perRequestRule: "required"` in `separationOfDuties`, so
 without a rule is refused. The result names the applied rule version in `separation` and, per
 counted approver, the checks that the rule waived in `waived`. The rule is not part of
 `requestDigest`. permitkit does not know whether the rule version is still current: check it at
-the decision, at the last approval and at execution. All codes and rules:
+the decision, at the last approval and at execution. `decide()` does not see the per-request
+rule: under a strict rule, a requester with an approver role gets `approval_required` from
+`decide()` and is refused only by `evaluateApprovals` (`requester_role_conflict`). A caller that
+wants the refusal at request time checks it itself. All codes and rules:
 [docs/reference.md](docs/reference.md#separation-rule-per-request-approvalinputseparation).
 
 ### Audit and re-evaluation

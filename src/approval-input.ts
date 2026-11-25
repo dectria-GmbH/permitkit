@@ -58,13 +58,13 @@ export type PriorRequest = {
  * current version of its rule.
  */
 export type SeparationRule = {
-  /** The consumer's version label of the rule. The result and the record carry it. */
+  /** The consumer's version label of the rule. The result carries it. */
   version: string;
   /** Rule A off: the requester may be one of the distinct approvers. Only `true` allows it. */
   requesterMayApprove: boolean;
   /**
-   * Rule B. `"simple"`: an earlier requester of the same type (from `priorRequests`) and a
-   * contributor may not approve. `"strict"`: the same, and an approver may hold no role that
+   * Rule B. `"simple"`: an approver whom `priorRequests` lists with the requested permission,
+   * and a contributor, may not approve. `"strict"`: the same, and an approver may hold no role that
    * grants the permission, and the requester no approver role. `"off"`: neither.
    */
   roleSeparation: "off" | "simple" | "strict";
@@ -83,8 +83,10 @@ export type ApprovalInput = {
   /** Evaluation time. The requester's rights and the window are checked at this time. */
   now: string;
   /**
-   * Earlier requests by the approvers, as the consumer's records show them. Required if the
-   * operator switched on requesterNeverApprovesSameType.
+   * Earlier requests by the approvers, as the consumer's records show them, in the scope the
+   * consumer chooses (for example only requests for the same subject). An entry counts if it
+   * has the approver's id and the requested permission. Required if the operator switched on
+   * requesterNeverApprovesSameType, and with a separation rule.
    */
   priorRequests?: PriorRequest[] | undefined;
   /**
