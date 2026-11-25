@@ -1,8 +1,9 @@
-// Zod never touches the data that permitkit reads later. evaluateApprovals and reevaluate read
-// the request and `now` from their plain-data copy of the input with the hand-written validators,
-// before any Zod call, and hand Zod a separate copy. Zod 3 passes the input's own objects to
-// built-ins (Array.isArray in getParsedType, push in ZodObject). A built-in replaced after load
-// could change that copy in place, and a validator that ran after Zod would read changed data.
+// No built-in replaced after load sees the data that permitkit decides on. evaluateApprovals and
+// reevaluate validate their plain-data copy of the input with the hand-written validators, which
+// call only the built-ins captured at load. Zod 3, which validated approval inputs and records
+// before, passed the input's own objects to live built-ins (Array.isArray in getParsedType, push
+// in ZodObject), so a replacement could change that copy in place. These cases keep those
+// replacements as regression tests: each one changed a result while Zod ran first.
 // Each case records while the replacement is active and asserts after the restore.
 import { describe, expect, it } from "vitest";
 
@@ -99,7 +100,7 @@ const withIsArray = <T>(replacement: (value: unknown) => boolean, body: () => Pr
   replaced(Array, "isArray", replacement, originalIsArray, body);
 
 /**
- * Rewrites the action of every prototype-free object with a `request` key that Zod hands to
+ * Rewrites the action of every prototype-free object with a `request` key that reaches
  * Array.isArray. permitkit's plain-data copies have no prototype, the caller's input has one.
  */
 function readInsteadOfRefund(value: unknown): boolean {
@@ -128,9 +129,9 @@ function leadForRequester(value: unknown): boolean {
 }
 
 /**
- * Zod 3 collects the parsed fields of an object as { key, value } pairs with push. For
- * `request: z.unknown()` in a decision record, the parsed value is the input's own request.
- * This replacement gives its first role the name lead, in place.
+ * Zod 3 collected the parsed fields of an object as { key, value } pairs with push. For
+ * `request: z.unknown()` in a decision record, the parsed value was the input's own request.
+ * This replacement gives its first role the name lead, in place, if such a pair reaches push.
  */
 function leadInPlace(this: unknown[], ...items: unknown[]): number {
   for (let index = 0; index < items.length; index += 1) {
@@ -153,7 +154,7 @@ const input = (request: AccessRequest) => ({
   approvals: [],
 });
 
-describe("evaluateApprovals reads the request before Zod and hands Zod its own copy", () => {
+describe("evaluateApprovals validates its copy without a built-in replaced after load", () => {
   it("an Array.isArray that rewrites the action does not turn pending into allow", async () => {
     const clean = await evaluateApprovals(policy, input(requestAs("lead")));
     const polluted = await withIsArray(readInsteadOfRefund, () =>
@@ -177,7 +178,7 @@ describe("evaluateApprovals reads the request before Zod and hands Zod its own c
   });
 });
 
-describe("reevaluate reads the stored request before Zod and hands Zod its own copy", () => {
+describe("reevaluate validates its copy without a built-in replaced after load", () => {
   it("an Array.isArray that rewrites the stored action does not change the replay", async () => {
     const { record } = decideAndRecord(policy, requestAs("lead"));
     const clean = reevaluate(policy, record);
