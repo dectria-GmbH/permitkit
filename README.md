@@ -279,8 +279,21 @@ example in HTML or in a log viewer.
 
 An async verifier like this one can be fooled by code that sets `Object.prototype.then`, which
 would turn its `{ valid: false }` into another value while its promise resolves. permitkit
-checks for such a `then` before and after each verifier call and then counts no proof; see
-"Replaced built-ins" in the threat model for what this check cannot see.
+checks for such a `then` before and after each verifier call and then counts no proof. A `then`
+that is set and removed again while the verifier runs is not seen. So return the result as an
+object without a prototype; its promise then resolves without a `then` lookup:
+
+```ts
+return Object.assign(Object.create(null), {
+  valid: true,
+  approverId: assertion.userId,
+  requestDigest: assertion.challenge,
+});
+```
+
+`expected` is frozen and has no prototype. Read its two fields, and call no method such as
+`hasOwnProperty` on it. See "Replaced built-ins" in the threat model for what the check cannot
+see.
 
 ### Separation of duties
 
@@ -451,23 +464,44 @@ Not covered:
   the captured ones.
 - Verifiers. A verifier is caller code, and so is its result. A verifier gets a private copy of
   the proof, and afterwards permitkit reads nothing that the verifier can reach, except its
-  result. permitkit gives its own promises,
-  also the one that `evaluateApprovals` returns, an own `constructor` and an own `then` (the
-  captured ones). So `await` on the result, `return` of it from an async function, `.then` on
-  it and `Promise.all` read no replaced `Promise.prototype.then`. A replaced `Promise.resolve`
-  still changes what `Promise.all` does. permitkit reads a verifier's result without `await`: a
-  native promise through the captured `then`, every other value as it is. A thenable that is
-  not a native promise is not awaited, so its proof does not count.
+  result. permitkit gives its own promises
+  an own `constructor` (the captured `Promise`) and an own `then`. These are the promise that
+  `evaluateApprovals` returns and every promise that this own `then` returns, at any depth. The
+  own `then` builds its result from the captured `Promise` and reads no `Promise[Symbol.species]`.
+  So under a replaced `Promise.prototype.then`, `Promise.prototype.constructor` or
+  `Promise[Symbol.species]`, these reads get the real decision: `await` on such a promise,
+  `return` of it from an async function, a `.then` callback on it, and `Promise.all` or
+  `Promise.race` over such promises.
+
+  Not covered: the promise that `Promise.all` or `Promise.race` returns is a plain promise of the
+  live `Promise`, so `await` or `.then` on it reads a replaced `Promise.prototype.constructor`,
+  `then` or `Promise[Symbol.species]`. A replaced `Promise.resolve`, `Promise.prototype.catch` or
+  `Promise.prototype.finally` changes what that function does.
+
+  permitkit reads a verifier's result without `await`: a native promise through the captured
+  `then`, every other value as it is. A thenable that is not a native promise is not awaited, so
+  its proof does not count.
 
   An async verifier resolves its own promise with its result, and that resolution reads `then`
-  through the prototype chain before permitkit sees the value. So before each verifier call
-  and again after its result settles, permitkit checks that Object.prototype, Array.prototype
-  and Function.prototype have no own `then` and that Promise.prototype.then is the captured
-  one. If not, the proof does not count (`proof_invalid`). This check is the mitigation, and it
-  has limits. permitkit cannot protect the awaits inside your verifier code: what your
-  WebAuthn library or database client returns there is in your hands. A `then` that is set
-  while your verifier waits and removed before its result settles is not seen either. Code that
-  you run on the decision after `evaluateApprovals` returns is yours.
+  through the prototype chain before permitkit sees the value. The captured `then` reads the
+  `constructor` and `Promise[Symbol.species]` of the verifier's promise, and a getter there runs
+  with that promise as `this`. So before each verifier call and again after its result settles,
+  permitkit checks that Object.prototype, Array.prototype and Function.prototype have no own
+  `then`, and that Promise.prototype.then, Promise.prototype.constructor and
+  `Promise[Symbol.species]` are the ones it found at load. If not, the proof does not count
+  (`proof_invalid`). If the captured `then` throws for a promise or a thenable, the proof does
+  not count either.
+
+  This check is the mitigation, and it has limits. permitkit cannot protect the awaits inside
+  your verifier code: what your WebAuthn library or database client returns there is in your
+  hands. A `then` that is set during the verifier call and removed before its result settles is
+  not seen either. Waiting is not the only way into that window: any read of an inherited
+  property inside the verifier can run a getter that caller code set, for example `toJSON` in
+  `JSON.stringify`. permitkit passes `expected` frozen and without a prototype, so a read on it
+  runs no such getter, but a read on your own objects can. Return the result as an object without
+  a prototype (see [Approval proofs](#approval-proofs)): then a `then` set in this window does
+  not reach the result itself. Code that you run on the decision after `evaluateApprovals`
+  returns is yours.
 - Promises in `evaluateApprovals`. permitkit gives an own `constructor` to the promise that
   `evaluateApprovals` returns and to the promises that it awaits itself. So `await` on them reads
   neither `Promise.prototype.constructor` nor `then`. This covers a direct `await` on the returned
