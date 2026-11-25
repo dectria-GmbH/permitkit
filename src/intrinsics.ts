@@ -263,7 +263,11 @@ export function daysInMonth(year: number, month: number): number {
 export function awaitable<T>(promise: Promise<T>): Promise<T> {
   const marker = bareObject<PropertyDescriptor>();
   marker.value = PromiseConstructor;
-  if (!defineOwn(promise, "constructor", marker)) {
+  // An own then as well: a caller that returns the promise from an async function, calls .then
+  // on it or passes it to Promise.all reads `then`, and must get the captured one.
+  const then = bareObject<PropertyDescriptor>();
+  then.value = promiseThenMethod;
+  if (!defineOwn(promise, "constructor", marker) || !defineOwn(promise, "then", then)) {
     throw new TypeError("The promise could not be marked.");
   }
   return promise;

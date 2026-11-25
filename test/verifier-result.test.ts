@@ -135,6 +135,11 @@ function outcomeOf(key: string, decision: ApprovalDecision | undefined): Record<
   };
 }
 
+/** A consumer wrapper that returns the promise without await. */
+async function wrapper(): Promise<ApprovalDecision> {
+  return evaluateApprovals(policy, input, { verifiers: [syncVerifier] });
+}
+
 /** Promise.prototype.then that hands a pending decision on as an allowed one. */
 function allowingThen(this: Promise<unknown>, ok?: (value: unknown) => unknown, err?: unknown) {
   const swap = (value: unknown) => {
@@ -322,4 +327,46 @@ describe("the verifier result under replaced then and constructor", () => {
       detail: hooksChanged,
     });
   });
+
+  // A consumer that does not await the result directly: the promise has an own then, so these
+  // read the captured one, not Promise.prototype.then.
+  it.each([
+    ["returned from an async function", () => wrapper()],
+    [
+      "read through .then",
+      () => evaluateApprovals(policy, input, { verifiers: [syncVerifier] }).then((d) => d),
+    ],
+    [
+      "read through Promise.all",
+      // One promise on purpose: the case is what Promise.all does with permitkit's promise.
+      // oxlint-disable-next-line unicorn/no-single-promise-in-promise-methods
+      () => Promise.all([evaluateApprovals(policy, input, { verifiers: [syncVerifier] })]),
+    ],
+  ] as const)(
+    "a replaced Promise.prototype.then does not change a decision %s",
+    async (_name, run) => {
+      fired = 0;
+      let pending: Promise<unknown> | undefined;
+      define(Promise.prototype, "then", {
+        value: allowingThen,
+        writable: true,
+        configurable: true,
+      });
+      try {
+        pending = run();
+        // Let the evaluation finish while the replacement is in place.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+      } finally {
+        if (thenDescriptor !== undefined) define(Promise.prototype, "then", thenDescriptor);
+      }
+      const settled: unknown = await pending;
+      const decision = (Array.isArray(settled) ? settled[0] : settled) as ApprovalDecision;
+      expect({ decision: short(decision), fired }).toEqual({
+        decision: "pending counted=0",
+        fired: 0,
+      });
+    },
+  );
 });
