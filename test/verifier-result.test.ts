@@ -407,6 +407,21 @@ function armConstructorGetter(): void {
   });
 }
 
+/** A species whose instance is a thenable that hands on an allowed decision. */
+function FakeSpecies(executor: (resolve: unknown, reject: unknown) => void): object {
+  executor(
+    () => {},
+    () => {},
+  );
+  return {
+    // oxlint-disable-next-line unicorn/no-thenable
+    then(ok: (value: unknown) => void) {
+      fired += 1;
+      ok({ outcome: "allow", allowed: true, reason: "approved", counted: ["bob"], rejected: [] });
+    },
+  };
+}
+
 const failingAsync: ApprovalProofVerifier = { type: "sig", verify: async () => ({ ...failing }) };
 
 describe("the verifier result under a replaced constructor or species", () => {
@@ -500,5 +515,193 @@ describe("the verifier result under a replaced constructor or species", () => {
       decision: "pending counted=0",
       detail: "verifier returned a thenable that is not a native promise",
     });
+  });
+});
+
+/** Ways a caller reads the decision through a promise that `.then` returned. */
+const derivedReads = [
+  ["await p.then(d => d)", (p: Promise<ApprovalDecision>) => p.then((d) => d)],
+  [
+    "await p.then(d => d).then(d => d)",
+    (p: Promise<ApprovalDecision>) => p.then((d) => d).then((d) => d),
+  ],
+  [
+    "await p.then(undefined, e => e)",
+    (p: Promise<ApprovalDecision>) => p.then(undefined, (error: unknown) => error),
+  ],
+] as const;
+
+/** Ways a caller passes permitkit's promises to Promise.all and Promise.race. */
+const combinedReads = [
+  [
+    "Promise.all([p])",
+    // oxlint-disable-next-line unicorn/no-single-promise-in-promise-methods
+    async (p: Promise<ApprovalDecision>) => (await Promise.all([p]))[0],
+  ],
+  [
+    "Promise.all([p.then(d => d)])",
+    // oxlint-disable-next-line unicorn/no-single-promise-in-promise-methods
+    async (p: Promise<ApprovalDecision>) => (await Promise.all([p.then((d) => d)]))[0],
+  ],
+  [
+    "Promise.race([p.then(d => d)])",
+    // oxlint-disable-next-line unicorn/no-single-promise-in-promise-methods
+    (p: Promise<ApprovalDecision>) => Promise.race([p.then((d) => d)]),
+  ],
+] as const;
+
+describe("promises that .then on the result returns", () => {
+  it.each([...derivedReads, ...combinedReads])(
+    "a replaced Promise[Symbol.species] does not change the decision: %s",
+    async (_name, read) => {
+      fired = 0;
+      const clean = short(
+        (await read(
+          evaluateApprovals(policy, input, { verifiers: [syncVerifier] }),
+        )) as ApprovalDecision,
+      );
+      define(Promise, Symbol.species, { configurable: true, get: () => FakeSpecies });
+      let replaced: string;
+      try {
+        // Armed for the whole read, also while the caller awaits.
+        replaced = short(
+          (await read(
+            evaluateApprovals(policy, input, { verifiers: [syncVerifier] }),
+          )) as ApprovalDecision,
+        );
+      } finally {
+        restorePromise();
+      }
+      expect({ clean, replaced, fired }).toEqual({
+        clean: "pending counted=0",
+        replaced: "pending counted=0",
+        fired: 0,
+      });
+    },
+  );
+
+  it.each(derivedReads)(
+    "a replaced Promise.prototype.constructor and then do not change the decision: %s",
+    async (_name, read) => {
+      fired = 0;
+      define(Promise.prototype, "constructor", {
+        value: FakePromise,
+        writable: true,
+        configurable: true,
+      });
+      define(Promise.prototype, "then", {
+        value: allowingThen,
+        writable: true,
+        configurable: true,
+      });
+      let replaced: string;
+      try {
+        replaced = short(
+          (await read(
+            evaluateApprovals(policy, input, { verifiers: [syncVerifier] }),
+          )) as ApprovalDecision,
+        );
+      } finally {
+        restorePromise();
+      }
+      expect({ replaced, fired }).toEqual({ replaced: "pending counted=0", fired: 0 });
+    },
+  );
+
+  it.each(combinedReads)(
+    "a replaced Promise.prototype.then does not change the decision: %s",
+    async (_name, read) => {
+      fired = 0;
+      let pending: Promise<unknown> | undefined;
+      define(Promise.prototype, "then", {
+        value: allowingThen,
+        writable: true,
+        configurable: true,
+      });
+      try {
+        pending = read(evaluateApprovals(policy, input, { verifiers: [syncVerifier] }));
+        // Let the evaluation finish while the replacement is in place.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+      } finally {
+        restorePromise();
+      }
+      // The promise that Promise.all or Promise.race returns is not permitkit's; read it clean.
+      expect({ decision: short((await pending) as ApprovalDecision), fired }).toEqual({
+        decision: "pending counted=0",
+        fired: 0,
+      });
+    },
+  );
+
+  it("a promise that .then returns carries the own constructor and then", () => {
+    const first = evaluateApprovals(policy, input, { verifiers: [syncVerifier] });
+    const derived = first.then((d) => d);
+    const second = derived.then((d) => d);
+    const marks = (promise: Promise<unknown>) => ({
+      constructor: Object.getOwnPropertyDescriptor(promise, "constructor")?.value === Promise,
+      ownThen: Object.hasOwn(promise, "then") && promise.then === first.then,
+    });
+    expect([marks(first), marks(derived), marks(second)]).toEqual([
+      { constructor: true, ownThen: true },
+      { constructor: true, ownThen: true },
+      { constructor: true, ownThen: true },
+    ]);
+  });
+});
+
+/** A call with an unknown option, which rejects with options_invalid. */
+const failingOptions = () => evaluateApprovals(policy, input, { unknown: true } as never);
+const codeOf = (error: unknown): unknown =>
+  typeof error === "object" && error !== null ? Reflect.get(error, "code") : error;
+
+describe("the own then keeps the semantics of the native then", () => {
+  it("hands on a rejection, also without a handler and through .catch", async () => {
+    const results = await Promise.all([
+      failingOptions().then(undefined, codeOf),
+      failingOptions()
+        .then((d) => d)
+        .then(undefined, codeOf),
+      failingOptions().catch(codeOf),
+    ]);
+    expect(results).toEqual(["options_invalid", "options_invalid", "options_invalid"]);
+  });
+
+  it("rejects the derived promise with what a callback throws", async () => {
+    const thrown = new Error("from the callback");
+    const decision = evaluateApprovals(policy, input, { verifiers: [syncVerifier] });
+    await expect(
+      decision.then(() => {
+        throw thrown;
+      }),
+    ).rejects.toBe(thrown);
+  });
+
+  it("passes the value on if the callback is not a function", async () => {
+    const decision = evaluateApprovals(policy, input, { verifiers: [syncVerifier] });
+    expect(short(await decision.then(null))).toBe("pending counted=0");
+  });
+
+  it("calls the callback in the same job as the native then", async () => {
+    const order: string[] = [];
+    const ours = evaluateApprovals(policy, input, { verifiers: [syncVerifier] });
+    await ours;
+    const native = Promise.resolve();
+    const done = Promise.all([
+      ours.then(() => order.push("ours")),
+      native.then(() => order.push("native")),
+    ]);
+    await done;
+    expect(order).toEqual(["ours", "native"]);
+  });
+
+  it("is the native then on a promise that permitkit did not mark", async () => {
+    const ownThen = Reflect.get(
+      evaluateApprovals(policy, input, { verifiers: [syncVerifier] }),
+      "then",
+    ) as (...args: unknown[]) => unknown;
+    const value: unknown = await Reflect.apply(ownThen, Promise.resolve(7), [(n: number) => n + 1]);
+    expect(value).toBe(8);
   });
 });

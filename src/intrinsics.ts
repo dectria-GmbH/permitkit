@@ -256,21 +256,87 @@ export function daysInMonth(year: number, month: number): number {
   return apply(getUTCDateMethod, end, []);
 }
 
+/** The promises that awaitable marked. guardedThen reads through `await` only on these. */
+const marked = new WeakSet<object>();
+
+/** Waits for a marked promise and hands on its value or reason. Never rejects. */
+async function follow(
+  source: Promise<unknown>,
+  fulfilled: (value: unknown) => void,
+  rejected: (reason: unknown) => void,
+): Promise<void> {
+  let value: unknown;
+  try {
+    // The source has an own constructor that is the captured Promise, so `await` reads no
+    // `then`, no `constructor` through the prototype chain and no Symbol.species.
+    value = await source;
+  } catch (reason) {
+    rejected(reason);
+    return;
+  }
+  fulfilled(value);
+}
+
 /**
- * The promise, with an own `constructor` that is the captured Promise. `await` reads
- * `constructor` on a native promise: if it is not %Promise%, the promise is resolved through its
- * `then`, and replaced Promise.prototype.constructor and then methods could choose the value.
+ * The own `then` of a marked promise. The native then builds its result through
+ * Promise[Symbol.species], a getter that caller code can replace, and the promise it returns
+ * would read Promise.prototype.constructor and then when awaited. This one returns a marked
+ * promise from the captured constructor, so `await` on it, `.then` on it again, Promise.all and
+ * Promise.race read the same own markers. It calls the callbacks in the same job as the native
+ * then. On a promise that permitkit did not mark, it is the native then.
+ */
+function guardedThen(
+  this: Promise<unknown>,
+  onFulfilled?: unknown,
+  onRejected?: unknown,
+): Promise<unknown> {
+  if (!weakSetHas(marked, this)) {
+    // Not permitkit's promise: behave as the native then.
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+    return apply(promiseThenMethod, this, [onFulfilled, onRejected]) as Promise<unknown>;
+  }
+  const derived = new PromiseConstructor<unknown>((resolve, reject) => {
+    const settle = (handler: unknown, input: unknown, passOn: (value: unknown) => void) => {
+      if (typeof handler !== "function") {
+        passOn(input);
+        return;
+      }
+      try {
+        resolve(apply(handler, undefined, [input]));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    void follow(
+      this,
+      (value) => {
+        settle(onFulfilled, value, resolve);
+      },
+      (reason) => {
+        settle(onRejected, reason, reject);
+      },
+    );
+  });
+  return awaitable(derived);
+}
+freeze(guardedThen);
+
+/**
+ * The promise, with an own `constructor` that is the captured Promise and an own `then` that is
+ * guardedThen. `await` reads `constructor` on a native promise: if it is not %Promise%, the
+ * promise is resolved through its `then`, and a replaced Promise.prototype.constructor and then
+ * could choose the value. A caller that returns the promise from an async function, calls .then
+ * on it or passes it to Promise.all or Promise.race reads `then`, and gets guardedThen.
  */
 export function awaitable<T>(promise: Promise<T>): Promise<T> {
   const marker = bareObject<PropertyDescriptor>();
   marker.value = PromiseConstructor;
-  // An own then as well: a caller that returns the promise from an async function, calls .then
-  // on it or passes it to Promise.all reads `then`, and must get the captured one.
   const then = bareObject<PropertyDescriptor>();
-  then.value = promiseThenMethod;
+  then.value = guardedThen;
   if (!defineOwn(promise, "constructor", marker) || !defineOwn(promise, "then", then)) {
     throw new TypeError("The promise could not be marked.");
   }
+  weakSetAdd(marked, promise);
   return promise;
 }
 
