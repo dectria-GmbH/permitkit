@@ -294,11 +294,11 @@ export function promiseHooksIntact(): boolean {
 /** True if the value or an object on its prototype chain has a `then`. Runs no getter. */
 export function hasThen(value: unknown): boolean {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") return false;
-  let node: object | null = value;
-  for (let depth = 0; node !== null && depth < 64; depth += 1) {
-    if (hasOwn(node, "then")) return true;
-    const next: unknown = getPrototypeOf(node);
-    node = typeof next === "object" || typeof next === "function" ? next : null;
+  let current: object | null = value;
+  for (let depth = 0; current !== null && depth < 64; depth += 1) {
+    if (hasOwn(current, "then")) return true;
+    const next: unknown = getPrototypeOf(current);
+    current = typeof next === "object" || typeof next === "function" ? next : null;
   }
   return false;
 }
