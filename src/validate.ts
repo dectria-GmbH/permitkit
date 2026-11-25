@@ -13,8 +13,10 @@
  * - A refinement (a rule over a whole value) runs only if the value had no other issue.
  *
  * Only own properties are read, by index or key, never through an iterator, so a polluted
- * Object.prototype or Array.prototype cannot supply a field or an item. Every built-in is
- * called through a copy captured at load (see intrinsics.ts).
+ * Object.prototype or Array.prototype cannot supply a field or an item. The rules of each
+ * checker are copied into an object without a prototype when the checker is made, so an
+ * absent rule such as `min` or `key` reads as undefined and never runs an inherited getter.
+ * Every built-in is called through a copy captured at load (see intrinsics.ts).
  */
 
 import {
@@ -159,7 +161,8 @@ export interface StringRules {
 }
 
 /** A string. Lengths count UTF-16 code units, as `String.prototype.length` does. */
-export function text(rules: StringRules): Check<string> {
+export function text(options: StringRules): Check<string> {
+  const rules = bare(options);
   return (value, path, issues) => {
     if (typeof value !== "string") return fail(issues, path, "Expected a string.");
     const before = issues.length;
@@ -183,7 +186,8 @@ export interface NumberRules {
 }
 
 /** A finite number (NaN and infinities are refused), optionally an integer within bounds. */
-export function finiteNumber(rules: NumberRules): Check<number> {
+export function finiteNumber(options: NumberRules): Check<number> {
+  const rules = bare(options);
   return (value, path, issues) => {
     if (typeof value !== "number" || isNaNNumber(value)) {
       return fail(issues, path, "Expected a number.");
@@ -231,7 +235,8 @@ export interface ArrayRules {
  * An array whose items pass `item`. Length issues come first, then item issues; every item is
  * checked, as before. Items are read by index, not through the array iterator.
  */
-export function list<T>(item: Check<T>, rules: ArrayRules = {}): Check<T[]> {
+export function list<T>(item: Check<T>, options: ArrayRules = {}): Check<T[]> {
+  const rules = bare(options);
   return (value, path, issues) => {
     if (!isArray(value)) return fail(issues, path, "Expected a list.");
     const before = issues.length;
@@ -264,7 +269,8 @@ export interface RecordRules {
  * An object used as a map from key to value. For each key in own-key order, the key is checked,
  * then the value. The output is an object without a prototype.
  */
-export function dictionary<T>(item: Check<T>, rules: RecordRules = {}): Check<Record<string, T>> {
+export function dictionary<T>(item: Check<T>, options: RecordRules = {}): Check<Record<string, T>> {
+  const rules = bare(options);
   return (value, path, issues) => {
     if (!isObject(value)) return fail(issues, path, "Expected an object.");
     const before = issues.length;

@@ -180,8 +180,10 @@ function withProperties<const K extends string, P>(kind: K, properties: Check<P>
   };
 }
 
+const nonEmptyText = text({ min: 1 });
+
 const scopeValue: Check<string> = (value, path, issues) => {
-  const checked = text({ min: 1 })(value, path, issues);
+  const checked = nonEmptyText(value, path, issues);
   if (checked === "*") {
     return fail(issues, path, '"*" is not a wildcard. Use { kind: "all" } for everywhere.');
   }
@@ -240,9 +242,11 @@ export const limits: Check<Limits> = explicit<Limits>(
   },
 );
 
+const gteNumber = finiteNumber({});
+
 const threshold: Check<{ gte: number }> = (value, path, issues) => {
   if (!isObject(value)) return fail(issues, path, "Expected { gte }.");
-  const gte = required(value, "gte", path, issues, finiteNumber({}));
+  const gte = required(value, "gte", path, issues, gteNumber);
   const known = knownKeys(value, ["gte"], path, issues);
   return gte === invalid || !known ? invalid : bare({ gte });
 };
@@ -288,16 +292,19 @@ const grant: Check<GrantRule> = (value, path, issues) => {
   return bare({ id, permissions: granted, scope: where, limits: bounds });
 };
 
+const grantList = list(grant);
+
 const role: Check<RoleDefinition> = (value, path, issues) => {
   if (!isObject(value)) return fail(issues, path, "Expected a role object.");
   const about = optional(value, "description", path, issues, description);
-  const grants = required(value, "grants", path, issues, list(grant));
+  const grants = required(value, "grants", path, issues, grantList);
   const known = knownKeys(value, ["description", "grants"], path, issues);
   if (about.value === invalid || grants === invalid || !known) return invalid;
   return bare({ ...(about.present ? { description: about.value } : {}), grants });
 };
 
 const subjectType = oneOf(["human", "service", "agent"]);
+const subjectTypes = list(subjectType, { min: 1 });
 
 const deny: Check<DenyRule> = (value, path, issues) => {
   if (!isObject(value)) return fail(issues, path, "Expected a deny rule object.");
@@ -305,7 +312,7 @@ const deny: Check<DenyRule> = (value, path, issues) => {
   const about = optional(value, "description", path, issues, description);
   const denied = required(value, "permissions", path, issues, permissions);
   const roles = optional(value, "roles", path, issues, identifiers);
-  const types = optional(value, "subjectTypes", path, issues, list(subjectType, { min: 1 }));
+  const types = optional(value, "subjectTypes", path, issues, subjectTypes);
   const where = required(value, "scope", path, issues, scope);
   const known = knownKeys(
     value,
@@ -417,13 +424,18 @@ const schemaVersion: Check<2> = (value, path, issues) =>
  * Validates a policy document as the size guard copied it. The cross-references (catalogue,
  * role names, rule ids, proof types) are checked in compilePolicy after this.
  */
+const versionLabel = text({ min: 1, max: 128 });
+const roleTable = dictionary(role, { key: identifier });
+const denyList = list(deny);
+const approvalRuleList = list(approvalRule);
+
 export const policyDocument: Check<PolicyDocument> = (value, path, issues) => {
   if (!isObject(value)) return fail(issues, path, "Expected a policy document object.");
   const schema = required(value, "schema", path, issues, schemaVersion);
-  const version = required(value, "version", path, issues, text({ min: 1, max: 128 }));
-  const roles = required(value, "roles", path, issues, dictionary(role, { key: identifier }));
-  const denies = required(value, "denies", path, issues, list(deny));
-  const rules = required(value, "approvalRules", path, issues, list(approvalRule));
+  const version = required(value, "version", path, issues, versionLabel);
+  const roles = required(value, "roles", path, issues, roleTable);
+  const denies = required(value, "denies", path, issues, denyList);
+  const rules = required(value, "approvalRules", path, issues, approvalRuleList);
   const duties = required(value, "separationOfDuties", path, issues, separationOfDuties);
   const known = knownKeys(
     value,
