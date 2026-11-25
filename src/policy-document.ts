@@ -94,7 +94,10 @@ export type ApprovalRule = {
   description?: string | undefined;
   permissions: string[];
   when: When;
-  /** Number of distinct approvers besides the requester. */
+  /**
+   * Number of distinct approvers. The requester is never one of them, unless the separation
+   * rule of the request allows self-approval; the number stays the same then.
+   */
   approvers: number;
   eligibleApprovers: EligibleApprovers;
   /** Approvals count only inside this window after the request time. */
@@ -110,6 +113,12 @@ export type SeparationOfDuties = {
   requesterNeverApprovesSameType: boolean;
   /** Nobody may hold both a requesting and an approving role for the same permission. */
   exclusiveRequestAndApproveRoles: boolean;
+  /**
+   * `"required"`: every evaluateApprovals input must carry a separation rule, and an input
+   * without one is refused (`separation_rule_missing`). Absent: an input without a rule is
+   * evaluated as before, with the requester refused and the two flags above.
+   */
+  perRequestRule?: "required" | undefined;
 };
 
 /** A validated policy document. */
@@ -400,20 +409,27 @@ const approvalRule: Check<ApprovalRule> = (value, path, issues) => {
   });
 };
 
+const perRequestRule = oneOf(["required"]);
+
 const separationOfDuties: Check<SeparationOfDuties> = (value, path, issues) => {
   if (!isObject(value)) return fail(issues, path, "Expected the separation of duties flags.");
   const never = required(value, "requesterNeverApprovesSameType", path, issues, bool);
   const exclusive = required(value, "exclusiveRequestAndApproveRoles", path, issues, bool);
+  const perRequest = optional(value, "perRequestRule", path, issues, perRequestRule);
   const known = knownKeys(
     value,
-    ["requesterNeverApprovesSameType", "exclusiveRequestAndApproveRoles"],
+    ["requesterNeverApprovesSameType", "exclusiveRequestAndApproveRoles", "perRequestRule"],
     path,
     issues,
   );
-  if (never === invalid || exclusive === invalid || !known) return invalid;
+  if (never === invalid || exclusive === invalid || perRequest.value === invalid || !known) {
+    return invalid;
+  }
+  // The key is in the output only with its one value, so a document without it keeps its digest.
   return bare({
     requesterNeverApprovesSameType: never,
     exclusiveRequestAndApproveRoles: exclusive,
+    ...(perRequest.value === undefined ? {} : { perRequestRule: perRequest.value }),
   });
 };
 
