@@ -434,10 +434,15 @@ Not covered:
   so that a prior requester may approve. Each of these turned `pending` into `allow` in a test.
   What is covered in these two functions:
   - `evaluateApprovals` reads the request and `now` from its plain-data copy of the input and
-    checks them with permitkit's own validators. Only that result reaches `requestDigest`,
-    `decide`, the permission, the resource properties and the requester ids. So a replaced
-    built-in cannot give the requester a role or swap the request.
-  - `reevaluate` reads the stored request the same way and decides on it.
+    checks them with permitkit's own validators, before any Zod call. Zod then validates a
+    separate copy, so the copy that permitkit's validators read never reaches a built-in that
+    Zod calls. Only the result of permitkit's validators reaches `requestDigest`, `decide`, the
+    permission, the resource properties and the requester ids. So a replaced built-in cannot
+    give the requester a role, change the request or swap it. A proof verifier is caller code
+    too: it gets a private copy of the proof, and afterwards permitkit reads nothing that the
+    verifier can reach, except its result.
+  - `reevaluate` reads the stored request the same way, before its Zod call, and decides on
+    it. So a replaced built-in cannot change the request that it replays.
   - The approval checks themselves (requester, duplicates, digest, window, deny rules,
     eligibility, separation of duties, proofs) use the captured built-ins.
 
