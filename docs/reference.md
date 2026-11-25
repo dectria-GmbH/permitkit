@@ -50,6 +50,9 @@ after permitkit loads changes no decision (see the README threat model).
 
 ## Approval rejections (`ApprovalDecision.rejected`)
 
+An entry can have a `detail` string. It can hold text from the input (a proof type) or the
+`reason` that a verifier returned, so escape it before you render it.
+
 | Code                       | Meaning                                                               |
 | -------------------------- | --------------------------------------------------------------------- |
 | `approval_invalid`         | The approval does not match the approval schema.                      |

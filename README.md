@@ -273,6 +273,10 @@ after. That comparison only protects you if the verifier returns the values from
 evidence: a verifier that echoes `expected` lets a valid assertion for one request pass for
 another. permitkit waits for the verifier's promise, so give the verifier its own timeout.
 
+Each entry in `rejected` can have a `detail` string. It can hold text from the input, such as a
+proof type, or the `reason` that your verifier returned. Escape it before you render it, for
+example in HTML or in a log viewer.
+
 ### Separation of duties
 
 The operator switches these settings in the policy:
