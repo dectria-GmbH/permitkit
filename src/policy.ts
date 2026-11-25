@@ -17,6 +17,7 @@ import {
   field,
   freeze,
   hasOwn,
+  isArray,
   isFrozen,
   jsonText,
   mapGet,
@@ -163,13 +164,14 @@ function compileChecked(catalog: Catalog, input: unknown): CompiledPolicy {
       ? field(snapshot, "schema")
       : undefined;
   if (format !== undefined && format !== policySchemaVersion) {
+    const shown = schemaText(format);
     throw new PermitkitError(
       "policy_schema_unsupported",
-      `The policy document has schema ${toText(jsonText(format))}. This release reads only schema ${policySchemaVersion}.`,
+      `The policy document has schema ${shown}. This release reads only schema ${policySchemaVersion}.`,
       [
         {
           path: "schema",
-          message: `Schema ${toText(jsonText(format))} is not supported. There is no automatic migration.`,
+          message: `Schema ${shown} is not supported. There is no automatic migration.`,
           hint: "Rewrite the document for schema 2: every scope, limit, when condition and approver eligibility states its kind, and denies, approvalRules, separationOfDuties and requireProof are required.",
         },
       ],
@@ -416,6 +418,23 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
   }
 
   return issues;
+}
+
+/**
+ * A scalar schema value as JSON, otherwise its type. JSON.stringify on an array or object looks up
+ * toJSON, which the copy inherits from Array.prototype or Object.prototype, so caller code could
+ * write the message. On a string, number, boolean or null it looks up nothing.
+ */
+function schemaText(value: unknown): string {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return toText(jsonText(value));
+  }
+  return isArray(value) ? "of type array" : `of type ${typeof value}`;
 }
 
 const uniqueHint = "Give every grant, deny rule and approval rule its own id.";
