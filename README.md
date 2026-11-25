@@ -23,7 +23,7 @@ Status: 0.1, in development, not published. The API can change before 1.0.
 - **Agents act on behalf of a principal, with narrower rights.** The effective right is the
   intersection of the principal's roles and the agent grant.
 - **No framework in the core.** `compilePolicy` and `decide` use no third-party code.
-  `evaluateApprovals` and the audit functions still use Zod 3, the only runtime dependency.
+  `evaluateApprovals` and `reevaluate` still use Zod 3, the only runtime dependency.
 
 ## Install
 
@@ -400,36 +400,59 @@ built-in that `decide`, `explain`, `evaluate`, `requestDigest`, `parseRequest`, 
   Sets or Maps, and no `Array.from`, so a replaced `Array.prototype[Symbol.iterator]` or
   `%ArrayIteratorPrototype%.next` changes nothing;
 - data-valued pollution and getters on `Object.prototype` and `Array.prototype`. Fields are read
-  as own data properties. Arrays grow by assignment only if neither prototype has that index, and
-  through `defineProperty` otherwise, so an inherited setter or read-only index cannot catch an
-  item.
+  as own data properties, and the validators keep their own rules in objects without a
+  prototype. Arrays grow by assignment only if neither prototype has that index, and through
+  `defineProperty` otherwise, so an inherited setter or read-only index cannot catch an item. A
+  list of fewer than two items is not sorted through `toSorted`, which writes such an item by
+  assignment.
 
-Such a change gives the same decisions, digests and compiled policies as without it. The test
-suite replaces each of 442 built-ins (every configurable method and getter of the prototypes,
-iterator prototypes and namespaces that the path can reach, plus the global constructors) in five
-ways: returns `true`, `false`, `undefined`, an empty array or iterator, or throws. It checks
-`decide`, `explain`, `evaluate`, `requestDigest` and `compilePolicy` on a fixed corpus in both
-plain-data paths (`test/replacement-fuzz.test.ts`).
+Such a change gives the same decisions, digests and compiled policies as without it. Three tests
+check this in both plain-data paths:
+
+- `test/call-time-spy.test.ts` wraps each of 442 built-ins (every configurable method and getter
+  of the prototypes, iterator prototypes and namespaces that the path can reach, plus the global
+  constructors) with a function that records the call and then calls the original. It also
+  records writes that reach `Array.prototype` or `Object.prototype` at a low index. On a corpus
+  of valid and invalid input, the calls above record nothing. A call that does not happen cannot
+  be answered with a wrong value, so on the paths that the corpus reaches this holds for any
+  replacement, also one that returns a crafted value for one input only.
+- `test/inherited-reads.test.ts` installs a getter on `Object.prototype` and `Array.prototype`
+  for every name in the source and expects no read.
+- `test/replacement-fuzz.test.ts` replaces each built-in in one of five ways (returns `true`,
+  `false`, `undefined`, an empty array or iterator, or throws) and compares the results with a
+  clean run. `PERMITKIT_REPLACEMENT_ALL_MODES=1` runs every built-in in all five ways.
 
 Not covered:
 
 - Changes made before permitkit loads. permitkit captures what it finds at that moment. Import
   permitkit before code you do not trust, or freeze the intrinsics.
-- Zod. `evaluateApprovals`, `decideAndRecord`, `reevaluate` and `toDecisionRecord` validate
-  their inputs with Zod 3, which calls built-ins when it runs. permitkit's own code in
-  `evaluateApprovals` uses the captured built-ins, and the request also goes through permitkit's
-  own validator, `requestDigest` and `decide`. With a built-in replaced, Zod can refuse a valid
-  input, which gives a deny or fewer counted approvals. In the same test over the same 442
-  built-ins and five ways, no approval result widened. That is a test result, not a guarantee:
-  Zod can also accept an approval of the wrong shape.
+- Zod, in `evaluateApprovals` and `reevaluate`. Until approval inputs and decision records stop
+  using Zod, a built-in replaced after load can make `evaluateApprovals` count a forged approval,
+  so the result is `allow`, and can steer the status that `reevaluate` returns. Zod 3 calls
+  built-ins when it runs. A replaced `Array.prototype.push` that reacts to its input can add a
+  role to an approver, swap an approval for a forged one, or drop an entry of `priorRequests`
+  so that a prior requester may approve. Each of these turned `pending` into `allow` in a test.
+  What is covered in these two functions:
+  - `evaluateApprovals` reads the request and `now` from its plain-data copy of the input and
+    checks them with permitkit's own validators. Only that result reaches `requestDigest`,
+    `decide`, the permission, the resource properties and the requester ids. So a replaced
+    built-in cannot give the requester a role or swap the request.
+  - `reevaluate` reads the stored request the same way and decides on it.
+  - The approval checks themselves (requester, duplicates, digest, window, deny rules,
+    eligibility, separation of duties, proofs) use the captured built-ins.
+
+  Not covered in these two functions: the list of approvals, each approval (approver, roles,
+  `approvedAt`, `requestDigest`, proof), `priorRequests`, and the stored record fields that
+  `reevaluate` compares (`policy`, `outcome`, `reason`, `rule`, `approval`, `requestDigest`,
+  `actorChain`). `test/replacement-approvals.test.ts` replaces each built-in in all five ways
+  above and found no widened approval result, but these replacements return the same value for
+  every input. `toDecisionRecord` and `decideAndRecord` use no Zod.
+
 - `defineCatalog`. It calls built-ins when it runs, once at startup. The catalogue it returns uses
   the captured ones.
 - Promises in `evaluateApprovals`. permitkit gives its own promises an own `constructor`, so
   `await` on them reads neither `Promise.prototype.constructor` nor `then`. A verifier's result
   is caller code and is awaited as it is.
-- Replacements that the tests do not cover: a function that returns a crafted value for one
-  input only, or a combination of several replacements. The capture does not depend on the
-  replacement's return value, but the tests try only the five listed.
 - Proxies on the portable path, as described above, and changes to permitkit's own exports.
 - Code with its own functions in the process can still change any other library and your own
   code around permitkit, for example the code that builds the request.
