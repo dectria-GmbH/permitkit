@@ -85,7 +85,10 @@ export function detach<T>(value: T): T {
   if (typeof value !== "object" || value === null) return value;
   if (isArray(value)) {
     const items: unknown[] = [];
-    for (let index = 0; index < value.length; index += 1) append(items, detach(value[index]));
+    // Own indices only: a hole would read through Array.prototype, which can be polluted.
+    for (let index = 0; index < value.length; index += 1) {
+      append(items, hasOwn(value, index) ? detach(value[index]) : undefined);
+    }
     // The copy has the same structure as the input, so the type parameter still holds.
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion
     return items as T;

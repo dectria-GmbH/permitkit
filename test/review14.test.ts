@@ -1,6 +1,7 @@
 // Regression tests for findings of the fourteenth cold security review.
 import { describe, expect, it } from "vitest";
 
+import { detach } from "../src/bounds.js";
 import { evaluateApprovals, type ApprovalDecision } from "../src/index.js";
 import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
 import { policy } from "./fixtures.js";
@@ -52,5 +53,26 @@ describe("the promise that evaluateApprovals returns", () => {
     expect(forged?.outcome).toBe("pending");
     expect(forged?.allowed).toBe(false);
     expect(ownConstructor).toBe(true);
+  });
+});
+
+describe("detach", () => {
+  it("reads no array hole through Array.prototype", () => {
+    // oxlint-disable-next-line no-extend-native
+    Object.defineProperty(Array.prototype, 0, {
+      value: "inherited",
+      configurable: true,
+      writable: true,
+    });
+    let copy: unknown[];
+    try {
+      // oxlint-disable-next-line no-sparse-arrays
+      copy = detach([, "own"]);
+    } finally {
+      delete (Array.prototype as unknown as Record<number, unknown>)[0];
+    }
+    expect(copy).toHaveLength(2);
+    expect(copy[0]).toBeUndefined();
+    expect(copy[1]).toBe("own");
   });
 });
