@@ -2,7 +2,8 @@
 // `await` on it reads `then` through the prototype chain, and on a native promise it reads
 // `constructor`. Up to f04df14, a polluted Object.prototype.then (with a synchronous verifier)
 // or a replaced Promise.prototype.constructor and then (with an asynchronous one), set after
-// load, could turn a failed verification into a counted approval.
+// load, could turn a failed verification into a counted approval, and the same replacement could
+// change the decision that a caller's `await` on evaluateApprovals reads.
 import { describe, expect, it } from "vitest";
 
 import {
@@ -109,6 +110,22 @@ function forgingPromiseThen(
 
 function FakePromise(): void {}
 
+/** Promise.prototype.then that hands a pending decision on as an allowed one. */
+function allowingThen(this: Promise<unknown>, ok?: (value: unknown) => unknown, err?: unknown) {
+  const swap = (value: unknown) => {
+    const pending =
+      typeof value === "object" && value !== null && Reflect.get(value, "outcome") === "pending";
+    if (pending) fired += 1;
+    const result = pending ? { ...value, outcome: "allow", allowed: true } : value;
+    return ok === undefined ? result : ok(result);
+  };
+  const settled: unknown = apply(originalThen as (...args: unknown[]) => unknown, this, [
+    swap,
+    err,
+  ]);
+  return settled;
+}
+
 const short = (decision: ApprovalDecision): string =>
   `${decision.outcome} counted=${decision.counted.length}`;
 
@@ -158,6 +175,31 @@ describe("the verifier result under replaced then and constructor", () => {
       }
     }
     expect({ clean, replaced: short(await replaced), fired }).toEqual({
+      clean: "pending counted=0",
+      replaced: "pending counted=0",
+      fired: 0,
+    });
+  });
+
+  it("a replaced Promise constructor and then do not change the decision that await reads", async () => {
+    fired = 0;
+    const clean = short(await evaluateApprovals(policy, input, { verifiers: [syncVerifier] }));
+    let replaced = "";
+    define(Promise.prototype, "constructor", {
+      value: FakePromise,
+      writable: true,
+      configurable: true,
+    });
+    define(Promise.prototype, "then", { value: allowingThen, writable: true, configurable: true });
+    try {
+      replaced = short(await evaluateApprovals(policy, input, { verifiers: [syncVerifier] }));
+    } finally {
+      if (thenDescriptor !== undefined) define(Promise.prototype, "then", thenDescriptor);
+      if (constructorDescriptor !== undefined) {
+        define(Promise.prototype, "constructor", constructorDescriptor);
+      }
+    }
+    expect({ clean, replaced, fired }).toEqual({
       clean: "pending counted=0",
       replaced: "pending counted=0",
       fired: 0,
