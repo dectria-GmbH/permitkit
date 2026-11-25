@@ -4,6 +4,7 @@
  * `test/policy-differential.test.ts`.
  */
 
+import { hasOwn } from "./intrinsics.js";
 import { maxApprovalWindowSeconds } from "./time.js";
 import {
   at,
@@ -158,8 +159,7 @@ function explicit<T>(
     if (!isObject(value)) return fail(issues, path, message);
     const kind = own(value, "kind");
     // Own keys of the option table only, so `constructor` or `toString` is no shape.
-    const option =
-      typeof kind === "string" && Object.hasOwn(options, kind) ? options[kind] : undefined;
+    const option = typeof kind === "string" && hasOwn(options, kind) ? options[kind] : undefined;
     if (option === undefined) return fail(issues, at(path, "kind"), message);
     return option(value, path, issues);
   };

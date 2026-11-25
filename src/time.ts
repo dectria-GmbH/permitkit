@@ -1,3 +1,11 @@
+import {
+  daysInMonth,
+  isFiniteNumber,
+  matches,
+  parseDate,
+  sliceText,
+  toNumber,
+} from "./intrinsics.js";
 import { fail, type Check, type Issue, type Path } from "./validate.js";
 
 /**
@@ -43,7 +51,7 @@ export const requestTime: Check<string> = (value, path, issues) =>
 /** Format first, then the calendar day, then the range, as the earlier schema did. */
 function checkTimestamp(value: unknown, path: Path, issues: Issue[], latest: number) {
   if (typeof value !== "string") return fail(issues, path, timestampMessage);
-  if (!isoInstant.test(value)) return fail(issues, path, timestampMessage);
+  if (!matches(isoInstant, value)) return fail(issues, path, timestampMessage);
   if (!isCalendarInstant(value)) return fail(issues, path, "The date-time does not exist.");
   if (!inRange(value, latestInstant)) {
     return fail(
@@ -59,7 +67,7 @@ function checkTimestamp(value: unknown, path: Path, issues: Issue[], latest: num
 }
 
 function inRange(value: string, latest: number): boolean {
-  const time = Date.parse(value);
+  const time = parseDate(value);
   // Written so that an unreadable time fails the check.
   return time >= earliestInstant && time <= latest;
 }
@@ -69,17 +77,13 @@ function inRange(value: string, latest: number): boolean {
  * return NaN, so the day is checked here instead of trusting Date.parse.
  */
 function isCalendarInstant(value: string): boolean {
-  const year = Number(value.slice(0, 4));
-  const month = Number(value.slice(5, 7));
-  const day = Number(value.slice(8, 10));
-  // setUTCFullYear, because Date.UTC maps the years 0 to 99 to 1900 to 1999.
-  const end = new Date(0);
-  end.setUTCFullYear(year, month, 0);
-  const daysInMonth = end.getUTCDate();
-  return day <= daysInMonth && Number.isFinite(Date.parse(value));
+  const year = toNumber(sliceText(value, 0, 4));
+  const month = toNumber(sliceText(value, 5, 7));
+  const day = toNumber(sliceText(value, 8, 10));
+  return day <= daysInMonth(year, month) && isFiniteNumber(parseDate(value));
 }
 
 /** Milliseconds since the epoch for a value that `timestamp` accepted. */
 export function instant(value: string): number {
-  return Date.parse(value);
+  return parseDate(value);
 }

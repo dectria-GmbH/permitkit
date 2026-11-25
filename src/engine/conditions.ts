@@ -3,9 +3,11 @@
  * thresholds. It is permitkit's own small engine; no third-party rule engine is used.
  * Every lookup uses own properties only, so names such as `constructor` cannot match
  * inherited values. Every function fails toward less access for a value whose `kind` it does
- * not know, so a schema gap cannot turn into a wide match.
+ * not know, so a schema gap cannot turn into a wide match. Every built-in is called through a
+ * copy captured at load (see intrinsics.ts), and lists are read by index.
  */
 
+import { contains, hasOwn, isFiniteNumber, objectKeys } from "../intrinsics.js";
 import type { Scalar } from "../request.js";
 
 export type Properties = Readonly<Record<string, Scalar>> | undefined;
@@ -43,7 +45,7 @@ export type LimitResult =
     };
 
 export function ownValue(properties: Properties, name: string): Scalar | undefined {
-  if (properties === undefined || !Object.hasOwn(properties, name)) return undefined;
+  if (properties === undefined || !hasOwn(properties, name)) return undefined;
   return properties[name];
 }
 
@@ -59,7 +61,7 @@ export function scopeCovers(scope: ScopeLike, properties: Properties): ScopeResu
   if (kind === "all") return { ok: true };
   if (kind !== "match" || scope.kind !== "match") return unknownScope;
   const listed = scope.properties;
-  const names = Object.keys(listed);
+  const names = objectKeys(listed);
   if (names.length === 0) return unknownScope;
   // Index loops, no for-of: an early return closes an iterator, and closing reads `return`
   // through the prototype chain, which a polluted Object.prototype supplies.
@@ -68,7 +70,7 @@ export function scopeCovers(scope: ScopeLike, properties: Properties): ScopeResu
     if (name === undefined) return unknownScope;
     const allowed = listed[name] ?? [];
     const actual = ownValue(properties, name);
-    if (typeof actual !== "string" || !allowed.includes(actual)) {
+    if (typeof actual !== "string" || !contains(allowed, actual)) {
       return { ok: false, property: name, allowed, actual };
     }
   }
@@ -84,13 +86,13 @@ export function scopeCovers(scope: ScopeLike, properties: Properties): ScopeResu
 export function scopeTouches(scope: ScopeLike, properties: Properties): boolean {
   if (ownKind(scope) !== "match" || scope.kind !== "match") return true;
   const listed = scope.properties;
-  const names = Object.keys(listed);
+  const names = objectKeys(listed);
   for (let index = 0; index < names.length; index += 1) {
     const name = names[index];
     if (name === undefined) return true;
     const allowed = listed[name] ?? [];
     const actual = ownValue(properties, name);
-    if (typeof actual === "string" && !allowed.includes(actual)) return false;
+    if (typeof actual === "string" && !contains(allowed, actual)) return false;
   }
   return true;
 }
@@ -113,7 +115,7 @@ export function limitsHold(limits: LimitsLike, properties: Properties): LimitRes
   if (kind === "unlimited") return { ok: true };
   if (kind !== "range" || limits.kind !== "range") return unknownLimits;
   const listed = limits.properties;
-  const names = Object.keys(listed);
+  const names = objectKeys(listed);
   if (names.length === 0) return unknownLimits;
   for (let index = 0; index < names.length; index += 1) {
     const name = names[index];
@@ -130,7 +132,7 @@ export function limitsHold(limits: LimitsLike, properties: Properties): LimitRes
     if (!minOk || !maxOk || (min === null && max === null)) return unknownLimits;
     const inside =
       typeof actual === "number" &&
-      Number.isFinite(actual) &&
+      isFiniteNumber(actual) &&
       (min === null || actual >= min) &&
       (max === null || actual <= max);
     if (!inside) {
@@ -148,21 +150,26 @@ export function limitsHold(limits: LimitsLike, properties: Properties): LimitRes
 export function whenApplies(when: WhenLike, properties: Properties): boolean {
   if (ownKind(when) !== "threshold" || when.kind !== "threshold") return true;
   const listed = when.properties;
-  const names = Object.keys(listed);
+  const names = objectKeys(listed);
   if (names.length === 0) return true;
-  return names.some((name) => {
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    if (name === undefined) return true;
     const condition = listed[name];
     if (condition === undefined) return true;
     const actual = ownValue(properties, name);
-    return typeof actual !== "number" || !Number.isFinite(actual) || actual >= condition.gte;
-  });
+    if (typeof actual !== "number" || !isFiniteNumber(actual) || actual >= condition.gte) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** The own `kind` of a value, or undefined. Never an inherited one. */
 export function ownKind(value: { readonly kind: string }): unknown {
-  if (typeof value !== "object" || value === null || !Object.hasOwn(value, "kind")) {
+  if (typeof value !== "object" || value === null || !hasOwn(value, "kind")) {
     return undefined;
   }
-  const kind: unknown = Reflect.get(value, "kind");
+  const kind: unknown = (value as { readonly kind: unknown }).kind;
   return kind;
 }

@@ -11,7 +11,28 @@ import {
   type PolicyDocument,
   type Scope,
 } from "./policy-document.js";
-import { mapGet, mapSet, ownDataValue } from "./intrinsics.js";
+import {
+  append,
+  contains,
+  field,
+  freeze,
+  hasOwn,
+  isFrozen,
+  jsonText,
+  mapGet,
+  mapSet,
+  newMap,
+  newSet,
+  objectKeys,
+  ownDataValue,
+  setAdd,
+  setHas,
+  sorted,
+  toText,
+  weakMapGet,
+  weakMapSet,
+} from "./intrinsics.js";
+import { isPermitkitError } from "./errors.js";
 import { invalid, joined, type Issue } from "./validate.js";
 
 export { policySchemaVersion } from "./policy-document.js";
@@ -45,17 +66,17 @@ export interface CompiledPolicy {
   readonly document: PolicyDocument;
 }
 
-/** A read-only view of a map. A Map itself cannot be frozen. */
+/**
+ * A read-only view of a map. A Map itself cannot be frozen. `list` holds the values in insertion
+ * order, so callers walk it by index instead of through a Map iterator.
+ */
 export interface Lookup<V> {
   get(key: string): V | undefined;
-  values(): IterableIterator<V>;
+  readonly list: readonly V[];
 }
 
-function lookup<V>(map: Map<string, V>): Lookup<V> {
-  return Object.freeze({
-    get: (key: string) => map.get(key),
-    values: () => map.values(),
-  });
+function lookup<V>(map: Map<string, V>, list: V[]): Lookup<V> {
+  return freeze({ get: (key: string) => mapGet(map, key), list: freeze(list) });
 }
 
 /** Lookup tables built from the frozen document. Not exported from the package. */
@@ -71,7 +92,7 @@ const internals = new WeakMap<object, PolicyInternals>();
 /** The lookup tables of a compiled policy, or undefined for any other value. */
 export function internalsOf(value: unknown): PolicyInternals | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  return mapGet(internals, value);
+  return weakMapGet(internals, value);
 }
 
 /** True only for objects that compilePolicy returned in this process. */
@@ -88,7 +109,7 @@ export function compilePolicy(catalog: Catalog, input: unknown): CompiledPolicy 
   try {
     return compileChecked(catalog, input);
   } catch (error) {
-    if (PermitkitError.is(error) && isCompileCode(ownDataValue(error, "code"))) throw error;
+    if (isPermitkitError(error) && isCompileCode(ownDataValue(error, "code"))) throw error;
     // Data-valued pollution of built-in prototypes can make internals throw, for example a
     // replaced Array.prototype.toSorted. The caller still gets a PermitkitError, never the raw
     // error, whose text could come from the polluted value.
@@ -138,17 +159,17 @@ function compileChecked(catalog: Catalog, input: unknown): CompiledPolicy {
     );
   }
   const format: unknown =
-    typeof snapshot === "object" && snapshot !== null && Object.hasOwn(snapshot, "schema")
-      ? Reflect.get(snapshot, "schema")
+    typeof snapshot === "object" && snapshot !== null && hasOwn(snapshot, "schema")
+      ? field(snapshot, "schema")
       : undefined;
   if (format !== undefined && format !== policySchemaVersion) {
     throw new PermitkitError(
       "policy_schema_unsupported",
-      `The policy document has schema ${JSON.stringify(format)}. This release reads only schema ${policySchemaVersion}.`,
+      `The policy document has schema ${toText(jsonText(format))}. This release reads only schema ${policySchemaVersion}.`,
       [
         {
           path: "schema",
-          message: `Schema ${JSON.stringify(format)} is not supported. There is no automatic migration.`,
+          message: `Schema ${toText(jsonText(format))} is not supported. There is no automatic migration.`,
           hint: "Rewrite the document for schema 2: every scope, limit, when condition and approver eligibility states its kind, and denies, approvalRules, separationOfDuties and requireProof are required.",
         },
       ],
@@ -161,7 +182,7 @@ function compileChecked(catalog: Catalog, input: unknown): CompiledPolicy {
     for (let index = 0; index < found.length; index += 1) {
       const item = found[index];
       if (item === undefined) continue;
-      issues.push({
+      append(issues, {
         path: joined(item.path, "."),
         message: item.message,
         hint: "Fix the field shape. Unknown keys are rejected, so check the spelling.",
@@ -174,30 +195,45 @@ function compileChecked(catalog: Catalog, input: unknown): CompiledPolicy {
     throw new PermitkitError("policy_invalid", "The policy document is not valid.", issues);
   }
 
-  const roles = new Map<string, CompiledRole>();
-  for (const name of Object.keys(document.roles).toSorted(compareText)) {
-    const role = document.roles[name];
-    if (role !== undefined) roles.set(name, Object.freeze({ name, grants: role.grants }));
+  const roles = newMap<string, CompiledRole>();
+  const roleList: CompiledRole[] = [];
+  const roleNames = sorted(objectKeys(document.roles), compareText);
+  for (let index = 0; index < roleNames.length; index += 1) {
+    const name = roleNames[index];
+    const role = name === undefined ? undefined : document.roles[name];
+    if (name === undefined || role === undefined) continue;
+    const compiled: CompiledRole = freeze({ name, grants: role.grants });
+    mapSet(roles, name, compiled);
+    append(roleList, compiled);
   }
-  const approvalRules = new Map<string, ApprovalRule>();
-  for (const rule of document.approvalRules) {
-    for (const permission of rule.permissions) approvalRules.set(permission, rule);
+  // Each permission has at most one approval rule (checkReferences), so the list holds each
+  // rule once, in document order.
+  const approvalRules = newMap<string, ApprovalRule>();
+  const ruleList: ApprovalRule[] = [];
+  for (let index = 0; index < document.approvalRules.length; index += 1) {
+    const rule = document.approvalRules[index];
+    if (rule === undefined) continue;
+    append(ruleList, rule);
+    for (let item = 0; item < rule.permissions.length; item += 1) {
+      const permission = rule.permissions[item];
+      if (permission !== undefined) mapSet(approvalRules, permission, rule);
+    }
   }
 
   deepFreeze(document);
-  const policy: CompiledPolicy = Object.freeze({
+  const policy: CompiledPolicy = freeze({
     version: document.version,
     digest: digest({ catalog: catalog.digest, policy: document }),
     catalog,
     document,
   });
-  mapSet(
+  weakMapSet(
     internals,
     policy,
-    Object.freeze({
-      roles: lookup(roles),
+    freeze({
+      roles: lookup(roles, roleList),
       denies: document.denies,
-      approvalRules: lookup(approvalRules),
+      approvalRules: lookup(approvalRules, ruleList),
       separationOfDuties: document.separationOfDuties,
     }),
   );
@@ -213,35 +249,44 @@ function validated(snapshot: unknown, issues: Issue[]): PolicyDocument | typeof 
     return policyDocument(snapshot, null, issues);
   } catch {
     issues.length = 0;
-    issues.push({ path: [], message: "The input could not be validated." });
+    append(issues, { path: [], message: "The input could not be validated." });
     return invalid;
   }
 }
 
 /** The property names that a scope restricts. `all` restricts none. */
 export function scopeProperties(scope: Scope): readonly string[] {
-  return scope.kind === "match" ? Object.keys(scope.properties) : [];
+  return scope.kind === "match" ? objectKeys(scope.properties) : [];
 }
 
 function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssue[] {
   const issues: PolicyIssue[] = [];
-  const ids = new Map<string, string>();
+  const ids = newMap<string, string>();
   const claimId = (id: string, path: string) => {
-    const first = ids.get(id);
+    const first = mapGet(ids, id);
     if (first !== undefined) {
-      issues.push({ path, message: `Rule id ${id} is also used at ${first}.`, hint: uniqueHint });
+      append(issues, {
+        path,
+        message: `Rule id ${id} is also used at ${first}.`,
+        hint: uniqueHint,
+      });
     } else {
-      ids.set(id, path);
+      mapSet(ids, id, path);
     }
   };
-  const roleNames = new Set(Object.keys(document.roles));
+  const roleNames = newSet<string>();
+  const definedRoles = objectKeys(document.roles);
+  for (let index = 0; index < definedRoles.length; index += 1) {
+    const name = definedRoles[index];
+    if (name !== undefined) setAdd(roleNames, name);
+  }
   const checkRoles = (roles: readonly string[], path: string) => {
     for (let roleIndex = 0; roleIndex < roles.length; roleIndex += 1) {
       const role = roles[roleIndex];
-      if (role === undefined || !roleNames.has(role)) {
-        issues.push({
+      if (role === undefined || !setHas(roleNames, role)) {
+        append(issues, {
           path: `${path}.${roleIndex}`,
-          message: `Role ${String(role)} is not defined.`,
+          message: `Role ${toText(role)} is not defined.`,
           hint: "Define the role under roles, or fix the spelling.",
         });
       }
@@ -257,25 +302,27 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
       const permission = permissions[index];
       const resource = permission === undefined ? undefined : catalog.resourceOf(permission);
       if (resource === undefined) {
-        issues.push({
+        append(issues, {
           path: `${path}.permissions.${index}`,
-          message: `Permission ${String(permission)} is not in the catalogue.`,
+          message: `Permission ${toText(permission)} is not in the catalogue.`,
           hint: "Add the action to the catalogue in code, or fix the spelling.",
         });
         continue;
       }
-      for (const name of properties.scope) {
-        if (!resource.scopes.includes(name)) {
-          issues.push({
+      for (let item = 0; item < properties.scope.length; item += 1) {
+        const name = properties.scope[item];
+        if (name !== undefined && !contains(resource.scopes, name)) {
+          append(issues, {
             path: `${path}.scope.properties.${name}`,
             message: `Resource type ${resource.type} has no scope property ${name}.`,
             hint: `Use one of: ${joined(resource.scopes, ", ") || "(none)"}.`,
           });
         }
       }
-      for (const name of properties.limits) {
-        if (!resource.limits.includes(name)) {
-          issues.push({
+      for (let item = 0; item < properties.limits.length; item += 1) {
+        const name = properties.limits[item];
+        if (name !== undefined && !contains(resource.limits, name)) {
+          append(issues, {
             path: `${path}.${properties.limitsKey}.properties.${name}`,
             message: `Resource type ${resource.type} has no limit property ${name}.`,
             hint: `Use one of: ${joined(resource.limits, ", ") || "(none)"}.`,
@@ -285,9 +332,10 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
     }
   };
 
-  for (const roleName of Object.keys(document.roles)) {
-    const role = document.roles[roleName];
-    if (role === undefined) continue;
+  for (let roleIndex = 0; roleIndex < definedRoles.length; roleIndex += 1) {
+    const roleName = definedRoles[roleIndex];
+    const role = roleName === undefined ? undefined : document.roles[roleName];
+    if (roleName === undefined || role === undefined) continue;
     for (let index = 0; index < role.grants.length; index += 1) {
       const grant = role.grants[index];
       if (grant === undefined) continue;
@@ -295,7 +343,7 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
       claimId(grant.id, path);
       checkPermissions(grant.permissions, path, {
         scope: scopeProperties(grant.scope),
-        limits: grant.limits.kind === "range" ? Object.keys(grant.limits.properties) : [],
+        limits: grant.limits.kind === "range" ? objectKeys(grant.limits.properties) : [],
         limitsKey: "limits",
       });
     }
@@ -314,7 +362,7 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
     if (deny.roles !== undefined) checkRoles(deny.roles, `${path}.roles`);
   }
 
-  const ruled = new Map<string, string>();
+  const ruled = newMap<string, string>();
   for (let index = 0; index < document.approvalRules.length; index += 1) {
     const rule = document.approvalRules[index];
     if (rule === undefined) continue;
@@ -322,32 +370,34 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
     claimId(rule.id, path);
     checkPermissions(rule.permissions, path, {
       scope: [],
-      limits: rule.when.kind === "threshold" ? Object.keys(rule.when.properties) : [],
+      limits: rule.when.kind === "threshold" ? objectKeys(rule.when.properties) : [],
       limitsKey: "when",
     });
-    for (const permission of rule.permissions) {
-      const first = ruled.get(permission);
+    for (let item = 0; item < rule.permissions.length; item += 1) {
+      const permission = rule.permissions[item];
+      if (permission === undefined) continue;
+      const first = mapGet(ruled, permission);
       if (first !== undefined) {
-        issues.push({
+        append(issues, {
           path: `${path}.permissions`,
           message: `Permission ${permission} already has an approval rule at ${first}.`,
           hint: "Use one approval rule per permission.",
         });
       }
-      ruled.set(permission, path);
+      mapSet(ruled, permission, path);
     }
     if (rule.eligibleApprovers.kind === "roles") {
       checkRoles(rule.eligibleApprovers.roles, `${path}.eligibleApprovers.roles`);
     }
     if (rule.requireProof && rule.proofTypes === undefined) {
-      issues.push({
+      append(issues, {
         path: `${path}.proofTypes`,
         message: "requireProof needs the list of proof types that count.",
         hint: 'Name the proof types, for example ["webauthn"]. A missing list would accept any registered verifier.',
       });
     }
     if (rule.proofTypes !== undefined && !rule.requireProof) {
-      issues.push({
+      append(issues, {
         path: `${path}.proofTypes`,
         message: "proofTypes has no effect without requireProof.",
         hint: "Set requireProof: true, or remove proofTypes.",
@@ -357,7 +407,7 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
       document.separationOfDuties.exclusiveRequestAndApproveRoles &&
       rule.eligibleApprovers.kind !== "roles"
     ) {
-      issues.push({
+      append(issues, {
         path: `${path}.eligibleApprovers`,
         message: "Exclusive request and approve roles need approver roles on every rule.",
         hint: 'Use eligibleApprovers: { kind: "roles", roles: [...] }, or switch off exclusiveRequestAndApproveRoles.',
@@ -371,7 +421,12 @@ function checkReferences(catalog: Catalog, document: PolicyDocument): PolicyIssu
 const uniqueHint = "Give every grant, deny rule and approval rule its own id.";
 
 function deepFreeze(value: unknown): void {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return;
-  Object.freeze(value);
-  for (const item of Object.values(value)) deepFreeze(item);
+  if (typeof value !== "object" || value === null || isFrozen(value)) return;
+  freeze(value);
+  // Keys by index, not Object.values: the document is a plain copy with data properties only.
+  const keys = objectKeys(value);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key !== undefined) deepFreeze(field(value, key));
+  }
 }

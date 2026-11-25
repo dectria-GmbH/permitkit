@@ -1,4 +1,4 @@
-import { PermitkitError } from "./errors.js";
+import { isPermitkitError, PermitkitError } from "./errors.js";
 import { hasInternalSlots, isProxy } from "./plain.js";
 import { sha256Hex } from "./sha256.js";
 
@@ -43,7 +43,7 @@ export function canonicalJson(value: unknown): string {
   try {
     return serialize(value, new SetConstructor<object>());
   } catch (error) {
-    if (error instanceof PermitkitError) throw error;
+    if (isPermitkitError(error)) throw error;
     // For example a stack overflow on very deep input. Never a raw error.
     throw new PermitkitError("not_canonical", "The value could not be read as plain JSON data.");
   }

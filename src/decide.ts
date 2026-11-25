@@ -19,7 +19,16 @@ import {
   type Subject,
 } from "./request.js";
 import { instant } from "./time.js";
-import { mapGet, mapSet } from "./intrinsics.js";
+import {
+  append,
+  contains,
+  isoOf,
+  newSet,
+  setAdd,
+  setHas,
+  weakMapGet,
+  weakMapSet,
+} from "./intrinsics.js";
 import { invalid, joined, type Issue } from "./validate.js";
 
 export type Outcome = "allow" | "deny" | "approval_required";
@@ -146,36 +155,62 @@ function parseRequestUnguarded(input: unknown): ParsedRequest {
   const issues: { path: string; message: string }[] = [];
   for (let index = 0; index < found.length; index += 1) {
     const item = found[index];
-    if (item !== undefined) issues.push({ path: joined(item.path, "."), message: item.message });
+    if (item !== undefined) append(issues, { path: joined(item.path, "."), message: item.message });
   }
   return { ok: false, issues };
 }
 
-/** True if a deny rule applies to the subject for this permission and resource. */
+/**
+ * True if a deny rule applies to the subject for this permission and resource. Index loops and
+ * captured Set methods only: a replaced Array.prototype.some or includes, or a replaced Set
+ * method, must not let a request pass a deny rule.
+ */
 export function denyRuleMatches(
   rule: DenyRule,
   subject: Subject,
   permission: string,
   properties: Readonly<Record<string, Scalar>> | undefined,
 ): boolean {
-  if (!rule.permissions.includes(permission) || !scopeTouches(rule.scope, properties)) return false;
-  const { types, held } = factsOf(subject);
+  if (!contains(rule.permissions, permission) || !scopeTouches(rule.scope, properties)) {
+    return false;
+  }
+  const facts = factsOf(subject);
   return (
-    (rule.roles === undefined || rule.roles.some((role) => held.has(role))) &&
-    (rule.subjectTypes === undefined || rule.subjectTypes.some((type) => types.has(type)))
+    (rule.roles === undefined || holdsAny(facts.held, rule.roles)) &&
+    (rule.subjectTypes === undefined || holdsAny(facts.types, rule.subjectTypes))
   );
+}
+
+/** True if the set holds one of the values. */
+function holdsAny(set: Set<string>, values: readonly string[]): boolean {
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    if (value !== undefined && setHas(set, value)) return true;
+  }
+  return false;
+}
+
+/** The role names of a validated subject. */
+function heldRolesOf(subject: Subject): Set<string> {
+  const held = newSet<string>();
+  for (let index = 0; index < subject.roles.length; index += 1) {
+    const assignment = subject.roles[index];
+    if (assignment !== undefined) setAdd(held, assignment.role);
+  }
+  return held;
 }
 
 const subjectFacts = new WeakMap<Subject, { types: Set<string>; held: Set<string> }>();
 
 /** Subject types and held roles, computed once per validated subject object. */
 function factsOf(subject: Subject): { types: Set<string>; held: Set<string> } {
-  let facts = mapGet(subjectFacts, subject);
+  let facts = weakMapGet(subjectFacts, subject);
   if (facts === undefined) {
-    const types = new Set<string>([subject.type]);
-    if (subject.act !== null) types.add("agent");
-    facts = { types, held: new Set(subject.roles.map((assignment) => assignment.role)) };
-    mapSet(subjectFacts, subject, facts);
+    const types = newSet<string>();
+    setAdd(types, subject.type);
+    if (subject.act !== null) setAdd(types, "agent");
+    facts = { types, held: heldRolesOf(subject) };
+    weakMapSet(subjectFacts, subject, facts);
   }
   return facts;
 }
@@ -184,7 +219,7 @@ function digestOfRequest(policy: CompiledPolicy, request: AccessRequest): string
   const actors: unknown[] = [];
   for (let actor = request.subject.act; actor !== null; actor = actor.act) {
     const grant = actor.grant;
-    actors.push({
+    append(actors, {
       id: actor.id,
       grant:
         grant === null
@@ -216,7 +251,7 @@ function digestOfRequest(policy: CompiledPolicy, request: AccessRequest): string
 }
 
 function utc(value: string): string {
-  return new Date(instant(value)).toISOString();
+  return isoOf(instant(value));
 }
 
 const oversized = "The input exceeds the size bounds (depth, nodes, array or string length).";
@@ -241,8 +276,13 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
     requestDigest: requestDigestValue,
   });
 
+  // Each trace step is appended, not pushed: see append in intrinsics.ts.
+  const record = (step: TraceStep): void => {
+    if (trace !== undefined) append(trace, step);
+  };
+
   const parsed = parseRequest(input);
-  trace?.push({ step: "validate", ok: parsed.ok, issues: parsed.ok ? [] : parsed.issues });
+  record({ step: "validate", ok: parsed.ok, issues: parsed.ok ? [] : parsed.issues });
   if (!parsed.ok) return deny("invalid_request", null);
   const request = parsed.request;
   const requestDigestValue = digestOfRequest(policy, request);
@@ -253,18 +293,18 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   const versionOk =
     (pinned === null || pinned === policy.version) &&
     (pinnedDigest === null || pinnedDigest === policy.digest);
-  trace?.push({ step: "policy_version", ok: versionOk, pinned, loaded: policy.version });
+  record({ step: "policy_version", ok: versionOk, pinned, loaded: policy.version });
   if (!versionOk) return deny("policy_version_mismatch", requestDigestValue);
 
   const permission = permissionOf(request);
   const known = policy.catalog.isPermission(permission);
-  trace?.push({ step: "permission", ok: known, permission });
+  record({ step: "permission", ok: known, permission });
   if (!known) return deny("unknown_permission", requestDigestValue);
 
   const actor = request.subject.act;
   if (actor !== null) {
     const reason = agentGrantValidity(actor, request.subject, now);
-    trace?.push({
+    record({
       step: "agent_grant",
       ok: reason === null,
       reason,
@@ -289,7 +329,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   }
 
   const properties = request.resource.properties;
-  const heldRoles = new Set(request.subject.roles.map((assignment) => assignment.role));
+  const heldRoles = heldRolesOf(request.subject);
   // Index loops, no for-of: an early exit closes an iterator, and closing reads `return`
   // through the prototype chain, which a polluted Object.prototype supplies.
   for (let index = 0; index < internal.denies.length; index += 1) {
@@ -298,7 +338,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
     // deny with reason invalid_request. It is never skipped.
     if (rule === undefined) throw new Error("A deny rule could not be read.");
     const matched = denyRuleMatches(rule, request.subject, permission, properties);
-    trace?.push({ step: "deny_rule", id: rule.id, matched });
+    record({ step: "deny_rule", id: rule.id, matched });
     if (matched) return deny("denied_by_rule", requestDigestValue, { kind: "deny", id: rule.id });
   }
 
@@ -308,14 +348,14 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
     const assignment = request.subject.roles[index];
     if (assignment === undefined) continue;
     const role = internal.roles.get(assignment.role);
-    trace?.push({ step: "role", role: assignment.role, known: role !== undefined });
+    record({ step: "role", role: assignment.role, known: role !== undefined });
     if (role === undefined) continue;
     for (let grantIndex = 0; grantIndex < role.grants.length; grantIndex += 1) {
       const grant = role.grants[grantIndex];
-      if (grant === undefined || !grant.permissions.includes(permission)) continue;
+      if (grant === undefined || !contains(grant.permissions, permission)) continue;
       const assignmentScope = scopeCovers(assignment.scope, properties);
       if (!assignmentScope.ok) {
-        trace?.push({
+        record({
           step: "grant",
           role: role.name,
           id: grant.id,
@@ -327,7 +367,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
       }
       const grantScope = scopeCovers(grant.scope, properties);
       if (!grantScope.ok) {
-        trace?.push({
+        record({
           step: "grant",
           role: role.name,
           id: grant.id,
@@ -339,7 +379,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
       }
       const limits = limitsHold(grant.limits, properties);
       if (!limits.ok) {
-        trace?.push({
+        record({
           step: "grant",
           role: role.name,
           id: grant.id,
@@ -349,7 +389,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
         closestFailure = "limit_exceeded";
         continue;
       }
-      trace?.push({
+      record({
         step: "grant",
         role: role.name,
         id: grant.id,
@@ -364,16 +404,18 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
 
   if (actor !== null && actor.grant !== null) {
     let covered = false;
-    actor.grant.entries.forEach((entry, index) => {
-      if (covered) return;
+    const entries = actor.grant.entries;
+    for (let index = 0; index < entries.length && !covered; index += 1) {
+      const entry = entries[index];
+      if (entry === undefined) continue;
       let result: "matched" | "no_permission" | "scope_mismatch" | "limit_exceeded";
-      if (!entry.permissions.includes(permission)) result = "no_permission";
+      if (!contains(entry.permissions, permission)) result = "no_permission";
       else if (!scopeCovers(entry.scope, properties).ok) result = "scope_mismatch";
       else if (!limitsHold(entry.limits, properties).ok) result = "limit_exceeded";
       else result = "matched";
-      trace?.push({ step: "agent_grant_entry", index, result });
+      record({ step: "agent_grant_entry", index, result });
       covered = result === "matched";
-    });
+    }
     if (!covered) return deny("agent_grant_insufficient", requestDigestValue);
   }
 
@@ -381,8 +423,13 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
   const approverRoles =
     approvalRule?.eligibleApprovers.kind === "roles" ? approvalRule.eligibleApprovers.roles : null;
   if (internal.separationOfDuties.exclusiveRequestAndApproveRoles && approvalRule !== undefined) {
-    const conflicting = (approverRoles ?? []).filter((role) => heldRoles.has(role));
-    trace?.push({
+    const conflicting: string[] = [];
+    const candidates = approverRoles ?? [];
+    for (let index = 0; index < candidates.length; index += 1) {
+      const role = candidates[index];
+      if (role !== undefined && setHas(heldRoles, role)) append(conflicting, role);
+    }
+    record({
       step: "separation_of_duties",
       ok: conflicting.length === 0,
       conflictingRoles: conflicting,
@@ -392,7 +439,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
 
   if (approvalRule !== undefined) {
     const applies = whenApplies(approvalRule.when, properties);
-    trace?.push({ step: "approval_rule", id: approvalRule.id, applies });
+    record({ step: "approval_rule", id: approvalRule.id, applies });
     if (applies) {
       return {
         outcome: "approval_required",
@@ -404,7 +451,7 @@ function run(policy: CompiledPolicy, input: unknown, trace: TraceStep[] | undefi
           approvers: approvalRule.approvers,
           approverRoles,
           requireProof: approvalRule.requireProof,
-          expiresAt: new Date(now + approvalRule.expiresInSeconds * 1000).toISOString(),
+          expiresAt: isoOf(now + approvalRule.expiresInSeconds * 1000),
         },
         policy: policyRef,
         requestDigest: requestDigestValue,

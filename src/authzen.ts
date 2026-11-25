@@ -7,6 +7,7 @@ import {
   type MatchedRule,
   type Outcome,
 } from "./decide.js";
+import { contains, field, hasOwn, isArray, objectKeys } from "./intrinsics.js";
 import { internalsOf, type CompiledPolicy } from "./policy.js";
 import type { ReasonCode } from "./reasons.js";
 
@@ -51,16 +52,19 @@ const allowed = {
 
 /** Own property of a plain value, never an inherited one. */
 function own(value: unknown, key: string): unknown {
-  if (typeof value !== "object" || value === null || !Object.hasOwn(value, key)) return undefined;
-  const item: unknown = Reflect.get(value, key);
-  return item;
+  if (typeof value !== "object" || value === null || !hasOwn(value, key)) return undefined;
+  return field(value, key);
 }
 
 /** True if the value is absent, or an object whose own keys are all in the list. */
 function onlyKeys(value: unknown, keys: readonly string[]): boolean {
   if (value === undefined) return true;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  return Object.keys(value).every((key) => keys.includes(key));
+  if (typeof value !== "object" || value === null || isArray(value)) return false;
+  const present = objectKeys(value);
+  for (let index = 0; index < present.length; index += 1) {
+    if (!contains(keys, present[index])) return false;
+  }
+  return true;
 }
 
 /**

@@ -1,34 +1,10 @@
 // PermitkitError under a polluted Error.prototype, and its brand check against thrown Proxies.
+// How the catch blocks treat a thrown Proxy is in catch-paths.test.ts.
 // The pollution can also break the test framework, so each case captures first and asserts
 // after clean-up.
 import { describe, expect, it } from "vitest";
 
-import { compilePolicy, decide, defineCatalog, PermitkitError } from "../src/index.js";
-import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
-
-const catalog = defineCatalog({ ticket: { actions: ["read"] } });
-const policy = compilePolicy(catalog, {
-  schema: 2,
-  version: "v",
-  roles: {
-    reader: {
-      grants: [
-        {
-          id: "g",
-          permissions: ["ticket:read"],
-          scope: { kind: "all" },
-          limits: { kind: "unlimited" },
-        },
-      ],
-    },
-  },
-  denies: [],
-  approvalRules: [],
-  separationOfDuties: {
-    requesterNeverApprovesSameType: false,
-    exclusiveRequestAndApproveRoles: false,
-  },
-});
+import { compilePolicy, PermitkitError } from "../src/index.js";
 
 /** Replaces a property for the duration of run, then puts the original back. */
 function withProperty<T>(
@@ -102,54 +78,5 @@ describe("PermitkitError", () => {
       PermitkitError.is(null),
       PermitkitError.is("PermitkitError"),
     ]).toEqual([true, false, false, false, false]);
-  });
-
-  it("compilePolicy turns a thrown Proxy into policy_invalid", () => {
-    const thrown = trapProxy();
-    const result = withProperty(
-      Array.prototype,
-      "toSorted",
-      {
-        get() {
-          throw thrown;
-        },
-        configurable: true,
-      },
-      () => {
-        try {
-          compilePolicy(catalog, { ...policy.document });
-          return "compiled";
-        } catch (error) {
-          if (error === thrown) return "the thrown Proxy";
-          return PermitkitError.is(error) ? error.code : `raw ${String(error)}`;
-        }
-      },
-    );
-    expect(result).toBe("policy_invalid");
-  });
-
-  it("decide turns a thrown Proxy into the internal-failure deny", () => {
-    const thrown = trapProxy();
-    const request = accessRequest(human("u", role("reader", everywhere)), "ticket:read");
-    // decide() calls map only after validation, so the Proxy reaches the guard in decide().
-    const result = withProperty(
-      Array.prototype,
-      "map",
-      {
-        get() {
-          throw thrown;
-        },
-        configurable: true,
-      },
-      () => {
-        try {
-          const decision = decide(policy, request);
-          return [decision.reason, decision.rule, decision.requestDigest];
-        } catch (error) {
-          return error === thrown ? "the thrown Proxy" : `raw ${String(error)}`;
-        }
-      },
-    );
-    expect(result).toEqual(["invalid_request", null, null]);
   });
 });
