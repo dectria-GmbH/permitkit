@@ -33,6 +33,7 @@ import {
   objectKeys,
   setAdd,
   setHas,
+  settledValue,
 } from "./intrinsics.js";
 import { internalsOf, type CompiledPolicy, type DenyRule } from "./policy.js";
 import type { ApprovalReasonCode, ApprovalRejectionCode } from "./reasons.js";
@@ -431,10 +432,12 @@ async function checkProof(
   const verifier = mapGet(verifiers, proof.type);
   if (verifier === undefined) return proofRejection("proof_verifier_missing", proof.type);
   try {
-    const verification: unknown = await verifier.verify(proof, {
-      approverId,
-      requestDigest: digestValue,
-    });
+    // Not `await` on the result: it would read `then` and `constructor`, which caller code can
+    // replace after load and so choose the verification.
+    const settled = await settledValue(
+      verifier.verify(proof, { approverId, requestDigest: digestValue }),
+    );
+    const verification = settled.value;
     // Count only the exact success shape. Anything else, also a truthy string, is a rejection.
     // Own properties only: an inherited `valid` or echo must never count.
     if (ownValue(verification, "valid") !== true) {

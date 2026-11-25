@@ -49,6 +49,7 @@ const regExpExecMethod = RegExp.prototype.exec;
 const sliceMethod = String.prototype.slice;
 const indexOfMethod = String.prototype.indexOf;
 const toISOStringMethod = Date.prototype.toISOString;
+const promiseThenMethod = Promise.prototype.then;
 const setUTCFullYearMethod = Date.prototype.setUTCFullYear;
 const getUTCDateMethod = Date.prototype.getUTCDate;
 /* oxlint-enable typescript/unbound-method */
@@ -264,4 +265,33 @@ export function awaitable<T>(promise: Promise<T>): Promise<T> {
     throw new TypeError("The promise could not be marked.");
   }
   return promise;
+}
+
+/**
+ * The settled value of a native promise, or the value itself for anything else, in a box
+ * without a prototype. `await` on a value reads `then` through the prototype chain, and on a
+ * native promise it reads `constructor`: a polluted Object.prototype.then or a replaced
+ * Promise.prototype.constructor and then could choose the value. Here a native promise is read
+ * through the captured then, and every other value, also a thenable, is taken as it is.
+ */
+export function settledValue(value: unknown): Promise<{ readonly value: unknown }> {
+  const promise = new PromiseConstructor<{ readonly value: unknown }>((resolve, reject) => {
+    const box = (item: unknown) => {
+      const result = bareObject<{ value: unknown }>();
+      result.value = item;
+      resolve(result);
+    };
+    if ((typeof value === "object" && value !== null) || typeof value === "function") {
+      try {
+        // Throws a TypeError at once if the value is not a native promise.
+        // The promise that then returns settles with the value; nothing reads it.
+        void apply(promiseThenMethod, value, [box, reject]);
+        return;
+      } catch {
+        // Not a native promise, or its species constructor failed: use the value as it is.
+      }
+    }
+    box(value);
+  });
+  return awaitable(promise);
 }
