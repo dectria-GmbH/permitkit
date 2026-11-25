@@ -1,7 +1,7 @@
 /**
  * The access request: its types and its validator. Every rule here has a named test in
- * `test/request-validator.test.ts` and is compared with the earlier Zod schema in
- * `test/request-differential.test.ts`.
+ * `test/request-validator.test.ts` and is compared with the verdicts of the earlier Zod schema in
+ * `test/zod-verdicts.test.ts`.
  */
 
 import { limits, scope, type Limits, type Scope } from "./policy-document.js";

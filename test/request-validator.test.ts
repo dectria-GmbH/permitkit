@@ -1,11 +1,11 @@
 // Named cases for each rule of the request validator. Each case runs through the hand-written
-// validator and the earlier Zod schema; both must give the expected verdict and first path, so a
-// failure names the rule.
+// validator and must give the expected verdict and first path, so a failure names the rule. The
+// expected verdicts are those of the earlier Zod schema; test/zod-verdicts.test.ts compares
+// seeded corpora with its recorded verdicts.
 import { describe, expect, it } from "vitest";
 
 import { accessRequest } from "../src/request.js";
 import { latestRequestInstant } from "../src/time.js";
-import { accessRequestSchema } from "../src/zod-schemas.js";
 import { dropAt, expectedOf, runCase, setAt, type CorpusCase } from "./differential.js";
 
 const grant = () => ({
@@ -532,17 +532,7 @@ const cases: CorpusCase[] = [
 
 describe("request validator rules", () => {
   it.each(cases.map((item) => [item.name, item] as const))("%s", (_name, item) => {
-    const { reference, actual, outputDifference } = runCase(
-      accessRequestSchema,
-      accessRequest,
-      base,
-      item,
-    );
-    expect({ zod: reference, handWritten: actual }).toEqual({
-      zod: expectedOf(item),
-      handWritten: expectedOf(item),
-    });
-    expect(outputDifference).toBeNull();
+    expect(runCase(accessRequest, base, item)).toBe(expectedOf(item));
   });
 
   it("keeps a resource id set to undefined as an own key, as before", () => {

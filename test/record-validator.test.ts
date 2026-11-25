@@ -1,29 +1,11 @@
-// The decision record validator that reevaluate uses, against the earlier Zod schema: named
-// cases for each rule, then valid records and near-valid mutations of them. Same verdict on
-// every input, the same output on accept, and the same path in the first issue on reject.
-import * as fc from "fast-check";
+// Named cases for each rule of the decision record validator that reevaluate uses. Each case must
+// give the expected verdict and first path, so a failure names the rule. The expected verdicts
+// are those of the earlier Zod schema; test/zod-verdicts.test.ts compares a seeded corpus with
+// its recorded verdicts.
 import { describe, expect, it } from "vitest";
 
-import { wrapperBounds } from "../src/bounds.js";
 import { storedRecord } from "../src/record.js";
-import { recordShapeSchema } from "../src/zod-schemas.js";
-import {
-  compareOnce,
-  dropAt,
-  expectedOf,
-  mutate,
-  optionalField,
-  runCase,
-  setAt,
-  stepArb,
-  summaryOf,
-  Tally,
-  textArb,
-  verdictOf,
-  wideBounds,
-  type CorpusCase,
-} from "./differential.js";
-import { idArb, requestArb } from "./request-arbitraries.js";
+import { dropAt, expectedOf, runCase, setAt, type CorpusCase } from "./differential.js";
 
 const digest = "0123456789abcdef".repeat(4);
 
@@ -111,98 +93,8 @@ const cases: CorpusCase[] = [
   { name: "an array", edit: (d) => setAt(d, ["policy"], []), expected: ["policy"] },
 ];
 
-const recordArb = fc
-  .tuple(
-    fc.oneof(
-      { weight: 8, arbitrary: fc.constant("permitkit.decision/2") },
-      { weight: 1, arbitrary: textArb(4) },
-    ),
-    fc.record({
-      version: textArb(6),
-      digest: fc.oneof(fc.stringMatching(/^[0-9a-f]{64}$/), textArb(4)),
-    }),
-    optionalField("request", fc.oneof(requestArb, fc.constant(null))),
-    fc.option(fc.stringMatching(/^[0-9a-f]{64}$/), { nil: null }),
-    fc.array(
-      fc.record({
-        type: fc.constantFrom("human", "service", "agent"),
-        id: idArb,
-        grantId: fc.option(idArb, { nil: null }),
-      }),
-      { maxLength: 3 },
-    ),
-    fc.constantFrom("allow", "deny", "approval_required"),
-    fc.constantFrom("granted", "no_grant", "approval_required", "invalid_request"),
-    optionalField(
-      "rule",
-      fc.oneof(fc.constant(null), fc.record({ kind: fc.constant("grant"), role: idArb })),
-    ),
-    optionalField(
-      "approval",
-      fc.oneof(fc.constant(null), fc.record({ ruleId: idArb, approvers: fc.integer() })),
-    ),
-  )
-  .map(([schema, policy, request, requestDigest, actorChain, outcome, reason, rule, approval]) => ({
-    schema,
-    policy,
-    ...request,
-    requestDigest,
-    actorChain,
-    outcome,
-    reason,
-    ...rule,
-    ...approval,
-  }));
-
-// Property runs take several seconds on a slow CI runner; the default 5 s timeout is too short.
-const propertyTimeout = { timeout: 60_000 };
-
 describe("record validator rules", () => {
   it.each(cases.map((item) => [item.name, item] as const))("%s", (_name, item) => {
-    const { reference, actual, outputDifference } = runCase(
-      recordShapeSchema,
-      storedRecord,
-      recordBase,
-      item,
-    );
-    expect({ zod: reference, handWritten: actual }).toEqual({
-      zod: expectedOf(item),
-      handWritten: expectedOf(item),
-    });
-    expect(outputDifference).toBeNull();
-  });
-});
-
-describe("record validator against the Zod schema", propertyTimeout, () => {
-  it("gives the same verdict, output and first issue path", () => {
-    const wide = new Tally();
-    const production = new Tally();
-    fc.assert(
-      fc.property(
-        fc.record({ base: recordArb, steps: fc.array(stepArb, { maxLength: 3 }) }),
-        (item) => {
-          const { input, name } = mutate(item.base, item.steps);
-          for (const [tally, bounds] of [
-            [wide, wideBounds],
-            [production, wrapperBounds],
-          ] as const) {
-            const result = compareOnce(recordShapeSchema, storedRecord, input, bounds);
-            tally.add(name, result);
-            if (result.skipped) continue;
-            expect(summaryOf(result.actual, result.reference)).toEqual({
-              verdict: verdictOf(result.reference),
-              outputDifference: null,
-            });
-          }
-        },
-      ),
-      { numRuns: 2000 },
-    );
-    wide.report("record, wide bounds");
-    production.report("record, wrapper bounds");
-    const total = wide.total();
-    expect(total.accepted).toBeGreaterThan(total.runs / 10);
-    expect(total.rejected).toBeGreaterThan(total.runs / 10);
-    expect(total.skipped).toBe(0);
+    expect(runCase(storedRecord, recordBase, item)).toBe(expectedOf(item));
   });
 });

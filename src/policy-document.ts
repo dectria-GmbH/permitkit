@@ -1,7 +1,7 @@
 /**
  * The policy document format (schema 2): its types and its validator. Every rule here has a
- * named test in `test/policy-validator.test.ts` and is compared with the earlier Zod schema in
- * `test/policy-differential.test.ts`.
+ * named test in `test/policy-validator.test.ts` and is compared with the verdicts of the earlier
+ * Zod schema in `test/zod-verdicts.test.ts`.
  */
 
 import { hasOwn } from "./intrinsics.js";

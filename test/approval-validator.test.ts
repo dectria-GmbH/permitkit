@@ -1,10 +1,10 @@
 // Named cases for each rule of the approval validators. Each case runs through the hand-written
-// validator and the earlier Zod schema; both must give the expected verdict and first path, so a
-// failure names the rule.
+// validator and must give the expected verdict and first path, so a failure names the rule. The
+// expected verdicts are those of the earlier Zod schema; test/zod-verdicts.test.ts compares
+// seeded corpora with its recorded verdicts.
 import { describe, expect, it } from "vitest";
 
 import { approval, approvalInput } from "../src/approval-input.js";
-import { approvalInputSchema, approvalSchema } from "../src/zod-schemas.js";
 import { dropAt, expectedOf, runCase, setAt, withKey, type CorpusCase } from "./differential.js";
 
 const digest = "0123456789abcdef".repeat(4);
@@ -302,17 +302,7 @@ const inputCases: CorpusCase[] = [
 
 describe("approval validator rules", () => {
   it.each(approvalCases.map((item) => [item.name, item] as const))("%s", (_name, item) => {
-    const { reference, actual, outputDifference } = runCase(
-      approvalSchema,
-      approval,
-      approvalBase,
-      item,
-    );
-    expect({ zod: reference, handWritten: actual }).toEqual({
-      zod: expectedOf(item),
-      handWritten: expectedOf(item),
-    });
-    expect(outputDifference).toBeNull();
+    expect(runCase(approval, approvalBase, item)).toBe(expectedOf(item));
   });
 
   it("keeps the payload key exactly if the input has it, as before", () => {
@@ -349,16 +339,6 @@ describe("approval validator rules", () => {
 
 describe("approval input validator rules", () => {
   it.each(inputCases.map((item) => [item.name, item] as const))("%s", (_name, item) => {
-    const { reference, actual, outputDifference } = runCase(
-      approvalInputSchema,
-      approvalInput,
-      inputBase,
-      item,
-    );
-    expect({ zod: reference, handWritten: actual }).toEqual({
-      zod: expectedOf(item),
-      handWritten: expectedOf(item),
-    });
-    expect(outputDifference).toBeNull();
+    expect(runCase(approvalInput, inputBase, item)).toBe(expectedOf(item));
   });
 });
