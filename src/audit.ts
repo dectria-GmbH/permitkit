@@ -119,19 +119,20 @@ export function reevaluate(policy: CompiledPolicy, record: DecisionRecord): Reev
 function reevaluateChecked(policy: CompiledPolicy, record: DecisionRecord): ReevaluationResult {
   const loaded = { version: policy.version, digest: policy.digest };
   const snapshot = boundedSnapshot(record, wrapperBounds);
-  const shape = safeParse(recordShapeSchema, snapshot);
+  // The request is read from the plain-data copy before any Zod call, not from the Zod output:
+  // Zod calls built-ins at call time and passes them the objects it validates, so a replaced
+  // push or Array.isArray could swap the request it returns or change it in place. Zod gets its
+  // own copy and never sees the snapshot. The status order stays: shape, policy, request.
+  const storedRequest = ownDataValue(snapshot, "request");
+  const parsed = storedRequest === null ? null : parseRequest(storedRequest);
+  const shape = safeParse(recordShapeSchema, detach(snapshot));
   if (!shape.success) return { status: "not_replayable" };
   // detach: a missing key must read as undefined, never as an inherited value.
   const stored = detach(shape.data);
   if (stored.policy.version !== loaded.version || stored.policy.digest !== loaded.digest) {
     return { status: "policy_mismatch", expected: stored.policy, loaded };
   }
-  // The request is read from the plain-data copy, not from the Zod output: Zod calls built-ins
-  // at call time, and a replaced push could swap the request that it returns.
-  const storedRequest = ownDataValue(snapshot, "request");
-  if (storedRequest === null) return { status: "not_replayable" };
-  const parsed = parseRequest(storedRequest);
-  if (!parsed.ok) return { status: "not_replayable" };
+  if (parsed === null || !parsed.ok) return { status: "not_replayable" };
   const decision = decide(policy, parsed.request);
   let same: boolean;
   try {

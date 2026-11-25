@@ -246,17 +246,19 @@ async function evaluateApprovalsUnguarded(
     return result("deny", whole.reason === "too_large" ? "input_too_large" : "invalid_input");
   }
   const snapshot = whole.value;
-  const parsed = safeParse(approvalInputSchema, snapshot);
-  if (!parsed.success) return result("deny", "invalid_input");
   // The request and the evaluation time come from the hand-written validators, read from the
-  // plain-data copy. Zod calls built-ins at call time: a replaced push could add a role to the
-  // request that Zod returns, or swap the request. Its output for these two keys is not used.
+  // plain-data copy before any Zod call. Zod calls built-ins at call time and passes them the
+  // objects it validates: a replaced push or Array.isArray could add a role to the request that
+  // Zod returns, swap it, or change the validated objects in place. So Zod gets its own copy and
+  // never sees the snapshot, and its output for these two keys is not used.
   const checked = parseRequest(ownDataValue(snapshot, "request"));
   if (!checked.ok) return result("deny", "invalid_input");
   const request = checked.request;
   const nowChecked = requestTime(ownDataValue(snapshot, "now"), null, []);
   if (nowChecked === invalid) return result("deny", "invalid_input");
   const nowText: string = nowChecked;
+  const parsed = safeParse(approvalInputSchema, detach(snapshot));
+  if (!parsed.success) return result("deny", "invalid_input");
   const data = detach(parsed.data);
   const priorRequests = data.priorRequests;
   const now = instant(nowText);
