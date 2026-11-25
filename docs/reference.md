@@ -28,9 +28,10 @@ an unknown decision reason as a deny. The exported objects `reasonCodes`, `reaso
 
 The order of checks is: input shape, pinned policy version, catalogue, agent grant validity,
 deny rules, grants of the principal, agent grant coverage, separation of duties, approval rule.
-The first failing check gives the reason. If the library fails internally (for example under
-polluted built-in prototypes), the result is a deny with `invalid_request`, also for a request
-that would be valid.
+The first failing check gives the reason. If the library fails internally (for example a bug in
+permitkit, or a built-in that was changed before permitkit loaded), the result is a deny with
+`invalid_request`, also for a request that would be valid. A built-in that caller code replaces
+after permitkit loads changes no decision (see the README threat model).
 
 ## Approval results (`evaluateApprovals`)
 
@@ -76,8 +77,8 @@ that would be valid.
 permitkit throws only for programming and configuration errors. Decisions never throw for bad
 requests, including throwing getters and revoked proxies; they deny. `decide`, `explain` and
 `evaluate` throw only `policy_unknown`. Any other failure inside them, for example from a
-changed built-in prototype, gives a deny with reason `invalid_request`, `rule: null` and
-`requestDigest: null`. `catalog_invalid` is also
+built-in that was changed before permitkit loaded, gives a deny with reason `invalid_request`,
+`rule: null` and `requestDigest: null`. `catalog_invalid` is also
 thrown when `compilePolicy` gets a catalogue that `defineCatalog` did not create.
 `canonicalJson` and `digest` throw `not_canonical`, never a raw error: for objects whose prototype
 is not `Object.prototype`, `null` or `Array.prototype`, built-ins that the runtime's checks identify
