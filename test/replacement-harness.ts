@@ -50,7 +50,7 @@ const owners: [name: string, owner: object][] = [
 ];
 
 /** Global bindings that a call could read at call time. */
-const globals = [
+export const globalNames: readonly string[] = [
   "Array",
   "ArrayBuffer",
   "Boolean",
@@ -94,7 +94,7 @@ export function targetsOf(): Target[] {
       found.push({ label: `${name}.${String(key)}`, owner, key, saved });
     }
   }
-  for (const name of globals) {
+  for (const name of globalNames) {
     const saved = describeOwn(globalThis, name);
     if (saved === undefined || saved.configurable !== true) continue;
     found.push({ label: `globalThis.${name}`, owner: globalThis, key: name, saved });

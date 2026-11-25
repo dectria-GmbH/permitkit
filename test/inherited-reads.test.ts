@@ -14,7 +14,8 @@ import { callTimeCorpus, runCallTimeCorpus, type CallName } from "./call-time-co
 const define = Object.defineProperty;
 const hasOwn = Object.hasOwn;
 const deleteKey = Reflect.deleteProperty;
-const bareDescriptor = (): PropertyDescriptor => Object.create(null) as PropertyDescriptor;
+const create = Object.create;
+const bareDescriptor = (): PropertyDescriptor => create(null) as PropertyDescriptor;
 
 function sourceFiles(directory: string): string[] {
   const found: string[] = [];

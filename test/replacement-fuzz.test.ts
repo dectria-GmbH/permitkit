@@ -35,6 +35,15 @@ const stringify = JSON.stringify;
 
 /** Requests per policy. PERMITKIT_REPLACEMENT_REQUESTS raises it for a longer run. */
 const requestCount = Number(process.env["PERMITKIT_REPLACEMENT_REQUESTS"] ?? "24");
+
+/**
+ * By default each built-in runs in one mode: the modes take turns along the target list, so every
+ * owner with five or more built-ins sees every mode, and every owner sees at least one.
+ * call-time-spy.test.ts shows that no built-in runs at call time at all, so the sample only has to
+ * show that a replacement reaches nothing. PERMITKIT_REPLACEMENT_ALL_MODES=1 runs every built-in
+ * in every mode.
+ */
+const allModes = process.env["PERMITKIT_REPLACEMENT_ALL_MODES"] === "1";
 const requests: AccessRequest[] = replacementRequests(requestCount);
 const authzenRequests: AuthZenRequest[] = requests.map(asAuthZen);
 
@@ -140,6 +149,19 @@ describe("replaced built-ins after load", { timeout: 600_000 }, () => {
 
   it("finds the built-ins to replace", () => {
     expect(targets.length).toBeGreaterThan(300);
+    // The modes take turns along the list, so an owner with n built-ins sees min(n, 5) modes.
+    const seen = new Map<object, { count: number; modes: Set<number> }>();
+    targets.forEach((target, index) => {
+      const entry = seen.get(target.owner) ?? { count: 0, modes: new Set<number>() };
+      entry.count += 1;
+      modes.forEach((_, modeIndex) => {
+        if (inSample(index, modeIndex)) entry.modes.add(modeIndex);
+      });
+      seen.set(target.owner, entry);
+    });
+    for (const entry of seen.values()) {
+      expect(entry.modes.size).toBeGreaterThanOrEqual(Math.min(entry.count, modes.length));
+    }
     const labels = targets.map((target) => target.label);
     for (const expected of [
       "Array.prototype.some",
@@ -165,75 +187,88 @@ describe("replaced built-ins after load", { timeout: 600_000 }, () => {
     ).toEqual(["allow", "approval_required", "deny"]);
   });
 
-  it.each(modes)("no result widens with each built-in replaced, mode %s", (mode) => {
-    const tally: Tally = { same: 0, narrowed: 0, wrong: [] };
-    const compileTally: Tally = { same: 0, narrowed: 0, wrong: [] };
-    const polluted: unknown[] = [];
-    const compiled: unknown[] = [];
-    const afterCompile: unknown[] = [];
-    for (const target of targets) {
-      polluted.length = 0;
-      compiled.length = 0;
-      install(target, mode);
-      try {
-        runCorpus(replacementPolicies, polluted);
-        compileAll(compiled);
-      } finally {
-        restore(target);
-      }
-      for (let slot = 0; slot < clean.length; slot += 1) {
-        const kind = slot % callsPerRequest;
-        compare(
-          `${target.label} ${callNames[kind] ?? ""} #${slot}`,
-          polluted[slot],
-          clean[slot],
-          kind,
-          tally,
-        );
-      }
-      // A policy compiled under the replacement is the clean policy, or a refusal.
-      const usable: CompiledPolicy[] = [];
-      for (let index = 0; index < compiled.length; index += 1) {
-        const result = compiled[index];
-        if (result === threw) compileTally.narrowed += 1;
-        else if (result === rawThrow) compileTally.wrong.push(`${target.label}: compile raw throw`);
-        else {
-          const policy = result as CompiledPolicy;
-          if (policy.digest === cleanDigests[index]) compileTally.same += 1;
-          else compileTally.wrong.push(`${target.label}: compiled digest differs`);
-          usable.push(policy);
+  it.each(modes.map((mode, modeIndex) => [mode, modeIndex] as const))(
+    "no result widens with each built-in replaced, mode %s",
+    (mode, modeIndex) => {
+      const tally: Tally = { same: 0, narrowed: 0, wrong: [] };
+      const compileTally: Tally = { same: 0, narrowed: 0, wrong: [] };
+      const polluted: unknown[] = [];
+      const compiled: unknown[] = [];
+      const afterCompile: unknown[] = [];
+      let replaced = 0;
+      for (let targetIndex = 0; targetIndex < targets.length; targetIndex += 1) {
+        if (!inSample(targetIndex, modeIndex)) continue;
+        const target = targets[targetIndex] as (typeof targets)[number];
+        polluted.length = 0;
+        compiled.length = 0;
+        replaced += 1;
+        install(target, mode);
+        try {
+          runCorpus(replacementPolicies, polluted);
+          compileAll(compiled);
+        } finally {
+          restore(target);
         }
-      }
-      // Its lookup tables were built under the replacement. Decide with them, unpolluted.
-      if (usable.length === compiled.length) {
-        afterCompile.length = 0;
-        runCorpus(usable, afterCompile);
         for (let slot = 0; slot < clean.length; slot += 1) {
           const kind = slot % callsPerRequest;
           compare(
-            `${target.label} compiled-under ${callNames[kind] ?? ""} #${slot}`,
-            afterCompile[slot],
+            `${target.label} ${callNames[kind] ?? ""} #${slot}`,
+            polluted[slot],
             clean[slot],
             kind,
-            compileTally,
+            tally,
           );
         }
+        // A policy compiled under the replacement is the clean policy, or a refusal.
+        const usable: CompiledPolicy[] = [];
+        for (let index = 0; index < compiled.length; index += 1) {
+          const result = compiled[index];
+          if (result === threw) compileTally.narrowed += 1;
+          else if (result === rawThrow)
+            compileTally.wrong.push(`${target.label}: compile raw throw`);
+          else {
+            const policy = result as CompiledPolicy;
+            if (policy.digest === cleanDigests[index]) compileTally.same += 1;
+            else compileTally.wrong.push(`${target.label}: compiled digest differs`);
+            usable.push(policy);
+          }
+        }
+        // Its lookup tables were built under the replacement. Decide with them, unpolluted.
+        if (usable.length === compiled.length) {
+          afterCompile.length = 0;
+          runCorpus(usable, afterCompile);
+          for (let slot = 0; slot < clean.length; slot += 1) {
+            const kind = slot % callsPerRequest;
+            compare(
+              `${target.label} compiled-under ${callNames[kind] ?? ""} #${slot}`,
+              afterCompile[slot],
+              clean[slot],
+              kind,
+              compileTally,
+            );
+          }
+        }
       }
-    }
-    // Printed for the record: identical, narrowed to a deny or refusal, and wrong.
-    const wrongTargets = new Set(
-      [...tally.wrong, ...compileTally.wrong].map((line) => line.split(" ")[0] ?? ""),
-    );
-    process.stdout.write(
-      `replacement mode ${mode}: built-ins with a wrong result: ${[...wrongTargets].join(", ") || "none"}\n`,
-    );
-    process.stdout.write(
-      `replacement mode ${mode}: ${targets.length} built-ins, ${requests.length} requests x ` +
-        `${replacementPolicies.length} policies; calls same ${tally.same}, narrowed ` +
-        `${tally.narrowed}, wrong ${tally.wrong.length}; compile same ${compileTally.same}, ` +
-        `narrowed ${compileTally.narrowed}, wrong ${compileTally.wrong.length}\n`,
-    );
-    expect(tally.wrong.slice(0, 20)).toEqual([]);
-    expect(compileTally.wrong.slice(0, 20)).toEqual([]);
-  });
+      // Printed for the record: identical, narrowed to a deny or refusal, and wrong.
+      const wrongTargets = new Set(
+        [...tally.wrong, ...compileTally.wrong].map((line) => line.split(" ")[0] ?? ""),
+      );
+      process.stdout.write(
+        `replacement mode ${mode}: built-ins with a wrong result: ${[...wrongTargets].join(", ") || "none"}\n`,
+      );
+      process.stdout.write(
+        `replacement mode ${mode}: ${replaced} of ${targets.length} built-ins, ${requests.length} requests x ` +
+          `${replacementPolicies.length} policies; calls same ${tally.same}, narrowed ` +
+          `${tally.narrowed}, wrong ${tally.wrong.length}; compile same ${compileTally.same}, ` +
+          `narrowed ${compileTally.narrowed}, wrong ${compileTally.wrong.length}\n`,
+      );
+      expect(tally.wrong.slice(0, 20)).toEqual([]);
+      expect(compileTally.wrong.slice(0, 20)).toEqual([]);
+    },
+  );
 });
+
+/** True if the target at this index runs in the mode at this index. */
+function inSample(targetIndex: number, modeIndex: number): boolean {
+  return allModes || targetIndex % modes.length === modeIndex;
+}
