@@ -1,8 +1,10 @@
 import {
   approval as approvalCheck,
   approvalInput,
+  separationRule,
   type Approval,
   type ApprovalProof,
+  type SeparationRule,
 } from "./approval-input.js";
 import {
   approvalInputBounds,
@@ -42,7 +44,13 @@ import type { ApprovalReasonCode, ApprovalRejectionCode } from "./reasons.js";
 import { instant } from "./time.js";
 import { invalid, type Checked, type Issue } from "./validate.js";
 
-export type { Approval, ApprovalInput, ApprovalProof, PriorRequest } from "./approval-input.js";
+export type {
+  Approval,
+  ApprovalInput,
+  ApprovalProof,
+  PriorRequest,
+  SeparationRule,
+} from "./approval-input.js";
 
 export type ProofVerification =
   | { readonly valid: true; readonly approverId: string; readonly requestDigest: string }
@@ -92,6 +100,23 @@ export interface ApprovalRejection {
   readonly detail?: string;
 }
 
+/** A check of the separation rule that a counted approval did not have to pass. */
+export type SeparationCheck = "requester" | "contributor" | "same_type";
+
+/** The checks that the separation rule waived for one counted approver. */
+export interface ApprovalWaiver {
+  readonly approverId: string;
+  /** In the order requester, contributor, same_type. Never empty. */
+  readonly checks: readonly SeparationCheck[];
+}
+
+/** The separation rule that the evaluation applied, without its contributors list. */
+export interface AppliedSeparation {
+  readonly version: string;
+  readonly requesterMayApprove: boolean;
+  readonly roleSeparation: SeparationRule["roleSeparation"];
+}
+
 export interface ApprovalDecision {
   readonly outcome: "allow" | "deny" | "pending";
   readonly allowed: boolean;
@@ -105,6 +130,13 @@ export interface ApprovalDecision {
   readonly requesterDecision: Decision | null;
   readonly policy: { readonly version: string; readonly digest: string };
   readonly requestDigest: string | null;
+  /** The separation rule of the input, if it had a valid one; else null. */
+  readonly separation: AppliedSeparation | null;
+  /**
+   * For each counted approver with at least one waived check, in the order of `counted`. An
+   * approver without an entry passed every check of the rule. Empty without a rule.
+   */
+  readonly waived: readonly ApprovalWaiver[];
 }
 
 export interface ApprovalOptions {
@@ -114,9 +146,10 @@ export interface ApprovalOptions {
 /**
  * Decides whether a request that needs dual approval may now run. Rules:
  * the requester still holds the permission; each approver is a distinct human who acts
- * directly, is not the requester, approved this exact request digest inside the window,
- * is eligible under the rule, passes the operator's separation-of-duties settings and, if the
- * rule says so, has a verified proof. The function does not track single use: the consumer
+ * directly, is not the requester (unless the input's separation rule allows self-approval),
+ * approved this exact request digest inside the window, is eligible under the rule, passes the
+ * operator's separation-of-duties settings and the input's separation rule and, if the rule
+ * says so, has a verified proof. The function does not track single use: the consumer
  * must mark a request as executed once.
  */
 export function evaluateApprovals(
@@ -151,6 +184,8 @@ async function evaluateApprovalsGuarded(
       requesterDecision: null,
       policy: { version: policy.version, digest: policy.digest },
       requestDigest: null,
+      separation: null,
+      waived: [],
     });
   }
 }
@@ -177,6 +212,8 @@ async function evaluateApprovalsUnguarded(
     throw new PermitkitError("options_invalid", "The options could not be read.");
   }
   const policyRef = { version: policy.version, digest: policy.digest };
+  // Set once the separation rule passed its validator; every later result carries it.
+  let applied: AppliedSeparation | null = null;
   const result = (
     outcome: ApprovalDecision["outcome"],
     reason: ApprovalReasonCode,
@@ -193,6 +230,8 @@ async function evaluateApprovalsUnguarded(
       requesterDecision: null,
       policy: policyRef,
       requestDigest: null,
+      separation: applied,
+      waived: [],
       ...rest,
     });
 
@@ -222,6 +261,15 @@ async function evaluateApprovalsUnguarded(
   const request = data.request;
   const nowText = data.now;
   const priorRequests = data.priorRequests;
+  // The rule is validated into a frozen copy before any use. An invalid rule never falls back
+  // to the policy flags.
+  let separation: SeparationRule | undefined;
+  if (data.separation !== undefined) {
+    const checked = separationRule(data.separation, null, []);
+    if (checked === invalid) return result("deny", "separation_invalid");
+    separation = checked;
+    applied = appliedOf(checked);
+  }
   // Every approval is validated into a new object before any further step and before any
   // verifier runs, so no caller code runs between the check of a value and its use.
   const approvals: Checked<Approval>[] = [];
@@ -270,9 +318,43 @@ async function evaluateApprovalsUnguarded(
   if (sod.requesterNeverApprovesSameType && priorRequests === undefined) {
     return result("deny", "sod_history_missing", ruleBase);
   }
+  if (separation === undefined && sod.perRequestRule === "required") {
+    return result("deny", "separation_rule_missing", ruleBase);
+  }
+  // Only the literal true allows self-approval. The validator admits only booleans; the
+  // comparison stays so that no other value can ever allow it.
+  // oxlint-disable-next-line typescript/no-unnecessary-boolean-literal-compare
+  const selfApproval = separation !== undefined && separation.requesterMayApprove === true;
+  const roleSeparation = separation === undefined ? undefined : separation.roleSeparation;
+  if (separation !== undefined) {
+    if (selfApproval && roleSeparation === "strict") {
+      return result("deny", "separation_conflict", ruleBase);
+    }
+    // The rule only tightens the policy: it may not waive a check that a policy flag requires.
+    if (
+      (sod.requesterNeverApprovesSameType && (selfApproval || roleSeparation === "off")) ||
+      (sod.exclusiveRequestAndApproveRoles && selfApproval) ||
+      (roleSeparation === "strict" && rule.eligibleApprovers.kind !== "roles")
+    ) {
+      return result("deny", "separation_policy_conflict", ruleBase);
+    }
+    // Both lists are needed: to enforce Rule B, or to report each check that the rule waived.
+    // A missing list is never read as empty.
+    if (separation.contributors === undefined) {
+      return result("deny", "sod_contributors_missing", ruleBase);
+    }
+    if (priorRequests === undefined) return result("deny", "sod_history_missing", ruleBase);
+  }
+  // Simple Rule B (also part of strict) applies only where the requester may not approve.
+  const enforceSimple =
+    separation !== undefined &&
+    !selfApproval &&
+    (roleSeparation === "simple" || roleSeparation === "strict");
+  const enforceStrict = separation !== undefined && roleSeparation === "strict";
+  const contributors: readonly string[] = separation?.contributors ?? [];
   // A misspelt permission in the history would match nothing and let a prior requester approve.
   const history = priorRequests ?? [];
-  if (sod.requesterNeverApprovesSameType) {
+  if (sod.requesterNeverApprovesSameType || separation !== undefined) {
     for (let index = 0; index < history.length; index += 1) {
       const prior = history[index];
       if (prior === undefined || !policy.catalog.isPermission(prior.permission)) {
@@ -294,16 +376,31 @@ async function evaluateApprovalsUnguarded(
       }
     }
   }
+  // Strict Rule B on the requester's side, as decide() does for the policy flag: the requester
+  // may hold no approver role of the rule.
+  if (enforceStrict) {
+    const eligibility = rule.eligibleApprovers;
+    const approverRoles = eligibility.kind === "roles" ? eligibility.roles : [];
+    const held = request.subject.roles;
+    for (let index = 0; index < held.length; index += 1) {
+      const assignment = held[index];
+      if (assignment !== undefined && contains(approverRoles, assignment.role)) {
+        return result("deny", "requester_role_conflict", ruleBase);
+      }
+    }
+  }
   const properties = request.resource.properties;
-  // The requester is the principal and every agent in its actor chain.
-  const requesterIds = newSet<string>();
-  setAdd(requesterIds, request.subject.id);
+  // The requester is the principal. A request that an agent makes counts as the principal's own
+  // request; the agents in the actor chain never approve it.
+  const principalId = request.subject.id;
+  const chainAgentIds = newSet<string>();
   for (let actor = request.subject.act; actor !== null; actor = actor.act) {
-    setAdd(requesterIds, actor.id);
+    setAdd(chainAgentIds, actor.id);
   }
 
   const counted: string[] = [];
   const rejected: ApprovalRejection[] = [];
+  const waived: ApprovalWaiver[] = [];
   for (let index = 0; index < approvals.length; index += 1) {
     const approval = approvals[index];
     if (approval === undefined || approval === invalid) {
@@ -322,9 +419,18 @@ async function evaluateApprovalsUnguarded(
       reject("approver_is_delegated");
       continue;
     }
-    if (setHas(requesterIds, approver.id)) {
+    // Checks that the rule waived for this approval. They count only if the approval counts.
+    const waivedChecks: SeparationCheck[] = [];
+    if (setHas(chainAgentIds, approver.id)) {
       reject("requester_cannot_approve");
       continue;
+    }
+    if (approver.id === principalId) {
+      if (!selfApproval) {
+        reject("requester_cannot_approve");
+        continue;
+      }
+      append(waivedChecks, "requester");
     }
     if (contains(counted, approver.id)) {
       reject("duplicate_approver");
@@ -420,6 +526,44 @@ async function evaluateApprovalsUnguarded(
         continue;
       }
     }
+    if (enforceStrict) {
+      let conflict: string | undefined;
+      for (let roleIndex = 0; roleIndex < approver.roles.length; roleIndex += 1) {
+        const assignment = approver.roles[roleIndex];
+        if (assignment !== undefined && setHas(requestingRoles, assignment.role)) {
+          conflict = assignment.role;
+          break;
+        }
+      }
+      if (conflict !== undefined) {
+        reject("sod_role_conflict", conflict);
+        continue;
+      }
+    }
+    if (separation !== undefined) {
+      if (contains(contributors, approver.id)) {
+        if (enforceSimple) {
+          reject("sod_contributor");
+          continue;
+        }
+        append(waivedChecks, "contributor");
+      }
+      let requestedBefore = false;
+      for (let priorIndex = 0; priorIndex < history.length && !requestedBefore; priorIndex += 1) {
+        const prior = history[priorIndex];
+        requestedBefore =
+          prior !== undefined &&
+          prior.principalId === approver.id &&
+          prior.permission === permission;
+      }
+      if (requestedBefore) {
+        if (enforceSimple) {
+          reject("sod_prior_request");
+          continue;
+        }
+        append(waivedChecks, "same_type");
+      }
+    }
     if (rule.requireProof) {
       const rejection = await awaitable(
         checkProof(approval, approver.id, digestValue, verifiers, rule.proofTypes),
@@ -430,9 +574,10 @@ async function evaluateApprovalsUnguarded(
       }
     }
     append(counted, approver.id);
+    if (waivedChecks.length > 0) append(waived, { approverId: approver.id, checks: waivedChecks });
   }
 
-  const rest = { ...ruleBase, counted, rejected };
+  const rest = { ...ruleBase, counted, rejected, waived };
   if (counted.length >= rule.approvers) return result("allow", "approved", rest);
   return result("pending", "approvals_pending", rest);
 }
@@ -511,6 +656,18 @@ function expectation(approverId: string, digestValue: string): VerifierExpectati
   value.approverId = approverId;
   value.requestDigest = digestValue;
   return freeze(value);
+}
+
+function appliedOf(rule: SeparationRule): AppliedSeparation {
+  const applied = bareObject<{
+    version: string;
+    requesterMayApprove: boolean;
+    roleSeparation: SeparationRule["roleSeparation"];
+  }>();
+  applied.version = rule.version;
+  applied.requesterMayApprove = rule.requesterMayApprove;
+  applied.roleSeparation = rule.roleSeparation;
+  return freeze(applied);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

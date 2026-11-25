@@ -6,17 +6,19 @@
  */
 
 import { detach, maxApprovals } from "./bounds.js";
-import { defineData, hasOwn } from "./intrinsics.js";
+import { defineData, freeze, hasOwn } from "./intrinsics.js";
 import { accessRequest, subject, type AccessRequest, type Subject } from "./request.js";
 import { requestTime, timestamp } from "./time.js";
 import {
   bare,
+  bool,
   fail,
   invalid,
   isObject,
   knownKeys,
   list,
   optional,
+  oneOf,
   own,
   required,
   text,
@@ -50,6 +52,29 @@ export type PriorRequest = {
   permission: string;
 };
 
+/**
+ * The separation rule of one request, as the consumer stored it with the request. permitkit
+ * applies it as given and never looks it up; the consumer checks that `version` is still the
+ * current version of its rule.
+ */
+export type SeparationRule = {
+  /** The consumer's version label of the rule. The result and the record carry it. */
+  version: string;
+  /** Rule A off: the requester may be one of the distinct approvers. Only `true` allows it. */
+  requesterMayApprove: boolean;
+  /**
+   * Rule B. `"simple"`: an earlier requester of the same type (from `priorRequests`) and a
+   * contributor may not approve. `"strict"`: the same, and an approver may hold no role that
+   * grants the permission, and the requester no approver role. `"off"`: neither.
+   */
+  roleSeparation: "off" | "simple" | "strict";
+  /**
+   * The principals who contributed to the subject of the request, from the consumer's records.
+   * Required: an empty list means "no contributors".
+   */
+  contributors?: readonly string[] | undefined;
+};
+
 export type ApprovalInput = {
   /** The original request. Its context.now is the request time. */
   request: AccessRequest;
@@ -62,6 +87,12 @@ export type ApprovalInput = {
    * operator switched on requesterNeverApprovesSameType.
    */
   priorRequests?: PriorRequest[] | undefined;
+  /**
+   * The separation rule of this request. Validated on its own: an invalid rule refuses the
+   * input with `separation_invalid`. Without it, the requester never approves and only the
+   * policy's separationOfDuties flags apply, unless the policy requires a rule.
+   */
+  separation?: SeparationRule | undefined;
 };
 
 const hexDigest = text({
@@ -129,20 +160,68 @@ const priorRequest: Check<PriorRequest> = (value, path, issues) => {
   return bare({ principalId, permission });
 };
 
+const ruleVersion = text({ min: 1, max: 128 });
+const roleSeparation = oneOf(["off", "simple", "strict"]);
+const contributorList = list(approverId);
+
+/**
+ * A separation rule, copied into a frozen object without a prototype. Unknown keys are refused.
+ * `contributors` is optional in the shape so that its absence gets its own reason later.
+ */
+export const separationRule: Check<SeparationRule> = (value, path, issues) => {
+  if (!isObject(value)) return fail(issues, path, "Expected a separation rule object.");
+  const version = required(value, "version", path, issues, ruleVersion);
+  const mayApprove = required(value, "requesterMayApprove", path, issues, bool);
+  const separation = required(value, "roleSeparation", path, issues, roleSeparation);
+  const contributors = optional(value, "contributors", path, issues, contributorList);
+  const known = knownKeys(
+    value,
+    ["version", "requesterMayApprove", "roleSeparation", "contributors"],
+    path,
+    issues,
+  );
+  if (
+    version === invalid ||
+    mayApprove === invalid ||
+    separation === invalid ||
+    contributors.value === invalid ||
+    !known
+  ) {
+    return invalid;
+  }
+  const rule = bare({
+    version,
+    requesterMayApprove: mayApprove,
+    roleSeparation: separation,
+    ...(contributors.value === undefined ? {} : { contributors: freeze(contributors.value) }),
+  });
+  return freeze(rule);
+};
+
 /** Any value. The approvals are checked one by one later, so one bad approval is a rejection. */
 const anything: Check<unknown> = (value) => value;
 
 const approvalList = list(anything, { max: maxApprovals });
 const priorRequestList = list(priorRequest);
 
+/** The input after the first pass: the separation rule is not checked yet. */
+export type CheckedApprovalInput = Omit<ApprovalInput, "separation"> & { separation?: unknown };
+
 /** The whole input. The request follows the rules of `accessRequest`, depth limit included. */
-export const approvalInput: Check<ApprovalInput> = (value, path, issues) => {
+export const approvalInput: Check<CheckedApprovalInput> = (value, path, issues) => {
   if (!isObject(value)) return fail(issues, path, "Expected an approval input object.");
   const request = required(value, "request", path, issues, accessRequest);
   const approvals = required(value, "approvals", path, issues, approvalList);
   const now = required(value, "now", path, issues, requestTime);
   const prior = optional(value, "priorRequests", path, issues, priorRequestList);
-  const known = knownKeys(value, ["request", "approvals", "now", "priorRequests"], path, issues);
+  // Checked later with separationRule, so that a bad rule has its own reason.
+  const separation = optional(value, "separation", path, issues, anything);
+  const known = knownKeys(
+    value,
+    ["request", "approvals", "now", "priorRequests", "separation"],
+    path,
+    issues,
+  );
   if (
     request === invalid ||
     approvals === invalid ||
@@ -157,5 +236,6 @@ export const approvalInput: Check<ApprovalInput> = (value, path, issues) => {
     approvals,
     now,
     ...(prior.present ? { priorRequests: prior.value } : {}),
+    ...(separation.value === undefined ? {} : { separation: separation.value }),
   });
 };

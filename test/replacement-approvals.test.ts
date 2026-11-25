@@ -208,7 +208,81 @@ const scenarios: [name: string, run: () => Promise<unknown>][] = [
         approvals: [approval(peerA), approval(peerB), approval(peerC)],
       }),
   ],
+  [
+    "self-approval allowed",
+    () =>
+      evaluateApprovals(policy, {
+        request,
+        now: later,
+        approvals: [approval(requester), approval(peerA)],
+        priorRequests: [],
+        separation: separationOf(true, "off"),
+      }),
+  ],
+  [
+    "requester under a simple rule",
+    () =>
+      evaluateApprovals(policy, {
+        request,
+        now: later,
+        approvals: [approval(requester), approval(peerA)],
+        priorRequests: [],
+        separation: separationOf(false, "simple"),
+      }),
+  ],
+  [
+    "contributor and earlier requester under a simple rule",
+    () =>
+      evaluateApprovals(policy, {
+        request,
+        now: later,
+        approvals: [approval(peerA), approval(peerB), approval(peerC)],
+        priorRequests: [{ principalId: "u-c", permission: "ticket:refund" }],
+        separation: separationOf(false, "simple", ["u-b"]),
+      }),
+  ],
+  [
+    "strict rule with self-approval",
+    () =>
+      evaluateApprovals(policy, {
+        request,
+        now: later,
+        approvals: [approval(requester), approval(peerA)],
+        priorRequests: [],
+        separation: separationOf(true, "strict"),
+      }),
+  ],
+  [
+    "malformed rule",
+    () =>
+      evaluateApprovals(policy, {
+        request,
+        now: later,
+        approvals: [approval(requester), approval(peerA)],
+        priorRequests: [],
+        separation: { ...separationOf(true, "off"), requesterMayApprove: "yes" },
+      }),
+  ],
+  [
+    "rule without contributors",
+    () =>
+      evaluateApprovals(policy, {
+        request,
+        now: later,
+        approvals: [approval(requester), approval(peerA)],
+        priorRequests: [],
+        separation: { version: "v1", requesterMayApprove: true, roleSeparation: "off" },
+      }),
+  ],
 ];
+
+function separationOf(
+  requesterMayApprove: boolean,
+  roleSeparation: string,
+  contributors: string[] = [],
+) {
+  return { version: "v1", requesterMayApprove, roleSeparation, contributors };
+}
 
 async function runAll(): Promise<string[]> {
   const out: string[] = [];
@@ -329,6 +403,12 @@ describe("evaluateApprovals with replaced built-ins", { timeout: 600_000 }, () =
       "pending",
       "allow",
       "allow",
+      "allow",
+      "pending",
+      "pending",
+      "deny",
+      "deny",
+      "deny",
     ]);
     const targets = targetsOf();
     const wrong: string[] = [];

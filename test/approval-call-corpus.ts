@@ -107,12 +107,41 @@ export const oneRolePolicyInput: PolicyInput = {
   },
 };
 
-export const approvalPolicyInputs = { byRole, byPermission, oneRole: oneRolePolicyInput };
+/** Role eligibility without the policy flags: the separation rule per request decides. */
+const bySeparation: PolicyInput = {
+  ...byRole,
+  version: "approval-separation",
+  separationOfDuties: {
+    requesterNeverApprovesSameType: false,
+    exclusiveRequestAndApproveRoles: false,
+  },
+};
+
+/** As bySeparation, and every input must carry a separation rule. */
+const ruleRequired: PolicyInput = {
+  ...bySeparation,
+  version: "approval-rule-required",
+  separationOfDuties: {
+    requesterNeverApprovesSameType: false,
+    exclusiveRequestAndApproveRoles: false,
+    perRequestRule: "required",
+  },
+};
+
+export const approvalPolicyInputs = {
+  byRole,
+  byPermission,
+  oneRole: oneRolePolicyInput,
+  bySeparation,
+  ruleRequired,
+};
 
 export const approvalPolicies = {
   byRole: compilePolicy(approvalCatalog, byRole),
   byPermission: compilePolicy(approvalCatalog, byPermission),
   oneRole: compilePolicy(approvalCatalog, oneRolePolicyInput),
+  bySeparation: compilePolicy(approvalCatalog, bySeparation),
+  ruleRequired: compilePolicy(approvalCatalog, ruleRequired),
 };
 
 const person = (id: string, ...held: string[]): Subject => ({
@@ -470,8 +499,162 @@ export function approvalCases(hooks: SpyHooks): ApprovalCase[] {
       policy: {} as CompiledPolicy,
       input: { ...base, approvals: [] },
     },
+    ...separationCases(),
   ];
   return cases;
+}
+
+/** A separation rule with the contributor u-con. */
+function ruleOf(
+  requesterMayApprove: boolean,
+  roleSeparation: string,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { version: "v1", requesterMayApprove, roleSeparation, contributors: ["u-con"], ...extra };
+}
+
+/** An approval at 10:10 for the request under the policy. */
+function approvalOf(approver: Subject, on: CompiledPolicy, request: AccessRequest) {
+  return {
+    approver,
+    approvedAt: "2026-01-15T10:10:00.000Z",
+    requestDigest: requestDigest(on, request),
+  };
+}
+
+/** The paths of the separation rule per request: each reason, rejection and waiver. */
+function separationCases(): ApprovalCase[] {
+  const policy = approvalPolicies.bySeparation;
+  // The requester may approve itself only if it holds an approver role.
+  const selfRequester = person("u-req", "lead", "approver");
+  const selfRequest = requestOf(selfRequester, "refund", 500);
+  const viaAgent: Subject = {
+    ...selfRequester,
+    act: { type: "agent", id: "bot", grant: null, act: null },
+  };
+  const agentRequest = requestOf(
+    {
+      ...viaAgent,
+      act: {
+        type: "agent",
+        id: "bot",
+        grant: {
+          id: "g",
+          principalId: "u-req",
+          principalType: "human",
+          agentId: "bot",
+          entries: [{ permissions: ["ticket:refund"], scope: all, limits: unlimited }],
+          notBefore: null,
+          expiresAt: "2027-01-01T00:00:00Z",
+          revokedAt: null,
+        },
+        act: null,
+      },
+    },
+    "refund",
+    500,
+  );
+  const contributor = person("u-con", "approver");
+  const priorRequester = person("u-prior", "approver");
+  const dual = person("u-dual", "approver", "lead");
+  const peer = person("u-a", "approver");
+  const history = [{ principalId: "u-prior", permission: "ticket:refund" }];
+  const inputOf = (
+    separation: unknown,
+    approvers: Subject[],
+    request = refund,
+    on = policy,
+  ): Record<string, unknown> => ({
+    request,
+    now: later,
+    priorRequests: history,
+    approvals: approvers.map((approver) => approvalOf(approver, on, request)),
+    ...(separation === undefined ? {} : { separation }),
+  });
+  const everyone = [selfRequester, contributor, priorRequester, dual, peer];
+  return [
+    {
+      name: "simple rule, each Rule B rejection",
+      policy,
+      input: inputOf(ruleOf(false, "simple"), everyone, selfRequest),
+    },
+    {
+      name: "strict rule, role conflict of an approver",
+      policy,
+      input: inputOf(ruleOf(false, "strict"), [dual, contributor, priorRequester, peer]),
+    },
+    {
+      name: "self-approval with every waiver",
+      policy,
+      input: inputOf(
+        ruleOf(true, "simple", { contributors: ["u-req", "u-con"] }),
+        everyone,
+        selfRequest,
+      ),
+    },
+    {
+      name: "rule B off, waived contributor and same type",
+      policy,
+      input: inputOf(ruleOf(false, "off"), everyone, selfRequest),
+    },
+    {
+      name: "an agent's request, self-approval",
+      policy,
+      input: inputOf(ruleOf(true, "off"), [selfRequester, person("bot", "approver")], agentRequest),
+    },
+    {
+      name: "strict rule, requester with an approver role",
+      policy,
+      input: inputOf(ruleOf(false, "strict"), [peer], selfRequest),
+    },
+    {
+      name: "strict with self-approval",
+      policy,
+      input: inputOf(ruleOf(true, "strict"), [peer]),
+    },
+    {
+      name: "rule waives a policy flag",
+      policy: approvalPolicies.byRole,
+      input: inputOf(ruleOf(true, "simple"), [peer], refund, approvalPolicies.byRole),
+    },
+    {
+      name: "strict under permission eligibility",
+      policy: approvalPolicies.byPermission,
+      input: inputOf(ruleOf(false, "strict"), [peer], refund, approvalPolicies.byPermission),
+    },
+    {
+      name: "rule without contributors",
+      policy,
+      input: inputOf({ version: "v1", requesterMayApprove: false, roleSeparation: "simple" }, [
+        peer,
+      ]),
+    },
+    {
+      name: "rule without priorRequests",
+      policy,
+      input: { ...inputOf(ruleOf(false, "simple"), [peer]), priorRequests: undefined },
+    },
+    {
+      name: "rule invalid",
+      policy,
+      input: inputOf(ruleOf(true, "Simple"), [peer]),
+    },
+    {
+      name: "rule not an object",
+      policy,
+      input: inputOf([], [peer]),
+    },
+    {
+      name: "rule required and missing",
+      policy: approvalPolicies.ruleRequired,
+      input: inputOf(undefined, [peer], refund, approvalPolicies.ruleRequired),
+    },
+    {
+      name: "rule required and present",
+      policy: approvalPolicies.ruleRequired,
+      input: inputOf(ruleOf(false, "simple"), [peer], refund, approvalPolicies.ruleRequired),
+    },
+  ];
 }
 
 export interface RecordCase {

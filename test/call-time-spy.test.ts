@@ -251,5 +251,13 @@ describe("no built-in runs at call time", () => {
     }
     expect([...reasons].toSorted()).toEqual([...expectedReasons].toSorted());
     expect([...rejections].toSorted()).toEqual([...approvalRejectionCodesList].toSorted());
+    // Control: the separation cases waive each check at least once.
+    const waived = new Set<string>();
+    for (const result of results) {
+      for (const entry of (result as { waived?: { checks: string[] }[] }).waived ?? []) {
+        for (const check of entry.checks) waived.add(check);
+      }
+    }
+    expect([...waived].toSorted()).toEqual(["contributor", "requester", "same_type"]);
   });
 });

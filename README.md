@@ -200,7 +200,10 @@ and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
   rule applies at evaluation time, the result is `allow` with `approval_not_required`, the same
   as `decide()` at that time;
 - each approver is a human principal acting directly, not through an agent;
-- the requester never counts: neither the principal nor any agent id in its actor chain;
+- the requester does not count: neither the principal nor any agent id in its actor chain. Only
+  a separation rule in the input with `requesterMayApprove: true` lets the principal count as
+  one of the distinct approvers; agents in the chain never count (see
+  [Separation of duties](#separation-of-duties));
 - each approver counts once;
 - each approval names the request digest, which covers principal, each actor with the content
   of its grant, action, resource, request time and policy version, so an approval cannot move
@@ -343,6 +346,34 @@ The operator switches these settings in the policy:
   rule then needs `eligibleApprovers: { kind: "roles", ... }`.
 
 Both flags are required, also when `false`.
+
+A consumer that keeps its separation rule per action, with versions, passes a copy of the rule
+with each request instead, as `separation` in the `evaluateApprovals` input:
+
+```ts
+await evaluateApprovals(policy, {
+  request,
+  approvals,
+  now,
+  priorRequests, // earlier requests by the approvers; required with a rule
+  separation: {
+    version: "refund-approval@7",
+    requesterMayApprove: false, // Rule A: true lets the requester be one of the approvers
+    roleSeparation: "simple", // Rule B: "off", "simple" or "strict"
+    contributors: ["u-17"], // who contributed to the subject; required, [] for none
+  },
+});
+```
+
+The default refuses self-approval; an input without a rule behaves as before. Self-approval does
+not lower the number of distinct approvers. Where it is allowed, simple Rule B does not apply,
+and strict Rule B with self-approval is refused. The rule only tightens the policy flags: set
+both to `false` and set `perRequestRule: "required"` in `separationOfDuties`, so that an input
+without a rule is refused. The result names the applied rule version in `separation` and, per
+counted approver, the checks that the rule waived in `waived`. The rule is not part of
+`requestDigest`. permitkit does not know whether the rule version is still current: check it at
+the decision, at the last approval and at execution. All codes and rules:
+[docs/reference.md](docs/reference.md#separation-rule-per-request-approvalinputseparation).
 
 ### Audit and re-evaluation
 
@@ -573,6 +604,10 @@ Not covered:
   decision after `evaluateApprovals` returns is yours.
 
 - Proxies on the portable path, as described above, and changes to permitkit's own exports.
+- The currency of a separation rule. `evaluateApprovals` applies the rule copy that the input
+  holds. It does not know whether its version is still the consumer's current version. Checking
+  the version at the decision, at the last required approval and at execution is the caller's
+  duty; a stale or forged copy in the input is the caller's data.
 - Code with its own functions in the process can still change any other library and your own
   code around permitkit, for example the code that builds the request.
 
@@ -647,6 +682,9 @@ What absence means after this rule:
 | `resource.properties`                                             | Narrows: as if every property were missing                                                                                  |
 | Deny rule `roles`, `subjectTypes`                                 | Narrows: the deny rule applies to everyone                                                                                  |
 | `priorRequests` with `requesterNeverApprovesSameType`             | Missing: narrows (`sod_history_missing`). `[]` means no earlier requests. An unknown permission in it: `invalid_input`      |
+| `separation`                                                      | Missing: as before; refused (`separation_rule_missing`) with `perRequestRule: "required"`. Malformed: refused               |
+| `separation.contributors`, `priorRequests` with `separation`      | Missing: refused (`sod_contributors_missing`, `sod_history_missing`). `[]` means none                                       |
+| `separationOfDuties.perRequestRule`                               | Missing: an input without a rule is evaluated as before. Any value but `"required"`: refused                                |
 | An approval `proof` with `requireProof`                           | Narrows: `proof_missing`                                                                                                    |
 | Prior actor `grant: null`                                         | Explicit "no grant": prior actors grant nothing, so no grant checks run for that actor. A present prior grant must be valid |
 | `context.policyVersion`, `context.policyDigest`                   | No pin: the loaded policy decides, which still grants only what it says                                                     |
