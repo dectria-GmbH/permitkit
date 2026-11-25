@@ -8,8 +8,9 @@ on:
 permissions:
   contents: read
 
+# One release at a time, also across tags, so an older version cannot publish after a newer one.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -62,6 +63,17 @@ jobs:
           path: pack/*.tgz
           if-no-files-found: error
           retention-days: 7
+      # The same check as the node-floor job in ci.yml: the build must take the Node path on the
+      # engines floor. CI results do not gate a merge, so the release runs it again.
+      # It runs after the pack step, so npm from Node 24 packs the tarball. If it fails, the
+      # publish job does not start.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.3.0
+      - name: Smoke the build on Node 22.3.0
+        run: |
+          test "$(node --version)" = v22.3.0
+          node scripts/smoke.mjs
 
   publish:
     name: publish to npm
