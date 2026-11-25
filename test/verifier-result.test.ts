@@ -671,11 +671,16 @@ describe("the own then keeps the semantics of the native then", () => {
   it("rejects the derived promise with what a callback throws", async () => {
     const thrown = new Error("from the callback");
     const decision = evaluateApprovals(policy, input, { verifiers: [syncVerifier] });
-    await expect(
-      decision.then(() => {
+    // A plain await, not expect().rejects: that reads the result through the own then again.
+    let caught: unknown = "nothing";
+    try {
+      await decision.then(() => {
         throw thrown;
-      }),
-    ).rejects.toBe(thrown);
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(thrown);
   });
 
   it("passes the value on if the callback is not a function", async () => {
@@ -703,6 +708,8 @@ describe("the own then keeps the semantics of the native then", () => {
     ) as (...args: unknown[]) => unknown;
     const value: unknown = await Reflect.apply(ownThen, Promise.resolve(7), [(n: number) => n + 1]);
     expect(value).toBe(8);
+    // As the native then: a receiver that is not a promise throws at once.
+    expect(() => Reflect.apply(ownThen, {}, [])).toThrow(TypeError);
   });
 });
 
