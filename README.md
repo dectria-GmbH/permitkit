@@ -464,30 +464,9 @@ Not covered:
   the captured ones.
 - Verifiers. A verifier is caller code, and so is its result. A verifier gets a private copy of
   the proof, and afterwards permitkit reads nothing that the verifier can reach, except its
-  result. permitkit gives its own promises
-  an own `constructor` (the captured `Promise`) and an own `then`. These are the promise that
-  `evaluateApprovals` returns and every promise that this own `then` returns, at any depth. The
-  own `then` builds its result from the captured `Promise` and reads no `Promise[Symbol.species]`.
-  So under a replaced `Promise.prototype.then`, `Promise.prototype.constructor` or
-  `Promise[Symbol.species]`, these reads get the real decision: `await` on such a promise,
-  `return` of it from an async function, a `.then` or `.catch` callback on it, and `Promise.all`
-  or `Promise.race` over such promises.
-
-  Not covered:
-  - The promise that `Promise.all` or `Promise.race` returns is a plain promise of the live
-    `Promise`, so `await` or `.then` on it reads a replaced `Promise.prototype.constructor`,
-    `then` or `Promise[Symbol.species]`.
-  - A `then` on `Array.prototype` or `Object.prototype` that is set after the promise has
-    settled. `Promise.all` resolves a new array and `Promise.race` resolves a new value, and that
-    resolution reads `then`.
-  - `finally`. It builds its result through `Promise[Symbol.species]` and `Promise.resolve`, so a
-    replaced species changes what `await p.finally(...)` reads. `catch` is covered because it
-    goes through the own `then`.
-  - A replaced `Promise.resolve`, which changes what the combinators do.
-
-  permitkit reads a verifier's result without `await`: a native promise through the captured
-  `then`, every other value as it is. A thenable that is not a native promise is not awaited, so
-  its proof does not count.
+  result. permitkit reads a verifier's result without `await`: a native promise through the
+  captured `then`, every other value as it is. A thenable that is not a native promise is not
+  awaited, so its proof does not count.
 
   An async verifier resolves its own promise with its result, and that resolution reads `then`
   through the prototype chain before permitkit sees the value. The captured `then` reads the
@@ -511,18 +490,43 @@ Not covered:
   `JSON.stringify`. permitkit passes `expected` frozen and without a prototype, so a read on it
   runs no such getter, but a read on your own objects can. Return the result as an object without
   a prototype (see [Approval proofs](#approval-proofs)): then a `then` set in this window does
-  not reach the result itself. Code that you run on the decision after `evaluateApprovals`
-  returns is yours.
-- Promises in `evaluateApprovals`. permitkit gives an own `constructor` to the promise that
-  `evaluateApprovals` returns and to the promises that it awaits itself. So `await` on them reads
-  neither `Promise.prototype.constructor` nor `then`. This covers a direct `await` on the returned
-  promise. It does not cover these uses, because each of them calls whatever `then` it finds,
-  which can be a replaced one: returning the promise from an async function
-  (`async () => evaluateApprovals(...)`), `Promise.all` or `Promise.race` over it, and `.then()`,
-  `.catch()` or `.finally()` on it. Act on `decision` in the same async function that runs
+  not reach the result itself.
+
+- Promises in `evaluateApprovals`. permitkit gives an own `constructor` (the captured `Promise`)
+  and an own `then` to the promise that `evaluateApprovals` returns, to the promises that it
+  awaits itself, and to every promise that this own `then` returns, at any depth. The own `then`
+  builds its result from the captured `Promise` and reads no `Promise[Symbol.species]`. So under
+  a replaced `Promise.prototype.then`, `Promise.prototype.constructor` or
+  `Promise[Symbol.species]`:
+  - A direct `await` on the returned promise gets the real decision.
+  - A `.then(callback)` or `.catch(callback)` on it calls the callback with the real decision,
+    and the promise that it returns carries the same own `constructor` and `then`.
+  - An async function that returns the promise, and `Promise.all` or `Promise.race` over it,
+    read it through the own `then` and get the real decision. What then reaches the caller is
+    the caller's own promise, see below.
+
+  Not covered: the promises that your own code creates around permitkit's promise, and the
+  built-ins that build them. Such a promise is a plain promise of the live `Promise`, and an
+  `await` or `.then` on it reads a replaced `Promise.prototype.constructor`, `then` or
+  `Promise[Symbol.species]`, which can hand you another decision. This holds for:
+  - Returning the promise or the decision from an async function
+    (`async () => evaluateApprovals(...)`). The own `then` hands the real decision to the promise
+    of the async function, but the caller then awaits that promise.
+  - `Promise.all` or `Promise.race` over it. The promise that the combinator returns is the
+    caller's.
+  - A `then` on `Array.prototype` or `Object.prototype` that is set after the promise has
+    settled. `Promise.all` resolves a new array, and that resolution reads `then`.
+  - `finally`. It builds its result through `Promise[Symbol.species]` and `Promise.resolve`, so a
+    replaced species changes what `await p.finally(...)` reads. `catch` is covered because it
+    goes through the own `then`.
+  - A replaced `Promise.resolve`, which changes what the combinators do.
+
+  Act on `decision` in the same async function that runs
   `const decision = await evaluateApprovals(...)`. If you return `decision` from that function, or
   pass it to another promise, a replaced `then` is called again. permitkit cannot cover these
-  other uses, because each of them ends in a promise that the caller creates.
+  uses, because each of them ends in a promise that the caller creates. Code that you run on the
+  decision after `evaluateApprovals` returns is yours.
+
 - Proxies on the portable path, as described above, and changes to permitkit's own exports.
 - Code with its own functions in the process can still change any other library and your own
   code around permitkit, for example the code that builds the request.
