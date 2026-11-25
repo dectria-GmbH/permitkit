@@ -114,4 +114,4 @@ jobs:
             echo "Expected exactly one tarball in pack/, found: $*" >&2
             exit 1
           fi
-          npm publish "$1" --provenance --access public
+          npm publish "./$1" --provenance --access public
