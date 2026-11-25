@@ -69,7 +69,8 @@ export const approvalRejectionCodes = Object.freeze({
   approver_denied_by_rule: "A deny rule for this permission matches the approver.",
   approver_not_permitted: "The approver does not hold the permission that the rule requires.",
   sod_role_conflict: "Separation of duties: the approver also holds a requesting role.",
-  sod_prior_request: "Separation of duties: the approver requested an action of this type before.",
+  sod_prior_request:
+    "Separation of duties: priorRequests lists the approver with the requested permission.",
   sod_contributor:
     "Separation of duties: the separation rule lists the approver as a contributor to the subject.",
   proof_missing: "The rule requires an approval proof and the approval has none.",

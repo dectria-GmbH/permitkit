@@ -114,9 +114,10 @@ export type SeparationOfDuties = {
   /** Nobody may hold both a requesting and an approving role for the same permission. */
   exclusiveRequestAndApproveRoles: boolean;
   /**
-   * `"required"`: every evaluateApprovals input must carry a separation rule, and an input
-   * without one is refused (`separation_rule_missing`). Absent: an input without a rule is
-   * evaluated as before, with the requester refused and the two flags above.
+   * `"required"`: an evaluateApprovals input for a request that needs approval must carry a
+   * separation rule, and an input without one is refused (`separation_rule_missing`). A request
+   * that needs no approval is not affected. Absent: an input without a rule is evaluated as
+   * before, with the requester refused and the two flags above.
    */
   perRequestRule?: "required" | undefined;
 };

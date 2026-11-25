@@ -100,8 +100,8 @@ The rule only tightens the policy's `separationOfDuties` flags. A rule that waiv
 requires refuses with `separation_policy_conflict`: `requesterNeverApprovesSameType` with
 self-approval or `roleSeparation: "off"`, and `exclusiveRequestAndApproveRoles` with
 self-approval. A consumer that passes the rule per request sets both flags to `false` and sets
-`perRequestRule: "required"`, so that an input without a rule refuses
-(`separation_rule_missing`). Without `perRequestRule`, an input without a rule is evaluated as
+`perRequestRule: "required"`, so that an input for a request that needs approval and has no rule
+refuses (`separation_rule_missing`, checked in the order above). Without `perRequestRule`, an input without a rule is evaluated as
 before: the requester never approves, and only the flags apply.
 
 `ApprovalDecision.separation` holds the applied rule (`version`, `requesterMayApprove`,
@@ -129,7 +129,7 @@ An entry can have a `detail` string. It can hold text from the input (a proof ty
 | `approver_denied_by_rule`  | A deny rule for the permission matches the approver.                                                                  |
 | `approver_not_permitted`   | The approver does not hold the permission (rules without roles).                                                      |
 | `sod_role_conflict`        | The approver also holds a requesting role (if configured).                                                            |
-| `sod_prior_request`        | `priorRequests` lists the approver with this permission (if configured).                                              |
+| `sod_prior_request`        | `priorRequests` lists the approver with the requested permission (if configured).                                     |
 | `sod_contributor`          | The separation rule lists the approver as a contributor, and Rule B applies.                                          |
 | `proof_missing`            | The rule requires a proof and the approval has none.                                                                  |
 | `proof_type_not_allowed`   | The rule's `proofTypes` do not include the proof's type.                                                              |
