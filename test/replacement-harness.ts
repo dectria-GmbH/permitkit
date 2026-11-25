@@ -47,6 +47,8 @@ const owners: [name: string, owner: object][] = [
   ["ArrayBuffer", ArrayBuffer],
   ["ArrayBuffer.prototype", ArrayBuffer.prototype],
   ["TextEncoder.prototype", TextEncoder.prototype],
+  ["Promise.prototype", Promise.prototype],
+  ["Promise", Promise],
 ];
 
 /** Global bindings that a call could read at call time. */
@@ -62,6 +64,7 @@ export const globalNames: readonly string[] = [
   "Math",
   "Number",
   "Object",
+  "Promise",
   "Proxy",
   "Reflect",
   "RegExp",

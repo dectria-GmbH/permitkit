@@ -1,11 +1,16 @@
 // The calls that the call-time spy tests watch: decide, explain, evaluate, requestDigest,
-// parseRequest, canonicalJson and compilePolicy on valid and invalid input. Everything is built
+// parseRequest, canonicalJson, compilePolicy, reevaluate, toDecisionRecord and decideAndRecord on
+// valid and invalid input, and evaluateApprovals (see approval-call-corpus.ts). Everything is built
 // before a test installs its spies, so the runner itself only calls functions and reads own
 // properties of arrays it built: no iterator, no array method and no inherited property.
 import {
   canonicalJson,
   compilePolicy,
   decide,
+  decideAndRecord,
+  evaluateApprovals,
+  reevaluate,
+  toDecisionRecord,
   digest,
   evaluate,
   explain,
@@ -22,6 +27,15 @@ import {
   replacementPolicyInputs,
   replacementRequests,
 } from "./replacement-corpus.js";
+import {
+  approvalCases,
+  oneRolePolicyInput,
+  recordCases,
+  recordRequests,
+  type ApprovalCase,
+  type RecordCase,
+  type SpyHooks,
+} from "./approval-call-corpus.js";
 
 export const callNames = [
   "decide",
@@ -31,11 +45,61 @@ export const callNames = [
   "parseRequest",
   "canonicalJson",
   "compilePolicy",
+  "reevaluate",
+  "toDecisionRecord",
+  "decideAndRecord",
+  "evaluateApprovals",
 ] as const;
 export type CallName = (typeof callNames)[number];
 
 const all = { kind: "all" };
 const base = replacementRequests(0)[0];
+
+/** One role, one grant entry with one permission, one property: the one-item paths. */
+const oneItemRequests: AccessRequest[] = [
+  {
+    subject: {
+      type: "human",
+      id: "u1",
+      roles: [{ role: "lead", scope: { kind: "all" } }],
+      act: null,
+    },
+    action: { name: "read" },
+    resource: { type: "ticket", id: "t", properties: { queue: "a" } },
+    context: { now: "2026-01-15T10:00:00Z" },
+  },
+  {
+    subject: {
+      type: "human",
+      id: "u1",
+      roles: [{ role: "support", scope: { kind: "match", properties: { queue: ["a"] } } }],
+      act: {
+        type: "agent",
+        id: "agent-1",
+        grant: {
+          id: "g1",
+          principalId: "u1",
+          principalType: "human",
+          agentId: "agent-1",
+          entries: [
+            {
+              permissions: ["ticket:read"],
+              scope: { kind: "match", properties: { queue: ["a"] } },
+              limits: { kind: "range", properties: { amount: { min: null, max: 1 } } },
+            },
+          ],
+          notBefore: null,
+          expiresAt: "2027-01-01T00:00:00Z",
+          revokedAt: null,
+        },
+        act: null,
+      },
+    },
+    action: { name: "read" },
+    resource: { type: "ticket", properties: { amount: 1 } },
+    context: { now: "2026-01-15T10:00:00Z" },
+  },
+];
 
 /** Requests that each fail a different rule of the validator. */
 const invalidRequests: unknown[] = [
@@ -113,6 +177,7 @@ const first = replacementPolicyInputs[0] as unknown as Record<string, unknown>;
 const policyInputs: unknown[] = [
   ...replacementPolicyInputs,
   singleRole,
+  oneRolePolicyInput,
   { ...first, schema: 3 },
   { ...first, version: "" },
   { ...first, extra: true },
@@ -153,16 +218,24 @@ export interface CallTimeCorpus {
   readonly requests: readonly unknown[];
   readonly authzen: readonly unknown[];
   readonly policyInputs: readonly unknown[];
+  readonly records: readonly RecordCase[];
+  readonly recordRequests: ReturnType<typeof recordRequests>;
 }
 
 export function callTimeCorpus(count: number): CallTimeCorpus {
-  const valid = replacementRequests(count);
+  const valid = [...replacementRequests(count), ...oneItemRequests];
   const requests: unknown[] = [...valid, ...invalidRequests];
   return {
-    policies: [...replacementPolicies, singleRolePolicy],
+    policies: [
+      ...replacementPolicies,
+      singleRolePolicy,
+      compilePolicy(replacementCatalog, oneRolePolicyInput),
+    ],
     requests,
     authzen: [...valid.map(asAuthZen), ...invalidAuthZen(valid[0] as AccessRequest)],
     policyInputs,
+    records: recordCases(),
+    recordRequests: recordRequests(),
   };
 }
 
@@ -204,4 +277,40 @@ export function runCallTimeCorpus(
     const input = corpus.policyInputs[index];
     watch("compilePolicy", () => compilePolicy(replacementCatalog, input));
   }
+  for (let index = 0; index < corpus.records.length; index += 1) {
+    const item = corpus.records[index] as RecordCase;
+    watch("reevaluate", () => reevaluate(item.policy, item.record as never));
+  }
+  for (let index = 0; index < corpus.recordRequests.length; index += 1) {
+    const item = corpus.recordRequests[index] as (typeof corpus.recordRequests)[number];
+    watch("toDecisionRecord", () => toDecisionRecord(item.request, item.decision));
+    watch("decideAndRecord", () => decideAndRecord(item.policy, item.request));
+  }
 }
+
+/**
+ * Runs evaluateApprovals on every approval case. The spy records from the call until its
+ * promise settles; only microtasks run in between. Errors are swallowed, as above.
+ */
+export async function runApprovalCallTimeCorpus(
+  cases: readonly ApprovalCase[],
+  enter: (name: CallName) => void,
+  leave: () => void,
+): Promise<unknown[]> {
+  const results: unknown[] = [];
+  for (let index = 0; index < cases.length; index += 1) {
+    const item = cases[index] as ApprovalCase;
+    enter("evaluateApprovals");
+    let result: unknown;
+    try {
+      result = await evaluateApprovals(item.policy, item.input, item.options as never);
+    } catch (error) {
+      result = error;
+    }
+    leave();
+    results[index] = result;
+  }
+  return results;
+}
+
+export { approvalCases, type SpyHooks };

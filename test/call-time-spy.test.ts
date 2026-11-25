@@ -2,13 +2,26 @@
 // built-in owners in replacement-harness.ts, and every global constructor, with a function that
 // records the call and then calls the original. It also records writes that reach
 // Array.prototype or Object.prototype at a low index. It then runs decide, explain, evaluate,
-// requestDigest, parseRequest, canonicalJson and compilePolicy on valid and invalid input and
-// expects no record. A call recorded here is a call that a replacement after load could answer
+// requestDigest, parseRequest, canonicalJson, compilePolicy, reevaluate, toDecisionRecord,
+// decideAndRecord and evaluateApprovals on valid and invalid input and expects no record. A call recorded here is a call that a replacement after load could answer
 // with any value, so this proves for every built-in what replacement-fuzz.test.ts samples.
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
-import { callTimeCorpus, runCallTimeCorpus, type CallName } from "./call-time-corpus.js";
+import {
+  approvalCases,
+  callTimeCorpus,
+  runApprovalCallTimeCorpus,
+  runCallTimeCorpus,
+  type CallName,
+} from "./call-time-corpus.js";
+import { approvalReasonCodes, approvalRejectionCodes } from "../src/index.js";
 import { globalNames, targetsOf } from "./replacement-harness.js";
+
+/** Every approval decision reason, and the two error codes that evaluateApprovals throws. */
+const expectedReasons = [...Object.keys(approvalReasonCodes), "options_invalid", "policy_unknown"];
+const approvalRejectionCodesList = Object.keys(approvalRejectionCodes);
 
 const apply = Reflect.apply;
 const construct = Reflect.construct;
@@ -22,7 +35,21 @@ const bareDescriptor = (): PropertyDescriptor => create(null) as PropertyDescrip
 interface Spy {
   active: CallName | "";
   readonly calls: Record<string, number>;
+  /**
+   * Count only calls with a frame of permitkit's src on the stack. While an asynchronous call
+   * is active, the test runner's own microtasks run too; they have no such frame.
+   */
+  readonly sourceOnly?: boolean;
 }
+
+const ErrorType = Error;
+const includesMethod: unknown = Object.getOwnPropertyDescriptor(
+  String.prototype,
+  "includes",
+)?.value;
+const includes = (text: string, part: string): boolean =>
+  apply(includesMethod as (search: string) => boolean, text, [part]);
+const sourceDirectory = fileURLToPath(new URL("../src/", import.meta.url));
 
 function hit(spy: Spy, label: string): void {
   if (spy.active === "") return;
@@ -30,7 +57,8 @@ function hit(spy: Spy, label: string): void {
   const was = spy.active;
   // Nothing below may record itself.
   spy.active = "";
-  spy.calls[entry] = (spy.calls[entry] ?? 0) + 1;
+  const counted = spy.sourceOnly !== true || includes(new ErrorType().stack ?? "", sourceDirectory);
+  if (counted) spy.calls[entry] = (spy.calls[entry] ?? 0) + 1;
   spy.active = was;
 }
 
@@ -125,6 +153,24 @@ function recordCalls(body: (spy: Spy) => void): Record<string, number> {
   return spy.calls;
 }
 
+/** The same for a body that awaits. The spies stay in place until its promise settles. */
+async function recordCallsAsync(body: (spy: Spy) => Promise<unknown>) {
+  const spy: Spy = {
+    active: "",
+    calls: Object.create(null) as Record<string, number>,
+    sourceOnly: true,
+  };
+  const saved: Saved[] = [];
+  try {
+    install(spy, saved);
+    await body(spy);
+  } finally {
+    spy.active = "";
+    uninstall(saved);
+  }
+  return spy.calls;
+}
+
 const corpus = callTimeCorpus(24);
 const targetCount = targetsOf().length;
 
@@ -146,7 +192,7 @@ describe("no built-in runs at call time", () => {
     });
   });
 
-  it("records no call in decide, explain, evaluate, requestDigest, parseRequest, canonicalJson and compilePolicy", () => {
+  it("records no call in the synchronous calls", () => {
     expect(targetCount).toBeGreaterThan(300);
     expect(globalNames.length).toBeGreaterThan(10);
     const calls = recordCalls((spy) => {
@@ -161,5 +207,49 @@ describe("no built-in runs at call time", () => {
       );
     });
     expect(calls).toEqual({});
+  });
+
+  it("records no call in evaluateApprovals, also around verifier calls", async () => {
+    let paused: CallName | "" = "";
+    let spyRef: Spy | undefined;
+    const hooks = {
+      pause: () => {
+        if (spyRef === undefined) return;
+        paused = spyRef.active;
+        spyRef.active = "";
+      },
+      resume: () => {
+        if (spyRef !== undefined) spyRef.active = paused;
+      },
+    };
+    const cases = approvalCases(hooks);
+    let results: unknown[] = [];
+    const calls = await recordCallsAsync(async (spy) => {
+      spyRef = spy;
+      results = await runApprovalCallTimeCorpus(
+        cases,
+        (name) => {
+          spy.active = name;
+        },
+        () => {
+          spy.active = "";
+        },
+      );
+    });
+    expect(calls).toEqual({});
+    // Control: the cases reach every decision reason and every rejection reason.
+    const reasons = new Set<string>();
+    const rejections = new Set<string>();
+    for (const result of results) {
+      const decision = result as {
+        reason?: unknown;
+        code?: unknown;
+        rejected?: { reason: string }[];
+      };
+      reasons.add(String(decision.reason ?? decision.code));
+      for (const rejection of decision.rejected ?? []) rejections.add(rejection.reason);
+    }
+    expect([...reasons].toSorted()).toEqual([...expectedReasons].toSorted());
+    expect([...rejections].toSorted()).toEqual([...approvalRejectionCodesList].toSorted());
   });
 });
