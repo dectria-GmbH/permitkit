@@ -52,7 +52,9 @@ const sliceMethod = String.prototype.slice;
 const indexOfMethod = String.prototype.indexOf;
 const toISOStringMethod = Date.prototype.toISOString;
 const promiseThenMethod = Promise.prototype.then;
-const speciesDescriptor = getOwnPropertyDescriptor(Promise, Symbol.species);
+// The key is captured: a replaced global Symbol must not point the check at another key.
+const speciesKey = Symbol.species;
+const speciesDescriptor = getOwnPropertyDescriptor(Promise, speciesKey);
 const setUTCFullYearMethod = Date.prototype.setUTCFullYear;
 const getUTCDateMethod = Date.prototype.getUTCDate;
 /* oxlint-enable typescript/unbound-method */
@@ -364,7 +366,7 @@ export function promiseHooksIntact(): boolean {
   ) {
     return false;
   }
-  const species = getOwnPropertyDescriptor(PromiseConstructor, Symbol.species);
+  const species = getOwnPropertyDescriptor(PromiseConstructor, speciesKey);
   return (
     species !== undefined &&
     speciesDescriptor !== undefined &&

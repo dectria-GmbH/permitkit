@@ -777,3 +777,133 @@ describe("the expected object that the verifier gets", () => {
     });
   });
 });
+
+describe("a replaced global Symbol does not hide a replaced Promise[Symbol.species]", () => {
+  const speciesKey = Symbol.species;
+  const RealSymbol = Symbol;
+  const original = Object.getOwnPropertyDescriptor(Promise, speciesKey);
+
+  /** Moves the real species accessor to another key and points a stand-in Symbol at it. */
+  function swapSymbol(): void {
+    if (original === undefined) throw new Error("Promise[Symbol.species] has no descriptor.");
+    define(Promise, "__species", { configurable: true, get: original.get, set: original.set });
+    Object.defineProperty(globalThis, "Symbol", {
+      configurable: true,
+      writable: true,
+      value: { species: "__species" },
+    });
+  }
+
+  function restoreSymbol(): void {
+    Object.defineProperty(globalThis, "Symbol", {
+      configurable: true,
+      writable: true,
+      value: RealSymbol,
+    });
+    deleteKey(Promise, "__species");
+    deleteKey(Object.prototype, "then");
+    restorePromise();
+  }
+
+  /** A species getter that sets Object.prototype.then for one read, then lets it go. */
+  function armSpeciesHook(): void {
+    let armed = true;
+    define(Promise, speciesKey, {
+      configurable: true,
+      get(this: unknown) {
+        if (armed) {
+          armed = false;
+          define(Object.prototype, "then", {
+            configurable: true,
+            writable: true,
+            value(resolve: (value: unknown) => void) {
+              deleteKey(Object.prototype, "then");
+              resolve(Object.assign(Object.create(null) as object, forged));
+            },
+          });
+        }
+        return this;
+      },
+    });
+  }
+
+  /** The decision that a caller reads under the species getter and the swapped Symbol. */
+  async function attack(verifier: ApprovalProofVerifier): Promise<ApprovalDecision> {
+    armSpeciesHook();
+    swapSymbol();
+    try {
+      return await evaluateApprovals(policy, input, { verifiers: [verifier] });
+    } finally {
+      restoreSymbol();
+    }
+  }
+
+  it("counts no proof when the verifier result has a prototype", async () => {
+    await Promise.resolve();
+    const verifier: ApprovalProofVerifier = {
+      type: "sig",
+      verify: async () => {
+        await null;
+        return { ...failing };
+      },
+    };
+    const decision = await attack(verifier);
+    expect(decision.counted).toHaveLength(0);
+    expect(decision.outcome).toBe("pending");
+  });
+
+  it("counts no proof when the verifier result has no prototype", async () => {
+    // Let the runner attach its callbacks to this test's promise before a hook is set.
+    await Promise.resolve();
+    // The getter cannot reach the result. It hijacks the next await inside the verifier instead,
+    // so the check on the signature reads true. The verifier is yours; the entry is the species
+    // check that the swapped Symbol bypassed.
+    const checkSignature = async (): Promise<boolean> => false;
+    const verifier: ApprovalProofVerifier = {
+      type: "sig",
+      verify: async (_proof, expected) => {
+        await null;
+        const ok = await checkSignature();
+        return Object.assign(
+          Object.create(null) as object,
+          ok
+            ? { valid: true, approverId: "bob", requestDigest: expected.requestDigest }
+            : failing,
+        ) as typeof failing;
+      },
+    };
+    let armed = true;
+    let hits = 0;
+    define(Promise, speciesKey, {
+      configurable: true,
+      get(this: unknown) {
+        if (armed) {
+          armed = false;
+          define(Promise.prototype, "constructor", { configurable: true, get: () => Object });
+          define(Promise.prototype, "then", {
+            configurable: true,
+            writable: true,
+            value(resolve: (value: unknown) => void) {
+              hits += 1;
+              restorePromise();
+              resolve(true);
+            },
+          });
+        }
+        return this;
+      },
+    });
+    swapSymbol();
+    let decision: ApprovalDecision | undefined;
+    try {
+      decision = await evaluateApprovals(policy, input, { verifiers: [verifier] });
+    } finally {
+      restoreSymbol();
+    }
+    expect({ hits, counted: decision.counted.length, outcome: decision.outcome }).toEqual({
+      hits: 0,
+      counted: 0,
+      outcome: "pending",
+    });
+  });
+});
