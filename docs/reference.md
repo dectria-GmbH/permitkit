@@ -77,6 +77,10 @@ An entry can have a `detail` string. It can hold text from the input (a proof ty
 | `proof_verifier_missing`   | No verifier is registered for the proof type.                         |
 | `proof_invalid`            | The verifier rejected the proof, threw, or echoed other values.       |
 
+`proof_invalid` also covers two cases that the verifier does not decide. `detail` names them:
+`a then on a built-in prototype, or a replaced Promise.prototype.then` (checked before and after
+each verifier call), and `verifier returned a thenable that is not a native promise`.
+
 ## Errors
 
 permitkit throws only for programming and configuration errors. Decisions never throw for bad

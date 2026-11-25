@@ -29,6 +29,8 @@ export const parseDate = Date.parse;
 export const jsonText = JSON.stringify;
 export const objectPrototype: object = Object.prototype;
 export const arrayPrototype: object = Array.prototype;
+const functionPrototype: object = Function.prototype;
+const promisePrototype: object = Promise.prototype;
 const create = Object.create;
 const DateConstructor = Date;
 const SetConstructor = Set;
@@ -259,12 +261,42 @@ export function daysInMonth(year: number, month: number): number {
  * `then`, and replaced Promise.prototype.constructor and then methods could choose the value.
  */
 export function awaitable<T>(promise: Promise<T>): Promise<T> {
-  const descriptor = bareObject<PropertyDescriptor>();
-  descriptor.value = PromiseConstructor;
-  if (!defineOwn(promise, "constructor", descriptor)) {
+  const marker = bareObject<PropertyDescriptor>();
+  marker.value = PromiseConstructor;
+  if (!defineOwn(promise, "constructor", marker)) {
     throw new TypeError("The promise could not be marked.");
   }
   return promise;
+}
+
+/**
+ * False if a `then` on Object.prototype, Array.prototype or Function.prototype could turn a
+ * plain value into a thenable, or if Promise.prototype.then is not the captured one. A verifier
+ * that is an async function resolves its own promise with its result, and that resolution reads
+ * `then` through the prototype chain before permitkit sees the value. Reads descriptors only,
+ * so no getter runs.
+ */
+export function promiseHooksIntact(): boolean {
+  if (hasOwn(objectPrototype, "then") || hasOwn(arrayPrototype, "then")) return false;
+  if (hasOwn(functionPrototype, "then")) return false;
+  const descriptor = getOwnPropertyDescriptor(promisePrototype, "then");
+  return (
+    descriptor !== undefined &&
+    hasOwn(descriptor, "value") &&
+    descriptor.value === promiseThenMethod
+  );
+}
+
+/** True if the value or an object on its prototype chain has a `then`. Runs no getter. */
+export function hasThen(value: unknown): boolean {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return false;
+  let node: object | null = value;
+  for (let depth = 0; node !== null && depth < 64; depth += 1) {
+    if (hasOwn(node, "then")) return true;
+    const next: unknown = getPrototypeOf(node);
+    node = typeof next === "object" || typeof next === "function" ? next : null;
+  }
+  return false;
 }
 
 /**

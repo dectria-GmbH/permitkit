@@ -110,6 +110,31 @@ function forgingPromiseThen(
 
 function FakePromise(): void {}
 
+/** The detail of a proof that is not counted because a promise hook changed. */
+const hooksChanged = "a then on a built-in prototype, or a replaced Promise.prototype.then";
+
+const confirming: ApprovalProofVerifier = {
+  type: "sig",
+  verify: async (_proof, expected) => {
+    await Promise.resolve();
+    return { valid: true, approverId: "bob", requestDigest: expected.requestDigest };
+  },
+};
+
+/** Promise.prototype.then that changes nothing, but is not the original. */
+function passingThen(this: Promise<unknown>, ok?: unknown, err?: unknown): unknown {
+  const result: unknown = apply(originalThen as (...args: unknown[]) => unknown, this, [ok, err]);
+  return result;
+}
+
+/** The short form and the first rejection detail of a decision, under the given key. */
+function outcomeOf(key: string, decision: ApprovalDecision | undefined): Record<string, unknown> {
+  return {
+    [key]: decision === undefined ? "none" : short(decision),
+    detail: decision?.rejected[0]?.detail,
+  };
+}
+
 /** Promise.prototype.then that hands a pending decision on as an allowed one. */
 function allowingThen(this: Promise<unknown>, ok?: (value: unknown) => unknown, err?: unknown) {
   const swap = (value: unknown) => {
@@ -207,12 +232,12 @@ describe("the verifier result under replaced then and constructor", () => {
   });
 
   it("an asynchronous verifier that confirms still counts", async () => {
-    const confirming: ApprovalProofVerifier = {
+    const confirmingPromise: ApprovalProofVerifier = {
       type: "sig",
       verify: (_proof, expected) =>
         Promise.resolve({ valid: true, approverId: "bob", requestDigest: expected.requestDigest }),
     };
-    expect(short(await evaluateApprovals(policy, input, { verifiers: [confirming] }))).toBe(
+    expect(short(await evaluateApprovals(policy, input, { verifiers: [confirmingPromise] }))).toBe(
       "allow counted=1",
     );
   });
@@ -224,9 +249,77 @@ describe("the verifier result under replaced then and constructor", () => {
       verify: () => ({ then: (resolve: (value: unknown) => void) => resolve(forged) }) as never,
     };
     const decision = await evaluateApprovals(policy, input, { verifiers: [thenable] });
-    expect({ outcome: decision.outcome, reason: decision.rejected[0]?.reason }).toEqual({
+    expect({
+      outcome: decision.outcome,
+      reason: decision.rejected[0]?.reason,
+      detail: decision.rejected[0]?.detail,
+    }).toEqual({
       outcome: "pending",
       reason: "proof_invalid",
+      detail: "verifier returned a thenable that is not a native promise",
+    });
+  });
+
+  it("a polluted Object.prototype.then does not forge the result of an async verifier", async () => {
+    fired = 0;
+    const asyncFunction: ApprovalProofVerifier = {
+      type: "sig",
+      // The documented shape: an async function that returns a plain verification object.
+      verify: async () => {
+        await Promise.resolve();
+        return { ...failing };
+      },
+    };
+    const clean = short(await evaluateApprovals(policy, input, { verifiers: [asyncFunction] }));
+    // oxlint-disable-next-line unicorn/no-thenable
+    define(Object.prototype, "then", { value: forgingThen, writable: true, configurable: true });
+    let polluted: ApprovalDecision | undefined;
+    try {
+      polluted = await evaluateApprovals(policy, input, { verifiers: [asyncFunction] });
+    } finally {
+      deleteKey(Object.prototype, "then");
+    }
+    expect({ clean, ...outcomeOf("polluted", polluted) }).toEqual({
+      clean: "pending counted=0",
+      polluted: "pending counted=0",
+      detail: hooksChanged,
+    });
+  });
+
+  it.each([
+    ["Object.prototype", Object.prototype],
+    ["Array.prototype", Array.prototype],
+    ["Function.prototype", Function.prototype],
+  ] as const)("a then on %s counts no proof, also a confirmed one", async (_name, owner) => {
+    const clean = short(await evaluateApprovals(policy, input, { verifiers: [confirming] }));
+    // oxlint-disable-next-line unicorn/no-thenable
+    define(owner, "then", { value: forgingThen, writable: true, configurable: true });
+    let polluted: ApprovalDecision | undefined;
+    try {
+      polluted = await evaluateApprovals(policy, input, { verifiers: [confirming] });
+    } finally {
+      deleteKey(owner, "then");
+    }
+    expect({ clean, ...outcomeOf("polluted", polluted) }).toEqual({
+      clean: "allow counted=1",
+      polluted: "pending counted=0",
+      detail: hooksChanged,
+    });
+  });
+
+  it("a replaced Promise.prototype.then counts no proof, also a confirmed one", async () => {
+    const clean = short(await evaluateApprovals(policy, input, { verifiers: [confirming] }));
+    define(Promise.prototype, "then", { value: passingThen, writable: true, configurable: true });
+    let replaced: ApprovalDecision | undefined;
+    try {
+      replaced = await evaluateApprovals(policy, input, { verifiers: [confirming] });
+    } finally {
+      if (thenDescriptor !== undefined) define(Promise.prototype, "then", thenDescriptor);
+    }
+    expect({ clean, ...outcomeOf("replaced", replaced) }).toEqual({
+      clean: "allow counted=1",
+      replaced: "pending counted=0",
+      detail: hooksChanged,
     });
   });
 });

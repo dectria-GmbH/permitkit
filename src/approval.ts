@@ -32,6 +32,8 @@ import {
   newSet,
   objectKeys,
   setAdd,
+  hasThen,
+  promiseHooksIntact,
   setHas,
   settledValue,
 } from "./intrinsics.js";
@@ -414,6 +416,9 @@ async function evaluateApprovalsUnguarded(
   return result("pending", "approvals_pending", rest);
 }
 
+/** The detail of a proof that is not counted because a promise hook changed. */
+const hooksChanged = "a then on a built-in prototype, or a replaced Promise.prototype.then";
+
 async function checkProof(
   approval: Approval,
   approverId: string,
@@ -431,20 +436,28 @@ async function checkProof(
   }
   const verifier = mapGet(verifiers, proof.type);
   if (verifier === undefined) return proofRejection("proof_verifier_missing", proof.type);
+  // A then on a built-in prototype, or a replaced Promise.prototype.then, could choose the
+  // result of an async verifier inside its own promise, before permitkit reads it. Fail closed,
+  // before the call and again after the result settles.
+  if (!promiseHooksIntact()) return proofRejection("proof_invalid", hooksChanged);
   try {
     // Not `await` on the result: it would read `then` and `constructor`, which caller code can
     // replace after load and so choose the verification.
     const settled = await settledValue(
       verifier.verify(proof, { approverId, requestDigest: digestValue }),
     );
+    if (!promiseHooksIntact()) return proofRejection("proof_invalid", hooksChanged);
     const verification = settled.value;
     // Count only the exact success shape. Anything else, also a truthy string, is a rejection.
     // Own properties only: an inherited `valid` or echo must never count.
     if (ownValue(verification, "valid") !== true) {
       const reason = ownValue(verification, "reason");
+      if (typeof reason === "string") return proofRejection("proof_invalid", reason);
       return proofRejection(
         "proof_invalid",
-        typeof reason === "string" ? reason : "verifier did not confirm",
+        hasThen(verification)
+          ? "verifier returned a thenable that is not a native promise"
+          : "verifier did not confirm",
       );
     }
     if (
