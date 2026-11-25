@@ -49,6 +49,7 @@ export type {
   ApprovalProofVerifier,
   ApprovalRejection,
   ApprovalWaiver,
+  PriorRequest,
   ProofVerification,
   SeparationCheck,
   SeparationRule,
