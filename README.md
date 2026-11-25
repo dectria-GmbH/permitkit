@@ -470,13 +470,20 @@ Not covered:
   own `then` builds its result from the captured `Promise` and reads no `Promise[Symbol.species]`.
   So under a replaced `Promise.prototype.then`, `Promise.prototype.constructor` or
   `Promise[Symbol.species]`, these reads get the real decision: `await` on such a promise,
-  `return` of it from an async function, a `.then` callback on it, and `Promise.all` or
-  `Promise.race` over such promises.
+  `return` of it from an async function, a `.then` or `.catch` callback on it, and `Promise.all`
+  or `Promise.race` over such promises.
 
-  Not covered: the promise that `Promise.all` or `Promise.race` returns is a plain promise of the
-  live `Promise`, so `await` or `.then` on it reads a replaced `Promise.prototype.constructor`,
-  `then` or `Promise[Symbol.species]`. A replaced `Promise.resolve`, `Promise.prototype.catch` or
-  `Promise.prototype.finally` changes what that function does.
+  Not covered:
+  - The promise that `Promise.all` or `Promise.race` returns is a plain promise of the live
+    `Promise`, so `await` or `.then` on it reads a replaced `Promise.prototype.constructor`,
+    `then` or `Promise[Symbol.species]`.
+  - A `then` on `Array.prototype` or `Object.prototype` that is set after the promise has
+    settled. `Promise.all` resolves a new array and `Promise.race` resolves a new value, and that
+    resolution reads `then`.
+  - `finally`. It builds its result through `Promise[Symbol.species]` and `Promise.resolve`, so a
+    replaced species changes what `await p.finally(...)` reads. `catch` is covered because it
+    goes through the own `then`.
+  - A replaced `Promise.resolve`, which changes what the combinators do.
 
   permitkit reads a verifier's result without `await`: a native promise through the captured
   `then`, every other value as it is. A thenable that is not a native promise is not awaited, so
@@ -491,6 +498,10 @@ Not covered:
   `Promise[Symbol.species]` are the ones it found at load. If not, the proof does not count
   (`proof_invalid`). If the captured `then` throws for a promise or a thenable, the proof does
   not count either.
+
+  The check covers permitkit's own realm. A verifier from another realm (a `node:vm` context, an
+  iframe) has its own `Object.prototype`, which the check does not read: it should return an
+  object without a prototype.
 
   This check is the mitigation, and it has limits. permitkit cannot protect the awaits inside
   your verifier code: what your WebAuthn library or database client returns there is in your
