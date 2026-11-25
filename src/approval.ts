@@ -54,7 +54,10 @@ export type ProofVerification =
  * and the signed challenge. permitkit compares these with what it expects. Never copy them from
  * `expected`; that turns the comparison into a no-op, and a valid assertion for one request then
  * passes for another. `expected` is for lookups, for example to load the approver's credentials.
- * The verifier should also time out on its own: permitkit waits for its promise.
+ * `expected` is frozen and has no prototype, so methods such as `hasOwnProperty` are not on it.
+ * The verifier should also time out on its own: permitkit waits for its promise. Return the
+ * result as an object without a prototype (`Object.assign(Object.create(null), { ... })`):
+ * then no `then` on Object.prototype can turn it into another value while its promise resolves.
  */
 export interface ApprovalProofVerifier {
   readonly type: string;
@@ -449,7 +452,7 @@ async function checkProof(
     // Not `await` on the result: it would read `then` and `constructor`, which caller code can
     // replace after load and so choose the verification.
     const settled = await settledValue(
-      verifier.verify(proof, { approverId, requestDigest: digestValue }),
+      verifier.verify(proof, expectation(approverId, digestValue)),
     );
     if (!promiseHooksIntact()) return proofRejection("proof_invalid", hooksChanged);
     // The captured then threw for a promise or thenable: a getter on its constructor or species
@@ -478,6 +481,18 @@ async function checkProof(
     // The verifier threw, or its result or error object threw when read. Never count it.
     return proofRejection("proof_invalid", "verifier failed");
   }
+}
+
+/**
+ * What the verifier gets as `expected`: frozen and without a prototype. A read of an inherited
+ * key, for example `toJSON` in JSON.stringify(expected), then runs no getter that caller code
+ * set on Object.prototype.
+ */
+function expectation(approverId: string, digestValue: string): VerifierExpectation {
+  const value = bareObject<{ approverId: string; requestDigest: string }>();
+  value.approverId = approverId;
+  value.requestDigest = digestValue;
+  return freeze(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

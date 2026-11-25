@@ -705,3 +705,68 @@ describe("the own then keeps the semantics of the native then", () => {
     expect(value).toBe(8);
   });
 });
+
+describe("the expected object that the verifier gets", () => {
+  it("is frozen and has no prototype", async () => {
+    let seen: unknown;
+    const recording: ApprovalProofVerifier = {
+      type: "sig",
+      verify: (_proof, expected) => {
+        seen = expected;
+        return { ...failing };
+      },
+    };
+    await evaluateApprovals(policy, input, { verifiers: [recording] });
+    expect({
+      prototype: Object.getPrototypeOf(seen),
+      frozen: Object.isFrozen(seen),
+      fields: { ...(seen as object) },
+    }).toEqual({
+      prototype: null,
+      frozen: true,
+      fields: { approverId: "bob", requestDigest: digest },
+    });
+  });
+
+  it("runs no inherited getter when the verifier serialises it", async () => {
+    // A toJSON getter on Object.prototype would run inside JSON.stringify(expected) and could set
+    // a then there that forges the async result after the check before the call.
+    const serialising: ApprovalProofVerifier = {
+      type: "sig",
+      verify: async (_proof, expected) => {
+        JSON.stringify(expected);
+        return { ...failing };
+      },
+    };
+    let reads = 0;
+    define(Object.prototype, "toJSON", {
+      configurable: true,
+      get() {
+        reads += 1;
+        deleteKey(Object.prototype, "toJSON");
+        // oxlint-disable-next-line unicorn/no-thenable
+        define(Object.prototype, "then", {
+          configurable: true,
+          writable: true,
+          value(this: unknown, resolve: (value: unknown) => void) {
+            deleteKey(Object.prototype, "then");
+            resolve(Object.assign(Object.create(null) as object, forged));
+          },
+        });
+        return undefined;
+      },
+    });
+    let attacked: ApprovalDecision | undefined;
+    try {
+      attacked = await evaluateApprovals(policy, input, { verifiers: [serialising] });
+    } finally {
+      deleteKey(Object.prototype, "then");
+      deleteKey(Object.prototype, "toJSON");
+    }
+    expect({ reads, ...outcomeOf("attacked", attacked) }).toEqual({
+      reads: 0,
+      attacked: "pending counted=0",
+      detail: "bad signature",
+    });
+  });
+});
