@@ -35,6 +35,8 @@ after permitkit loads changes no decision (see the README threat model).
 
 ## Approval results (`evaluateApprovals`)
 
+How to await the result safely: see "Promises in `evaluateApprovals`" in the README threat model.
+
 | Code                             | Outcome   | Meaning                                                                       |
 | -------------------------------- | --------- | ----------------------------------------------------------------------------- |
 | `approved`                       | `allow`   | Enough distinct, eligible approvals exist.                                    |

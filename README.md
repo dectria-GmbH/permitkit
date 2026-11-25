@@ -465,8 +465,10 @@ Not covered:
   promise. It does not cover these uses, because each of them calls whatever `then` it finds,
   which can be a replaced one: returning the promise from an async function
   (`async () => evaluateApprovals(...)`), `Promise.all` or `Promise.race` over it, and `.then()`,
-  `.catch()` or `.finally()` on it. Write
-  `const decision = await evaluateApprovals(...)` and use `decision` afterwards. A verifier's
+  `.catch()` or `.finally()` on it. Act on `decision` in the same async function that runs
+  `const decision = await evaluateApprovals(...)`. If you return `decision` from that function, or
+  pass it to another promise, a replaced `then` is called again. permitkit cannot cover these
+  other uses, because each of them ends in a promise that the caller creates. A verifier's
   result is caller code and is awaited as it is.
 - Proxies on the portable path, as described above, and changes to permitkit's own exports.
 - Code with its own functions in the process can still change any other library and your own
