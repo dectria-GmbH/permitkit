@@ -277,6 +277,11 @@ Each entry in `rejected` can have a `detail` string. It can hold text from the i
 proof type, or the `reason` that your verifier returned. Escape it before you render it, for
 example in HTML or in a log viewer.
 
+An async verifier like this one can be fooled by code that sets `Object.prototype.then`, which
+would turn its `{ valid: false }` into another value while its promise resolves. permitkit
+checks for such a `then` before and after each verifier call and then counts no proof; see
+"Replaced built-ins" in the threat model for what this check cannot see.
+
 ### Separation of duties
 
 The operator switches these settings in the policy:
@@ -423,7 +428,11 @@ check this in both plain-data paths:
   rejection reason, the options checks and each kind of verifier result; the verifiers
   themselves are caller code and are not recorded. A call that does not happen cannot be
   answered with a wrong value, so on the paths that the corpus reaches this holds for any
-  replacement, also one that returns a crafted value for one input only.
+  replaced method or getter that permitkit would call, also one that returns a crafted value for
+  one input only. The spy does not see two things: a plain property lookup (for example of
+  `then` when a promise is resolved) and a call that the engine makes from a promise job, where
+  no frame of permitkit is on the stack. For promises, `test/verifier-result.test.ts` guards
+  this class: it replaces `then` and `constructor` and checks the decision itself.
 - `test/inherited-reads.test.ts` installs a getter on `Object.prototype` and `Array.prototype`
   for every name in the source and expects no read.
 - `test/replacement-fuzz.test.ts` replaces each built-in in one of five ways (returns `true`,
@@ -442,9 +451,23 @@ Not covered:
   the captured ones.
 - Verifiers. A verifier is caller code, and so is its result. A verifier gets a private copy of
   the proof, and afterwards permitkit reads nothing that the verifier can reach, except its
-  result. permitkit reads a verifier's result without `await`: a native promise through the
-  captured `then`, every other value as it is. A thenable that is not a native promise is not
-  awaited, so its proof does not count.
+  result. permitkit gives its own promises,
+  also the one that `evaluateApprovals` returns, an own `constructor` and an own `then` (the
+  captured ones). So `await` on the result, `return` of it from an async function, `.then` on
+  it and `Promise.all` read no replaced `Promise.prototype.then`. A replaced `Promise.resolve`
+  still changes what `Promise.all` does. permitkit reads a verifier's result without `await`: a
+  native promise through the captured `then`, every other value as it is. A thenable that is
+  not a native promise is not awaited, so its proof does not count.
+
+  An async verifier resolves its own promise with its result, and that resolution reads `then`
+  through the prototype chain before permitkit sees the value. So before each verifier call
+  and again after its result settles, permitkit checks that Object.prototype, Array.prototype
+  and Function.prototype have no own `then` and that Promise.prototype.then is the captured
+  one. If not, the proof does not count (`proof_invalid`). This check is the mitigation, and it
+  has limits. permitkit cannot protect the awaits inside your verifier code: what your
+  WebAuthn library or database client returns there is in your hands. A `then` that is set
+  while your verifier waits and removed before its result settles is not seen either. Code that
+  you run on the decision after `evaluateApprovals` returns is yours.
 - Promises in `evaluateApprovals`. permitkit gives an own `constructor` to the promise that
   `evaluateApprovals` returns and to the promises that it awaits itself. So `await` on them reads
   neither `Promise.prototype.constructor` nor `then`. This covers a direct `await` on the returned
