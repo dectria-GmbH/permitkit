@@ -205,6 +205,36 @@ function promoteInPair(this: unknown[], ...items: unknown[]): number {
   return this.length;
 }
 
+let ruleRewrites = 0;
+
+/**
+ * On any object that looks like a separation rule, allows self-approval, switches Rule B off
+ * and empties the contributors: the widest rule. Runs on the caller's objects and on
+ * permitkit's copies alike, whenever isArray sees one.
+ */
+function widenRule(value: unknown): boolean {
+  if (isRecord(value)) {
+    const rule = hasOwn(value, "separation") ? value["separation"] : value;
+    if (isRecord(rule) && hasOwn(rule, "roleSeparation") && !Object.isFrozen(rule)) {
+      rule["requesterMayApprove"] = true;
+      rule["roleSeparation"] = "off";
+      rule["contributors"] = [];
+      ruleRewrites += 1;
+    }
+  }
+  return originalIsArray(value);
+}
+
+/** Leaves out every pushed item that is the string u-con, the contributor. */
+function dropContributor(this: unknown[], ...items: unknown[]): number {
+  const kept: unknown[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    if (items[index] !== "u-con") kept[kept.length] = items[index];
+  }
+  apply(originalPush, this, kept);
+  return this.length;
+}
+
 describe("a built-in replaced after load, depending on its input", () => {
   it("a push that adds the approver role does not count a viewer", async () => {
     const policy = policyOf(
@@ -327,6 +357,67 @@ describe("a built-in replaced after load, depending on its input", () => {
     expect(replaced.status === "reproduced" ? replaced.decision.outcome : null).toBe(
       "approval_required",
     );
+  });
+
+  it("an isArray or push that widens the separation rule does not allow self-approval or a contributor", async () => {
+    const policy = policyOf(
+      {
+        lead: { grants: [grant("lead", ["ticket:refund"])] },
+        approver: { grants: [] },
+      },
+      true,
+    );
+    const requester = {
+      type: "human" as const,
+      id: "u-req",
+      roles: [
+        { role: "lead", scope: all },
+        { role: "approver", scope: all },
+      ],
+      act: null,
+    };
+    const selfRequest = { ...request("lead"), subject: requester };
+    const digest = requestDigest(policy, selfRequest);
+    const by = (id: string) => ({
+      approver: { type: "human", id, roles: [{ role: "approver", scope: all }], act: null },
+      approvedAt: "2026-01-15T10:05:00.000Z",
+      requestDigest: digest,
+    });
+    // The rule is built only here, so each run starts from the strict default of the rule.
+    const inputOf = () => ({
+      request: selfRequest,
+      now: "2026-01-15T10:10:00.000Z",
+      approvals: [by("u-req"), by("u-con")],
+      priorRequests: [],
+      separation: {
+        version: "v1",
+        requesterMayApprove: false,
+        roleSeparation: "simple",
+        contributors: ["u-con"],
+      },
+    });
+    const clean = short(await evaluateApprovals(policy, inputOf()));
+    ruleRewrites = 0;
+    // The replacement sees the caller's input too; hand it a copy whose rule is frozen, so only
+    // permitkit's own copies could be widened.
+    const frozenInput = () => {
+      const input = inputOf();
+      Object.freeze(input.separation.contributors);
+      Object.freeze(input.separation);
+      return input;
+    };
+    const isArrayRun = short(
+      await withIsArray(widenRule, () => evaluateApprovals(policy, frozenInput())),
+    );
+    const pushRun = short(
+      await withPush(dropContributor, () => evaluateApprovals(policy, frozenInput())),
+    );
+    expect({ clean, isArrayRun, pushRun, rewrites: ruleRewrites }).toEqual({
+      clean: "pending/approvals_pending counted=0",
+      isArrayRun: "pending/approvals_pending counted=0",
+      pushRun: "pending/approvals_pending counted=0",
+      rewrites: 0,
+    });
   });
 
   it("a push that changes the copied record in place keeps a forged record diverged", async () => {
