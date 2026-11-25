@@ -45,6 +45,8 @@ jobs:
         run: pnpm bundle-check
       - name: Compile a consumer file against the built types
         run: pnpm consumer-types
+      - name: Check the files that the npm tarball holds
+        run: pnpm pack-check
       - name: Dependency audit
         run: pnpm audit --audit-level=moderate
 

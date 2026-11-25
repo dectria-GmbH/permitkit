@@ -51,7 +51,8 @@
     "smoke": "node scripts/smoke.mjs && node --experimental-vm-modules scripts/smoke-vm.mjs",
     "bundle-check": "node scripts/bundle-check.mjs",
     "consumer-types": "tsc -p test/consumer/tsconfig.json",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build && pnpm smoke && pnpm bundle-check && pnpm consumer-types"
+    "pack-check": "node scripts/pack-check.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build && pnpm smoke && pnpm bundle-check && pnpm consumer-types && pnpm pack-check"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
