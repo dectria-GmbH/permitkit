@@ -144,7 +144,7 @@ The private field also makes the `PermitkitError` type nominal. An object litera
 
 ## Size bounds
 
-Before schema validation, every input is copied through a size guard (`src/bounds.ts`). Input
+Before validation, every input is copied through a size guard (`src/bounds.ts`). Input
 that is not plain data (objects other than plain objects and arrays, hidden keys, holes; see the
 threat model in the README for the one gap) is
 unusable as a whole and gives a deny. Getters and setters count as not plain data; the guard reads
@@ -162,9 +162,9 @@ that throws could identify, with a swapped prototype, also copies as its own key
 it has none; Node refuses it (see the README threat model). An error is identified there only
 where the runtime has `Error.isError`. A swapped typed array or boxed string is refused before
 its keys are read, on both paths, so its size costs nothing.
-The guard stays in front of every validator. Requests and policy documents use hand-written
-validators. Approval inputs and decision records still use Zod 3, which validates every item of
-an oversized array and keeps one issue per failing item (GHSA-mrhx-c7xc-m3w5, no fix in Zod 3).
+The guard stays in front of every validator. Every input (requests, policy documents, approval
+inputs and stored decision records) uses permitkit's own validators, which check every item of a
+list, also of a list longer than its limit; the guard bounds that work.
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Audit records: 300,000 values, and the request inside meets the request
 bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.
