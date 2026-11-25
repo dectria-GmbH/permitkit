@@ -417,7 +417,12 @@ async function evaluateApprovalsUnguarded(
 }
 
 /** The detail of a proof that is not counted because a promise hook changed. */
-const hooksChanged = "a then on a built-in prototype, or a replaced Promise.prototype.then";
+const hooksChanged =
+  "a then on a built-in prototype, or a replaced Promise.prototype.then, " +
+  "Promise.prototype.constructor or Promise[Symbol.species]";
+
+/** The detail of a proof whose result is a thenable but not a native promise. */
+const foreignThenable = "verifier returned a thenable that is not a native promise";
 
 async function checkProof(
   approval: Approval,
@@ -447,6 +452,10 @@ async function checkProof(
       verifier.verify(proof, { approverId, requestDigest: digestValue }),
     );
     if (!promiseHooksIntact()) return proofRejection("proof_invalid", hooksChanged);
+    // The captured then threw for a promise or thenable: a getter on its constructor or species
+    // may have changed the value, so it never counts.
+    if (settled.refused === "promise") return proofRejection("proof_invalid", hooksChanged);
+    if (settled.refused === "thenable") return proofRejection("proof_invalid", foreignThenable);
     const verification = settled.value;
     // Count only the exact success shape. Anything else, also a truthy string, is a rejection.
     // Own properties only: an inherited `valid` or echo must never count.
@@ -455,9 +464,7 @@ async function checkProof(
       if (typeof reason === "string") return proofRejection("proof_invalid", reason);
       return proofRejection(
         "proof_invalid",
-        hasThen(verification)
-          ? "verifier returned a thenable that is not a native promise"
-          : "verifier did not confirm",
+        hasThen(verification) ? foreignThenable : "verifier did not confirm",
       );
     }
     if (

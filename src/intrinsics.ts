@@ -52,6 +52,7 @@ const sliceMethod = String.prototype.slice;
 const indexOfMethod = String.prototype.indexOf;
 const toISOStringMethod = Date.prototype.toISOString;
 const promiseThenMethod = Promise.prototype.then;
+const speciesDescriptor = getOwnPropertyDescriptor(Promise, Symbol.species);
 const setUTCFullYearMethod = Date.prototype.setUTCFullYear;
 const getUTCDateMethod = Date.prototype.getUTCDate;
 /* oxlint-enable typescript/unbound-method */
@@ -275,19 +276,36 @@ export function awaitable<T>(promise: Promise<T>): Promise<T> {
 
 /**
  * False if a `then` on Object.prototype, Array.prototype or Function.prototype could turn a
- * plain value into a thenable, or if Promise.prototype.then is not the captured one. A verifier
- * that is an async function resolves its own promise with its result, and that resolution reads
- * `then` through the prototype chain before permitkit sees the value. Reads descriptors only,
- * so no getter runs.
+ * plain value into a thenable, or if Promise.prototype.then, Promise.prototype.constructor or
+ * Promise[Symbol.species] is not the one found at load. A verifier that is an async function
+ * resolves its own promise with its result, and that resolution reads `then` through the
+ * prototype chain before permitkit sees the value. The captured then reads `constructor` and
+ * Symbol.species of the verifier's promise, and a getter there runs with that promise as
+ * `this`. Reads descriptors only, so no getter runs.
  */
 export function promiseHooksIntact(): boolean {
   if (hasOwn(objectPrototype, "then") || hasOwn(arrayPrototype, "then")) return false;
   if (hasOwn(functionPrototype, "then")) return false;
-  const descriptor = getOwnPropertyDescriptor(promisePrototype, "then");
+  const then = getOwnPropertyDescriptor(promisePrototype, "then");
+  if (then === undefined || !hasOwn(then, "value") || then.value !== promiseThenMethod) {
+    return false;
+  }
+  const constructor = getOwnPropertyDescriptor(promisePrototype, "constructor");
+  if (
+    constructor === undefined ||
+    !hasOwn(constructor, "value") ||
+    constructor.value !== PromiseConstructor
+  ) {
+    return false;
+  }
+  const species = getOwnPropertyDescriptor(PromiseConstructor, Symbol.species);
   return (
-    descriptor !== undefined &&
-    hasOwn(descriptor, "value") &&
-    descriptor.value === promiseThenMethod
+    species !== undefined &&
+    speciesDescriptor !== undefined &&
+    hasOwn(species, "get") &&
+    hasOwn(species, "set") &&
+    species.get === speciesDescriptor.get &&
+    species.set === speciesDescriptor.set
   );
 }
 
@@ -304,27 +322,62 @@ export function hasThen(value: unknown): boolean {
 }
 
 /**
+ * True if Promise.prototype is on the value's prototype chain, or if an object on it has a
+ * `then`. Runs no getter. A chain longer than 64 counts as true.
+ */
+function promiseLike(value: object): { readonly promise: boolean; readonly thenable: boolean } {
+  let current: object | null = value;
+  let thenable = false;
+  for (let depth = 0; current !== null; depth += 1) {
+    if (depth >= 64 || current === promisePrototype) return { promise: true, thenable: true };
+    if (hasOwn(current, "then")) thenable = true;
+    const next: unknown = getPrototypeOf(current);
+    current = typeof next === "object" || typeof next === "function" ? next : null;
+  }
+  return { promise: false, thenable };
+}
+
+/** The result of settledValue. `refused` is set if the value must not count as a result. */
+export interface Settled {
+  readonly value: unknown;
+  readonly refused?: "promise" | "thenable";
+}
+
+/**
  * The settled value of a native promise, or the value itself for anything else, in a box
  * without a prototype. `await` on a value reads `then` through the prototype chain, and on a
  * native promise it reads `constructor`: a polluted Object.prototype.then or a replaced
  * Promise.prototype.constructor and then could choose the value. Here a native promise is read
- * through the captured then, and every other value, also a thenable, is taken as it is.
+ * through the captured then, and every other value is taken as it is.
+ *
+ * The captured then reads `constructor` and Symbol.species of the promise, and a getter there
+ * runs with the promise as `this`: it can give the promise own fields and then make then throw.
+ * So the prototype chain is read before then runs. If then throws for a value that has
+ * Promise.prototype or a `then` on its chain, the value is refused, never taken as it is.
  */
-export function settledValue(value: unknown): Promise<{ readonly value: unknown }> {
-  const promise = new PromiseConstructor<{ readonly value: unknown }>((resolve, reject) => {
+export function settledValue(value: unknown): Promise<Settled> {
+  const promise = new PromiseConstructor<Settled>((resolve, reject) => {
     const box = (item: unknown) => {
       const result = bareObject<{ value: unknown }>();
       result.value = item;
       resolve(result);
     };
     if ((typeof value === "object" && value !== null) || typeof value === "function") {
+      const shape = promiseLike(value);
       try {
         // Throws a TypeError at once if the value is not a native promise.
         // The promise that then returns settles with the value; nothing reads it.
         void apply(promiseThenMethod, value, [box, reject]);
         return;
       } catch {
-        // Not a native promise, or its species constructor failed: use the value as it is.
+        // Not a native promise, or its constructor or species failed.
+      }
+      if (shape.thenable) {
+        const result = bareObject<{ value: unknown; refused: "promise" | "thenable" }>();
+        result.value = undefined;
+        result.refused = shape.promise ? "promise" : "thenable";
+        resolve(result);
+        return;
       }
     }
     box(value);

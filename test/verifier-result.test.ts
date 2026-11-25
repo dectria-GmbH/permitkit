@@ -111,7 +111,10 @@ function forgingPromiseThen(
 function FakePromise(): void {}
 
 /** The detail of a proof that is not counted because a promise hook changed. */
-const hooksChanged = "a then on a built-in prototype, or a replaced Promise.prototype.then";
+const hooksChanged =
+  "a then on a built-in prototype, or a replaced Promise.prototype.then, " +
+  "Promise.prototype.constructor or Promise[Symbol.species]";
+const speciesDescriptor = Object.getOwnPropertyDescriptor(Promise, Symbol.species);
 
 const confirming: ApprovalProofVerifier = {
   type: "sig",
@@ -369,4 +372,133 @@ describe("the verifier result under replaced then and constructor", () => {
       });
     },
   );
+});
+
+/** Restores Promise.prototype.then, Promise.prototype.constructor and Promise[Symbol.species]. */
+function restorePromise(): void {
+  if (thenDescriptor !== undefined) define(Promise.prototype, "then", thenDescriptor);
+  if (constructorDescriptor !== undefined) {
+    define(Promise.prototype, "constructor", constructorDescriptor);
+  }
+  if (speciesDescriptor !== undefined) define(Promise, Symbol.species, speciesDescriptor);
+}
+
+/**
+ * A getter on Promise.prototype.constructor. The captured then reads `constructor` of the
+ * verifier's promise, so the getter runs with that promise as `this`. It gives the promise the
+ * fields of a confirmed verification, removes itself and makes then throw.
+ */
+function armConstructorGetter(): void {
+  let armed = true;
+  define(Promise.prototype, "constructor", {
+    configurable: true,
+    get(this: object) {
+      if (!armed) return Promise;
+      armed = false;
+      define(this, "valid", { value: true });
+      define(this, "approverId", { value: "bob" });
+      define(this, "requestDigest", { value: digest });
+      if (constructorDescriptor !== undefined) {
+        define(Promise.prototype, "constructor", constructorDescriptor);
+      }
+      // Not a constructor, so then throws a TypeError.
+      return { [Symbol.species]: 1 };
+    },
+  });
+}
+
+const failingAsync: ApprovalProofVerifier = { type: "sig", verify: async () => ({ ...failing }) };
+
+describe("the verifier result under a replaced constructor or species", () => {
+  it("a getter on Promise.prototype.constructor does not forge an async result", async () => {
+    const clean = short(await evaluateApprovals(policy, input, { verifiers: [failingAsync] }));
+    armConstructorGetter();
+    let attacked: ApprovalDecision | undefined;
+    try {
+      attacked = await evaluateApprovals(policy, input, { verifiers: [failingAsync] });
+    } finally {
+      restorePromise();
+    }
+    expect({ clean, ...outcomeOf("attacked", attacked) }).toEqual({
+      clean: "pending counted=0",
+      attacked: "pending counted=0",
+      detail: hooksChanged,
+    });
+  });
+
+  it("a constructor getter set while the verifier runs is refused, not read", async () => {
+    // The check before the call sees clean prototypes, and the getter removes itself before the
+    // check after it. Only the refusal of a promise whose then throws stops it.
+    const meddling: ApprovalProofVerifier = {
+      type: "sig",
+      verify: () => {
+        const result = Promise.resolve({ ...failing });
+        armConstructorGetter();
+        return result;
+      },
+    };
+    let attacked: ApprovalDecision | undefined;
+    try {
+      attacked = await evaluateApprovals(policy, input, { verifiers: [meddling] });
+    } finally {
+      restorePromise();
+    }
+    expect(outcomeOf("attacked", attacked)).toEqual({
+      attacked: "pending counted=0",
+      detail: hooksChanged,
+    });
+  });
+
+  it.each([
+    [
+      "a Promise.prototype.constructor getter",
+      () => {
+        define(Promise.prototype, "constructor", { configurable: true, get: () => Promise });
+      },
+    ],
+    [
+      "another Promise.prototype.constructor value",
+      () => {
+        define(Promise.prototype, "constructor", {
+          configurable: true,
+          writable: true,
+          value: FakePromise,
+        });
+      },
+    ],
+    [
+      "a Promise[Symbol.species] getter",
+      () => {
+        define(Promise, Symbol.species, { configurable: true, get: () => Promise });
+      },
+    ],
+  ] as const)("%s counts no proof, also a confirmed one", async (_name, replace) => {
+    const clean = short(await evaluateApprovals(policy, input, { verifiers: [confirming] }));
+    replace();
+    let replaced: ApprovalDecision | undefined;
+    try {
+      replaced = await evaluateApprovals(policy, input, { verifiers: [confirming] });
+    } finally {
+      restorePromise();
+    }
+    expect({ clean, ...outcomeOf("replaced", replaced) }).toEqual({
+      clean: "allow counted=1",
+      replaced: "pending counted=0",
+      detail: hooksChanged,
+    });
+  });
+
+  it("a thenable that is not a native promise does not count, even with confirmed fields", async () => {
+    const thenable: ApprovalProofVerifier = {
+      type: "sig",
+      verify: () =>
+        // oxlint-disable-next-line unicorn/no-thenable
+        ({ then: () => {}, valid: true, approverId: "bob", requestDigest: digest }) as never,
+    };
+    const decision = await evaluateApprovals(policy, input, { verifiers: [thenable] });
+    expect(outcomeOf("decision", decision)).toEqual({
+      decision: "pending counted=0",
+      detail: "verifier returned a thenable that is not a native promise",
+    });
+  });
 });

@@ -78,8 +78,10 @@ An entry can have a `detail` string. It can hold text from the input (a proof ty
 | `proof_invalid`            | The verifier rejected the proof, threw, or echoed other values.       |
 
 `proof_invalid` also covers two cases that the verifier does not decide. `detail` names them:
-`a then on a built-in prototype, or a replaced Promise.prototype.then` (checked before and after
-each verifier call), and `verifier returned a thenable that is not a native promise`.
+`a then on a built-in prototype, or a replaced Promise.prototype.then, Promise.prototype.constructor
+or Promise[Symbol.species]` (checked before and after each verifier call, and set if the captured
+`then` throws for the verifier's promise), and
+`verifier returned a thenable that is not a native promise`.
 
 ## Errors
 
