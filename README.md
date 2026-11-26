@@ -317,8 +317,9 @@ Two changes break verifiers written for earlier versions:
   function and `await` the builder or the library promise inside it.
 - `expected` is frozen and has no prototype. Read its two fields. `expected.hasOwnProperty(...)`,
   `String(expected)`, a template literal such as `` `${expected}` `` and, in strict mode code, a
-  write to `expected` throw a TypeError, and `expected instanceof Object` is false. A verifier that throws gives
-  `proof_invalid` with detail `verifier failed`: a real approval then silently stops counting.
+  write to `expected` throw a TypeError, and `expected instanceof Object` is false. A verifier
+  that throws gives `proof_invalid` with detail `verifier failed`: a real approval then silently
+  stops counting.
   `JSON.stringify(expected)`, a spread, `Object.hasOwn` and `Object.keys` work.
 
 See "Replaced built-ins" in the threat model for what the check cannot see.
@@ -518,16 +519,16 @@ Not covered:
   iframe) has its own `Object.prototype`, which the check does not read: it should return an
   object without a prototype.
 
-  This check is the mitigation, and it has limits. permitkit cannot protect the awaits inside
-  your verifier code: what your WebAuthn library or database client returns there is in your
-  hands. A `then` that is set during the verifier call and removed before its result settles is
-  not seen either, and neither is a `then` on the prototype of a class in your code: the settled
-  value does not show which prototype chain its resolution read. Waiting is not the only way into that window: any read of an inherited
-  property inside the verifier can run a getter that caller code set, for example `toJSON` in
-  `JSON.stringify`. permitkit passes `expected` frozen and without a prototype, so a read on it
-  runs no such getter, but a read on your own objects can. Return the result as an object without
-  a prototype (see [Approval proofs](#approval-proofs)): then a `then` set in this window does
-  not reach the result itself.
+  This check is the mitigation, and it has limits. permitkit cannot protect the awaits inside your
+  verifier code: what your WebAuthn library or database client returns there is in your hands. A
+  `then` that is set during the verifier call and removed before its result settles is not seen
+  either, and neither is a `then` on the prototype of a class in your code: the settled value does
+  not show which prototype chain its resolution read. Waiting is not the only way into that window:
+  any read of an inherited property inside the verifier can run a getter that caller code set, for
+  example `toJSON` in `JSON.stringify`. permitkit passes `expected` frozen and without a prototype,
+  so a read on it runs no such getter, but a read on your own objects can. Return the result as an
+  object without a prototype (see [Approval proofs](#approval-proofs)): then a `then` set in this
+  window does not reach the result itself.
 
 - Promises in `evaluateApprovals`. permitkit gives an own `constructor` (the captured `Promise`)
   and an own `then` to the promise that `evaluateApprovals` returns, to the promises that it
