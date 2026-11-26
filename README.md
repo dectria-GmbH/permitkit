@@ -296,9 +296,10 @@ your code is not seen, and neither is a `then` that is set and removed again bef
 settles. The remedy is a result without a prototype: it gives such a `then` nothing to find.
 
 In an async `verify`, write `return await lib()` for a library promise, never `return lib()`.
-An async function that returns a promise reads that promise's `then` when it returns. A
-`Promise.prototype.then` that caller code sets and removes in that moment can then forge the
-result.
+An async function that returns a promise reads that promise's `then` when it returns.
+`return await` removes this extra read. It does not close the window. Every `await` inside
+`verify`, this one too, still reads `Promise.prototype.constructor`. A hook that caller code
+sets and removes in that window is not seen. This is the same limit as a self-removing `then`.
 
 The capture happens when permitkit loads, so load permitkit before code you do not trust. Code
 that runs first can, for example, replace `globalThis.Map`, and permitkit then captures the

@@ -67,7 +67,9 @@ export type ProofVerification =
  * never return one, such as a caught DOMException. It cannot see a `then` on a class of caller
  * code, or a `then` that is set and removed while the verifier runs. Return a native
  * promise or a plain value: any other thenable, for example a query builder, never counts.
- * In an async `verify`, `return await` a library promise; never return it directly.
+ * In an async `verify`, `return await` a library promise; never return it directly. That
+ * removes the extra `then` read at return. Every `await` in `verify`, this one too, still reads
+ * `Promise.prototype.constructor`. A hook set and removed in that window is not seen.
  */
 export interface ApprovalProofVerifier {
   readonly type: string;

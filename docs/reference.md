@@ -99,8 +99,9 @@ is the limit of a class of caller code, with the same remedy. The second
 covers a verifier that returns a thenable that is not a native promise, for example a query
 builder of an ORM: such a result never counts. Make `verify` an `async` function that awaits
 the builder. In an async `verify`, `return await` a library promise and never return it
-directly: the return reads the promise's `then`, and a `Promise.prototype.then` that is set and
-removed in that moment can forge the result.
+directly. `return await` removes the extra `then` read at return. Every `await` inside
+`verify`, this one too, still reads `Promise.prototype.constructor`. A hook that is set and
+removed in that window is not seen, the same limit as a self-removing `then`.
 
 ## Errors
 
