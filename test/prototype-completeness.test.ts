@@ -1,8 +1,9 @@
-// A guard against the next missing intrinsic. permitkit captures the ECMAScript built-in
-// prototypes at load (src/intrinsics.ts). This test lists every prototype that the runtime has,
-// from a fixed list of ECMAScript constructor names (ECMA-262 and ECMA-402) plus the hidden
-// intrinsics that only an expression reaches. It plants an own `then` on each one and expects
-// promiseHooksIntact() to refuse. A prototype that permitkit did not capture fails here by name.
+// A guard against a missing intrinsic. permitkit captures the ECMAScript built-in prototypes at
+// load (src/intrinsics.ts). This test checks the prototypes of a fixed list of ECMAScript
+// constructor names (ECMA-262 and ECMA-402) plus the hidden intrinsics that only an expression
+// reaches. It does not enumerate the runtime: a constructor that is not on the list is not
+// checked. It plants an own `then` on each one and expects promiseHooksIntact() to refuse. A
+// prototype that permitkit did not capture fails here by name.
 import { afterEach, describe, expect, it } from "vitest";
 
 import { promiseHooksIntact } from "../src/intrinsics.js";
@@ -172,7 +173,7 @@ afterEach(() => {
 
 const found = enumerate();
 
-describe("every ECMAScript prototype of the runtime is checked for a then", () => {
+describe("every prototype on the fixed list of ECMAScript names is checked for a then", () => {
   it("finds the prototypes (control: the list is not empty)", () => {
     const names = found.map((entry) => entry.name);
     expect(names).toContain("Error.prototype");
