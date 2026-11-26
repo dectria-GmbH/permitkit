@@ -290,6 +290,19 @@ verifier runs is not seen, and neither is a `then` on another prototype of the r
 example `Error.prototype` if the verifier returns an `Error`. A result without a prototype gives
 such a `then` nothing to find.
 
+Two changes break verifiers written for earlier versions:
+
+- `verify` must return a native promise or a plain value. permitkit does not await any other
+  thenable, for example a query builder of an ORM or a promise from a promise library: such a
+  result never counts (`proof_invalid`, detail
+  `verifier returned a thenable that is not a native promise`). Make `verify` an `async`
+  function and `await` the builder or the library promise inside it.
+- `expected` is frozen and has no prototype. Read its two fields. `expected.hasOwnProperty(...)`,
+  `String(expected)`, a template literal such as `` `${expected}` `` and, in strict mode code, a
+  write to `expected` throw a TypeError, and `expected instanceof Object` is false. A verifier that throws gives
+  `proof_invalid` with detail `verifier failed`: a real approval then silently stops counting.
+  `JSON.stringify(expected)`, a spread, `Object.hasOwn` and `Object.keys` work.
+
 See "Replaced built-ins" in the threat model for what the check cannot see.
 
 ### Separation of duties
