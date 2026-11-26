@@ -265,6 +265,70 @@ describe("an object with a then put into the prototype chain of a built-in proto
   });
 });
 
+/**
+ * An async verifier that plants a hook with `plant` during its own I/O, after the check before
+ * the call, and then rejects the proof with a result made by `make`.
+ */
+function plantingDuringIo(plant: () => void, make: () => object): ApprovalProofVerifier {
+  return {
+    type: "sig",
+    verify: async () => {
+      setTimeout(plant, 1);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return Object.assign(make(), { valid: false, reason: "bad signature" }) as never;
+    },
+  };
+}
+
+/** The decision when `plant` runs during the verifier's I/O. */
+async function plantedDuringIo(plant: () => void, make: () => object) {
+  fired = 0;
+  const verifier = plantingDuringIo(plant, make);
+  return {
+    hooked: summary(await evaluateApprovals(policy, input, { verifiers: [verifier] })),
+    fired,
+  };
+}
+
+/** Defines a lasting forging `then` own on `prototype`. */
+const lastingThen = (prototype: object) => () => {
+  // oxlint-disable-next-line unicorn/no-thenable
+  define(prototype, "then", { value: forgingThen, writable: true, configurable: true });
+  polluted.push(prototype);
+};
+
+/** Puts an object with a forging `then` between Map.prototype and its parent. */
+const reparentMap = () => {
+  const parent = Reflect.getPrototypeOf(Map.prototype);
+  const evil: object = Object.create(parent) as object;
+  // oxlint-disable-next-line unicorn/no-thenable
+  define(evil, "then", { value: forgingThen, writable: true, configurable: true });
+  Reflect.setPrototypeOf(Map.prototype, evil);
+  reparented.push([Map.prototype, parent]);
+};
+
+describe("a hook planted during the verifier's I/O, after the check before the call", () => {
+  // The forging then runs when the verifier's promise resolves, but the check after the result
+  // settles refuses the proof.
+  const afterRefused = { hooked: { outcome: "pending counted=0", detail: hooksChanged }, fired: 1 };
+
+  it("a lasting then on Map.prototype, with a Map result", async () => {
+    expect(await plantedDuringIo(lastingThen(Map.prototype), () => new Map())).toEqual(
+      afterRefused,
+    );
+  });
+
+  it("a lasting then on Error.prototype, with an Error result", async () => {
+    expect(await plantedDuringIo(lastingThen(Error.prototype), () => new Error("bad"))).toEqual(
+      afterRefused,
+    );
+  });
+
+  it("an object with a then put between Map.prototype and its parent", async () => {
+    expect(await plantedDuringIo(reparentMap, () => new Map())).toEqual(afterRefused);
+  });
+});
+
 describe("limit: a then on the prototype of a class of caller code", () => {
   it("is not seen, so the result counts; return a result without a prototype instead", async () => {
     class Result {
