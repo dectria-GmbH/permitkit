@@ -95,34 +95,37 @@ function prototypeOf(owner: object | undefined, name: string): object | undefine
   return typeof prototype === "object" && prototype !== null ? prototype : undefined;
 }
 
+/** A global object such as Intl, if the runtime has it. */
+function globalObject(name: string): object | undefined {
+  const value = Reflect.getOwnPropertyDescriptor(globalThis, name)?.value as unknown;
+  return typeof value === "object" && value !== null ? value : undefined;
+}
+
+function* generatorShape(): Generator<number> {
+  yield 0;
+}
+async function* asyncGeneratorShape(): AsyncGenerator<number> {
+  yield 0;
+}
+
 function enumerate(): Found[] {
   const found: Found[] = [];
   const add = (name: string, prototype: unknown) => {
     if (typeof prototype === "object" && prototype !== null) found.push({ name, prototype });
     else if (typeof prototype === "function") found.push({ name, prototype });
   };
-  const owner = (name: string): object | undefined => {
-    const value = Reflect.getOwnPropertyDescriptor(globalThis, name)?.value as unknown;
-    return typeof value === "object" && value !== null ? value : undefined;
-  };
   for (const name of ecmaScriptConstructors)
     add(`${name}.prototype`, prototypeOf(globalThis, name));
   for (const name of intlConstructors)
-    add(`Intl.${name}.prototype`, prototypeOf(owner("Intl"), name));
+    add(`Intl.${name}.prototype`, prototypeOf(globalObject("Intl"), name));
   for (const name of temporalConstructors) {
-    add(`Temporal.${name}.prototype`, prototypeOf(owner("Temporal"), name));
+    add(`Temporal.${name}.prototype`, prototypeOf(globalObject("Temporal"), name));
   }
 
   // Hidden intrinsics, reached by an expression.
   const getPrototypeOf = Object.getPrototypeOf as (value: unknown) => object;
   const arrayIterator = getPrototypeOf([].values());
   const iteratorPrototype = getPrototypeOf(arrayIterator);
-  const generatorShape = function* () {
-    yield 0;
-  };
-  const asyncGeneratorShape = async function* () {
-    yield 0;
-  };
   const asyncGeneratorPrototype = getPrototypeOf(getPrototypeOf(asyncGeneratorShape()));
   add("%TypedArray%.prototype", getPrototypeOf(Uint8Array.prototype));
   add("%IteratorPrototype%", iteratorPrototype);

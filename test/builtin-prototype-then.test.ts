@@ -175,9 +175,7 @@ const iteratorConstructor = (
   globalThis as unknown as { Iterator: { from(source: object): object } }
 ).Iterator;
 const makeWrapped = () =>
-  iteratorConstructor.from(
-    Object.assign(Object.create(null) as object, { next: () => ({}) }),
-  ) as object;
+  iteratorConstructor.from(Object.assign(Object.create(null) as object, { next: () => ({}) }));
 const wrapForValidIteratorPrototype = Object.getPrototypeOf(makeWrapped()) as object;
 
 describe("a then on a built-in prototype of the verifier result", () => {
