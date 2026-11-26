@@ -342,18 +342,127 @@ export function awaitable<T>(promise: Promise<T>): Promise<T> {
   return promise;
 }
 
+/** The own data property `prototype` of a constructor on globalThis, if the runtime has one. */
+function optionalPrototype(name: string): unknown {
+  const constructor = ownDataValue(globalThis, name);
+  return typeof constructor === "function" ? ownDataValue(constructor, "prototype") : undefined;
+}
+
+function* generatorShape(): Generator<number> {
+  yield 0;
+}
+async function* asyncGeneratorShape(): AsyncGenerator<number> {
+  yield 0;
+}
+
 /**
- * False if a `then` on Object.prototype, Array.prototype or Function.prototype could turn a
- * plain value into a thenable, or if Promise.prototype.then, Promise.prototype.constructor or
- * Promise[Symbol.species] is not the one found at load. A verifier that is an async function
- * resolves its own promise with its result, and that resolution reads `then` through the
- * prototype chain before permitkit sees the value. The captured then reads `constructor` and
- * Symbol.species of the verifier's promise, and a getter there runs with that promise as
- * `this`. Reads descriptors only, so no getter runs.
+ * Every built-in prototype other than Object.prototype, Array.prototype, Function.prototype and
+ * Promise.prototype, captured at load. A verifier result that inherits from one of them, for
+ * example an Error, is resolved through a `then` there. Promise.prototype has its own `then`
+ * and is checked on its own. Prototypes that a runtime may lack are read from globalThis and
+ * left out if missing.
+ */
+function capturedPrototypes(): readonly object[] {
+  const arrayIterator: unknown = getPrototypeOf([].values());
+  const iteratorPrototype: unknown = getPrototypeOf(arrayIterator);
+  const generatorFunction: unknown = getPrototypeOf(generatorShape);
+  const asyncGeneratorFunction: unknown = getPrototypeOf(asyncGeneratorShape);
+  const generatorPrototype: unknown = getPrototypeOf(getPrototypeOf(generatorShape()));
+  const asyncGeneratorPrototype: unknown = getPrototypeOf(getPrototypeOf(asyncGeneratorShape()));
+  const helperMap: unknown =
+    typeof iteratorPrototype === "object" && iteratorPrototype !== null
+      ? ownDataValue(iteratorPrototype, "map")
+      : undefined;
+  const candidates: unknown[] = [
+    Error.prototype,
+    EvalError.prototype,
+    RangeError.prototype,
+    ReferenceError.prototype,
+    SyntaxError.prototype,
+    TypeError.prototype,
+    URIError.prototype,
+    optionalPrototype("AggregateError"),
+    optionalPrototype("SuppressedError"),
+    RegExp.prototype,
+    Date.prototype,
+    Map.prototype,
+    Set.prototype,
+    WeakMap.prototype,
+    WeakSet.prototype,
+    optionalPrototype("WeakRef"),
+    optionalPrototype("FinalizationRegistry"),
+    ArrayBuffer.prototype,
+    optionalPrototype("SharedArrayBuffer"),
+    DataView.prototype,
+    getPrototypeOf(Int8Array.prototype),
+    Int8Array.prototype,
+    Uint8Array.prototype,
+    Uint8ClampedArray.prototype,
+    Int16Array.prototype,
+    Uint16Array.prototype,
+    Int32Array.prototype,
+    Uint32Array.prototype,
+    optionalPrototype("Float16Array"),
+    Float32Array.prototype,
+    Float64Array.prototype,
+    BigInt64Array.prototype,
+    BigUint64Array.prototype,
+    Boolean.prototype,
+    Number.prototype,
+    String.prototype,
+    Symbol.prototype,
+    BigInt.prototype,
+    optionalPrototype("DisposableStack"),
+    optionalPrototype("AsyncDisposableStack"),
+    iteratorPrototype,
+    arrayIterator,
+    getPrototypeOf(new Map().entries()),
+    getPrototypeOf(new Set().values()),
+    getPrototypeOf(""[Symbol.iterator]()),
+    getPrototypeOf(/a/g[Symbol.matchAll]("")),
+    typeof helperMap === "function"
+      ? getPrototypeOf(apply(helperMap, [].values(), [(item: unknown) => item]))
+      : undefined,
+    generatorFunction,
+    asyncGeneratorFunction,
+    getPrototypeOf(async () => {}),
+    generatorPrototype,
+    asyncGeneratorPrototype,
+    getPrototypeOf(asyncGeneratorPrototype),
+  ];
+  const found: object[] = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (
+      ((typeof candidate === "object" && candidate !== null) || typeof candidate === "function") &&
+      candidate !== objectPrototype &&
+      candidate !== arrayPrototype &&
+      candidate !== functionPrototype &&
+      candidate !== promisePrototype &&
+      !contains(found, candidate)
+    ) {
+      append(found, candidate);
+    }
+  }
+  return freeze(found);
+}
+const builtinPrototypes = capturedPrototypes();
+
+/**
+ * False if a `then` on a built-in prototype could turn a value into a thenable, or if
+ * Promise.prototype.then, Promise.prototype.constructor or Promise[Symbol.species] is not the
+ * one found at load. The built-in prototypes are Object.prototype, Array.prototype,
+ * Function.prototype and every one in builtinPrototypes, all captured at load. A verifier that
+ * is an async function resolves its own promise with its result, and that resolution reads
+ * `then` through the prototype chain before permitkit sees the value. The captured then reads
+ * `constructor` and Symbol.species of the verifier's promise, and a getter there runs with that
+ * promise as `this`. Reads descriptors only, so no getter runs. A `then` on the prototype of a
+ * class of caller code is not seen: the settled value does not show which chain was read.
  */
 export function promiseHooksIntact(): boolean {
   if (hasOwn(objectPrototype, "then") || hasOwn(arrayPrototype, "then")) return false;
   if (hasOwn(functionPrototype, "then")) return false;
+  if (builtinThen()) return false;
   const then = getOwnPropertyDescriptor(promisePrototype, "then");
   if (then === undefined || !hasOwn(then, "value") || then.value !== promiseThenMethod) {
     return false;
@@ -375,6 +484,15 @@ export function promiseHooksIntact(): boolean {
     species.get === speciesDescriptor.get &&
     species.set === speciesDescriptor.set
   );
+}
+
+/** True if a prototype in builtinPrototypes has an own `then`. */
+function builtinThen(): boolean {
+  for (let index = 0; index < builtinPrototypes.length; index += 1) {
+    const prototype = builtinPrototypes[index];
+    if (prototype !== undefined && hasOwn(prototype, "then")) return true;
+  }
+  return false;
 }
 
 /** True if the value or an object on its prototype chain has a `then`. Runs no getter. */
