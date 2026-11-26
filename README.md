@@ -22,8 +22,8 @@ Status: 0.1, in development, not published. The API can change before 1.0.
   identity ids. Your identity layer must make sure that one person has one id.
 - **Agents act on behalf of a principal, with narrower rights.** The effective right is the
   intersection of the principal's roles and the agent grant.
-- **No framework in the core.** `compilePolicy` and `decide` use no third-party code.
-  `evaluateApprovals` and `reevaluate` still use Zod 3, the only runtime dependency.
+- **No framework, no runtime dependency.** permitkit uses no third-party code at run time. Every
+  input is checked by permitkit's own validators.
 
 ## Install
 
@@ -251,15 +251,19 @@ whose challenge is the request digest. permitkit defines the interface and does 
 WebAuthn:
 
 ```ts
+// A copy of the fields in an object without a prototype (see below).
+const { assign, create } = Object;
+const bare = <T extends object>(fields: T): T => assign(create(null), fields);
+
 const verifier: ApprovalProofVerifier = {
   type: "webauthn",
   async verify(proof, expected) {
     // Your WebAuthn library checks the signature against the approver's stored credentials.
     const credentials = await loadCredentials(expected.approverId);
     const assertion = await verifyAssertion(proof.payload, credentials, { timeoutMs: 5000 });
-    if (!assertion.ok) return { valid: false, reason: assertion.error };
+    if (!assertion.ok) return bare({ valid: false, reason: assertion.error });
     // Return what the signature covers. Never copy the values from `expected`.
-    return { valid: true, approverId: assertion.userId, requestDigest: assertion.challenge };
+    return bare({ valid: true, approverId: assertion.userId, requestDigest: assertion.challenge });
   },
 };
 await evaluateApprovals(policy, input, { verifiers: [verifier] });
@@ -276,6 +280,54 @@ another. permitkit waits for the verifier's promise, so give the verifier its ow
 Each entry in `rejected` can have a `detail` string. It can hold text from the input, such as a
 proof type, or the `reason` that your verifier returned. Escape it before you render it, for
 example in HTML or in a log viewer.
+
+Return every result as an object without a prototype, as `bare` does above, also a result with
+`valid: false`. `bare` uses `assign` and `create` captured when its module loads, so code that
+replaces `Object.assign` or `Object.create` later cannot change its results. The module that defines
+`bare` must also load before untrusted code. An async verifier resolves its own promise with its
+result, and that resolution reads `then` through the prototype chain. If the result is a plain
+object, code that sets `Object.prototype.then` can turn `{ valid: false }` into a confirmed result.
+Before and after each verifier call, permitkit checks the ECMAScript built-in prototypes that it
+captured at load (listed in `src/intrinsics.ts`): Object.prototype, Array.prototype,
+Function.prototype, the Error types, RegExp, Date, Map, Set, the typed arrays, the iterator
+prototypes, most Intl and Temporal prototypes and others. If one of them has an own `then`, or
+another prototype than at load, no proof counts. So a lasting `then` on these prototypes or on their
+prototype chain is caught. The list is not complete: %SegmentsPrototype% and
+%SegmentIteratorPrototype% (the results of `Intl.Segmenter`) are not checked. Built-in constructors
+(for example `Error` itself) and namespace objects are not checked either, so a function result is
+covered only through Function.prototype and the captured function prototypes. Host objects are not
+checked: DOMException, Buffer, Response, Request, Headers, URL, Blob, EventTarget, AbortSignal,
+Event, CryptoKey, streams and WebAssembly objects, and engine objects such as V8 CallSite objects.
+Never return such an object, for example a DOMException from `catch (e) { return e }`. A `then` on
+the prototype of a class in your code is not seen, and neither is a `then` or a new parent that is
+set, and undone again, before permitkit's check after the verifier call. The remedy is a result
+without a prototype, also for a function result: it gives such a `then` nothing to find.
+
+In an async `verify`, write `return await lib()` for a library promise, never `return lib()`.
+An async function that returns a promise reads that promise's `then` when it returns.
+`return await` removes this extra read. It does not close the window. Every `await` inside
+`verify`, this one too, still reads `Promise.prototype.constructor`. A hook that caller code
+sets and removes in that window is not seen. This is the same limit as a self-removing `then`.
+
+The capture happens when permitkit loads, so load permitkit before code you do not trust. Code
+that runs first can, for example, replace `globalThis.Map`, and permitkit then captures the
+prototype of the replacement.
+
+Two changes break verifiers written for earlier versions:
+
+- `verify` must return a native promise or a plain value. permitkit does not await any other
+  thenable, for example a query builder of an ORM or a promise from a promise library: such a
+  result never counts (`proof_invalid`, detail
+  `verifier returned a thenable that is not a native promise`). Make `verify` an `async`
+  function and `await` the builder or the library promise inside it.
+- `expected` is frozen and has no prototype. Read its two fields. `expected.hasOwnProperty(...)`,
+  `String(expected)`, a template literal such as `` `${expected}` `` and, in strict mode code, a
+  write to `expected` throw a TypeError, and `expected instanceof Object` is false. A verifier
+  that throws gives `proof_invalid` with detail `verifier failed`: a real approval then silently
+  stops counting.
+  `JSON.stringify(expected)`, a spread, `Object.hasOwn` and `Object.keys` work.
+
+See "Replaced built-ins" in the threat model for what the check cannot see.
 
 ### Separation of duties
 
@@ -391,7 +443,8 @@ The SHA-256 for digests is part of permitkit, so digests are the same in every r
 
 Covered: caller code that changes a built-in after permitkit has loaded. permitkit captures every
 built-in that `decide`, `explain`, `evaluate`, `requestDigest`, `parseRequest`, `compilePolicy`,
-`canonicalJson`, `digest`, the size guard and the validators call, when it loads. That covers:
+`canonicalJson`, `digest`, `evaluateApprovals`, `reevaluate`, `toDecisionRecord`,
+`decideAndRecord`, the size guard and the validators call, when it loads. That covers:
 
 - prototype methods, for example `Array.prototype.some`, `Array.prototype.includes`,
   `Set.prototype.has`, `Map.prototype.get`, `RegExp.prototype.exec`, `String.prototype.slice` and
@@ -413,63 +466,112 @@ built-in that `decide`, `explain`, `evaluate`, `requestDigest`, `parseRequest`, 
 Such a change gives the same decisions, digests and compiled policies as without it. Three tests
 check this in both plain-data paths:
 
-- `test/call-time-spy.test.ts` wraps each of 442 built-ins (every configurable method and getter
-  of the prototypes, iterator prototypes and namespaces that the path can reach, plus the global
-  constructors) with a function that records the call and then calls the original. It also
-  records writes that reach `Array.prototype` or `Object.prototype` at a low index. On a corpus
-  of valid and invalid input, the calls above record nothing. A call that does not happen cannot
-  be answered with a wrong value, so on the paths that the corpus reaches this holds for any
-  replacement, also one that returns a crafted value for one input only.
+- `test/call-time-spy.test.ts` wraps each of 456 built-ins (every configurable method and getter
+  of the prototypes, iterator prototypes and namespaces that the path can reach, `Promise` and
+  `Promise.prototype`, plus the global constructors) with a function that records the call and
+  then calls the original. It also records writes that reach `Array.prototype` or
+  `Object.prototype` at a low index. On a corpus of valid and invalid input, the calls above
+  record nothing. For `evaluateApprovals` the corpus reaches every decision reason and every
+  rejection reason, the options checks and each kind of verifier result; the verifiers
+  themselves are caller code and are not recorded. A call that does not happen cannot be
+  answered with a wrong value, so on the paths that the corpus reaches this holds for any
+  replaced method or getter that permitkit would call, also one that returns a crafted value for
+  one input only. The spy does not see two things: a plain property lookup (for example of
+  `then` when a promise is resolved) and a call that the engine makes from a promise job, where
+  no frame of permitkit is on the stack. For promises, `test/verifier-result.test.ts` guards
+  this class: it replaces `then` and `constructor` and checks the decision itself.
 - `test/inherited-reads.test.ts` installs a getter on `Object.prototype` and `Array.prototype`
   for every name in the source and expects no read.
 - `test/replacement-fuzz.test.ts` replaces each built-in in one of five ways (returns `true`,
   `false`, `undefined`, an empty array or iterator, or throws) and compares the results with a
   clean run. `PERMITKIT_REPLACEMENT_ALL_MODES=1` runs every built-in in all five ways.
+  `test/replacement-approvals.test.ts` does the same for `evaluateApprovals` and `reevaluate`
+  in all five ways, and `test/replaced-during-validation.test.ts` replaces `push` and `isArray`
+  with functions that react to their input: each such case widened a result while Zod 3
+  validated approval inputs and records, and gives the clean result now.
 
 Not covered:
 
 - Changes made before permitkit loads. permitkit captures what it finds at that moment. Import
   permitkit before code you do not trust, or freeze the intrinsics.
-- Zod, in `evaluateApprovals` and `reevaluate`. Until approval inputs and decision records stop
-  using Zod, a built-in replaced after load can make `evaluateApprovals` count a forged approval,
-  so the result is `allow`, and can steer the status that `reevaluate` returns. Zod 3 calls
-  built-ins when it runs. A replaced `Array.prototype.push` that reacts to its input can add a
-  role to an approver, swap an approval for a forged one, or drop an entry of `priorRequests`
-  so that a prior requester may approve. Each of these turned `pending` into `allow` in a test.
-  What is covered in these two functions:
-  - `evaluateApprovals` reads the request and `now` from its plain-data copy of the input and
-    checks them with permitkit's own validators, before any Zod call. Zod then validates a
-    separate copy, so the copy that permitkit's validators read never reaches a built-in that
-    Zod calls. Only the result of permitkit's validators reaches `requestDigest`, `decide`, the
-    permission, the resource properties and the requester ids. So a replaced built-in cannot
-    give the requester a role, change the request or swap it. A proof verifier is caller code
-    too: it gets a private copy of the proof, and afterwards permitkit reads nothing that the
-    verifier can reach, except its result.
-  - `reevaluate` reads the stored request the same way, before its Zod call, and decides on
-    it. So a replaced built-in cannot change the request that it replays.
-  - The approval checks themselves (requester, duplicates, digest, window, deny rules,
-    eligibility, separation of duties, proofs) use the captured built-ins.
-
-  Not covered in these two functions: the list of approvals, each approval (approver, roles,
-  `approvedAt`, `requestDigest`, proof), `priorRequests`, and the stored record fields that
-  `reevaluate` compares (`policy`, `outcome`, `reason`, `rule`, `approval`, `requestDigest`,
-  `actorChain`). `test/replacement-approvals.test.ts` replaces each built-in in all five ways
-  above and found no widened approval result, but these replacements return the same value for
-  every input. `toDecisionRecord` and `decideAndRecord` use no Zod.
-
 - `defineCatalog`. It calls built-ins when it runs, once at startup. The catalogue it returns uses
   the captured ones.
-- Promises in `evaluateApprovals`. permitkit gives an own `constructor` to the promise that
-  `evaluateApprovals` returns and to the promises that it awaits itself. So `await` on them reads
-  neither `Promise.prototype.constructor` nor `then`. This covers a direct `await` on the returned
-  promise. It does not cover these uses, because each of them calls whatever `then` it finds,
-  which can be a replaced one: returning the promise from an async function
-  (`async () => evaluateApprovals(...)`), `Promise.all` or `Promise.race` over it, and `.then()`,
-  `.catch()` or `.finally()` on it. Act on `decision` in the same async function that runs
+- Verifiers. A verifier is caller code, and so is its result. A verifier gets a private copy of
+  the proof, and afterwards permitkit reads nothing that the verifier can reach, except its
+  result. permitkit reads a verifier's result without `await`: a native promise through the
+  captured `then`, every other value as it is. A thenable that is not a native promise is not
+  awaited, so its proof does not count.
+
+  An async verifier resolves its own promise with its result, and that resolution reads `then`
+  through the prototype chain before permitkit sees the value. The captured `then` reads the
+  `constructor` and `Promise[Symbol.species]` of the verifier's promise, and a getter there runs
+  with that promise as `this`. So before each verifier call and again after its result settles,
+  permitkit checks that no built-in prototype that it captured at load has an own `then`
+  (Object.prototype, Array.prototype, Function.prototype and the others in `src/intrinsics.ts`),
+  that none of them has another prototype than at load, and that Promise.prototype.then,
+  Promise.prototype.constructor and `Promise[Symbol.species]` are the ones it found at load. If
+  not, the proof does not count (`proof_invalid`). If the captured `then` throws for a promise
+  or a thenable, the proof does not count either. Host objects such as DOMException, Buffer,
+  Response, URL, Blob, EventTarget, CryptoKey, streams and WebAssembly objects are not checked,
+  and neither are engine objects such as V8 CallSite objects, the prototypes of
+  `Intl.Segmenter` results, built-in constructors and namespace objects.
+
+  Two changes after load do not widen these limits. A captured prototype that becomes frozen or
+  non-extensible gains no `then`. An own or inherited `then` on it is still caught by the two
+  checks. A global replaced after load, for example `globalThis.Error = X`, makes objects with
+  `X.prototype`. permitkit never captured that prototype, so this is the limit of a class of
+  caller code. The remedy is again a result without a prototype.
+
+  The check covers permitkit's own realm. A verifier from another realm (a `node:vm` context, an
+  iframe) has its own `Object.prototype`, which the check does not read: it should return an
+  object without a prototype.
+
+  This check is the mitigation, and it has limits. permitkit cannot protect the awaits inside your
+  verifier code: what your WebAuthn library or database client returns there is in your hands. A
+  `then` that is set during the verifier call and undone before permitkit's check after the call is
+  not seen either, and neither is a `then` on the prototype of a class in your code: the settled
+  value does not show which prototype chain its resolution read. Waiting is not the only way into
+  that window: any read of an inherited property inside the verifier can run a getter that caller
+  code set, for example `toJSON` in `JSON.stringify`. permitkit passes `expected` frozen and without
+  a prototype, so a read on it runs no such getter, but a read on your own objects can. Return the
+  result as an object without a prototype (see [Approval proofs](#approval-proofs)): then a `then`
+  set in this window does not reach the result itself.
+
+- Promises in `evaluateApprovals`. permitkit gives an own `constructor` (the captured `Promise`)
+  and an own `then` to the promise that `evaluateApprovals` returns, to the promises that it
+  awaits itself, and to every promise that this own `then` returns, at any depth. The own `then`
+  builds its result from the captured `Promise` and reads no `Promise[Symbol.species]`. So under
+  a replaced `Promise.prototype.then`, `Promise.prototype.constructor` or
+  `Promise[Symbol.species]`:
+  - A direct `await` on the returned promise gets the real decision.
+  - A `.then(callback)` or `.catch(callback)` on it calls the callback with the real decision,
+    and the promise that it returns carries the same own `constructor` and `then`.
+  - An async function that returns the promise, and `Promise.all` or `Promise.race` over it,
+    read it through the own `then` and get the real decision. What then reaches the caller is
+    the caller's own promise, see below.
+
+  Not covered: the promises that your own code creates around permitkit's promise, and the
+  built-ins that build them. Such a promise is a plain promise of the live `Promise`, and an
+  `await` or `.then` on it reads a replaced `Promise.prototype.constructor`, `then` or
+  `Promise[Symbol.species]`, which can hand you another decision. This holds for:
+  - Returning the promise or the decision from an async function
+    (`async () => evaluateApprovals(...)`). The own `then` hands the real decision to the promise
+    of the async function, but the caller then awaits that promise.
+  - `Promise.all` or `Promise.race` over it. The promise that the combinator returns is the
+    caller's.
+  - A `then` on `Array.prototype` or `Object.prototype` that is set after the promise has
+    settled. `Promise.all` resolves a new array, and that resolution reads `then`.
+  - `finally`. It builds its result through `Promise[Symbol.species]` and `Promise.resolve`, so a
+    replaced species changes what `await p.finally(...)` reads. `catch` is covered because it
+    goes through the own `then`.
+  - A replaced `Promise.resolve`, which changes what the combinators do.
+
+  Act on `decision` in the same async function that runs
   `const decision = await evaluateApprovals(...)`. If you return `decision` from that function, or
   pass it to another promise, a replaced `then` is called again. permitkit cannot cover these
-  other uses, because each of them ends in a promise that the caller creates. A verifier's
-  result is caller code and is awaited as it is.
+  uses, because each of them ends in a promise that the caller creates. Code that you run on the
+  decision after `evaluateApprovals` returns is yours.
+
 - Proxies on the portable path, as described above, and changes to permitkit's own exports.
 - Code with its own functions in the process can still change any other library and your own
   code around permitkit, for example the code that builds the request.

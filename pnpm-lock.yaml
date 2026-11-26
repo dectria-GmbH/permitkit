@@ -174,10 +174,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      zod:
-        specifier: 3.25.76
-        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -923,9 +919,6 @@ packages:
     engines: {node: '>=20.11'}
     hasBin: true
 
-  zod@3.25.76:
-    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
-
 snapshots:
 
   '@emnapi/core@2.0.0-beta.2':
@@ -1404,5 +1397,3 @@ snapshots:
       - msw
 
   why-is-node-running@3.2.1: {}
-
-  zod@3.25.76: {}

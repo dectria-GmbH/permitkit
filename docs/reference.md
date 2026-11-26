@@ -77,6 +77,40 @@ An entry can have a `detail` string. It can hold text from the input (a proof ty
 | `proof_verifier_missing`   | No verifier is registered for the proof type.                         |
 | `proof_invalid`            | The verifier rejected the proof, threw, or echoed other values.       |
 
+`proof_invalid` also covers two cases that the verifier does not decide. `detail` names them:
+`a then on, or a changed parent of, a built-in prototype, or a replaced Promise.prototype.then,
+Promise.prototype.constructor or Promise[Symbol.species]` (checked before and after each verifier
+call, and set if the captured `then` throws for the verifier's promise), and
+`verifier returned a thenable that is not a native promise`. The first check reads the
+ECMAScript built-in prototypes that permitkit captured at load, for example Object.prototype,
+Error.prototype, Map.prototype and the typed array, iterator and Intl prototypes, so a lasting
+`then` there is caught. It also compares the prototype of each of them with the one at load, so
+an object with a `then` put into their prototype chain is caught. The list is not complete.
+%SegmentsPrototype% and %SegmentIteratorPrototype%, the prototypes of the results of
+`Intl.Segmenter`, are not checked: reaching them needs a `new Intl.Segmenter` at load, which
+costs about 10 to 20 ms. Built-in constructors, for
+example `Error` itself, and namespace objects, for example `Math` and `JSON`, are not checked:
+a function result is covered only through Function.prototype and the captured function
+prototypes. Host objects are not checked:
+DOMException, Buffer, Response, Request, Headers, URL, Blob, EventTarget, AbortSignal, Event,
+CryptoKey, streams and WebAssembly objects, and engine objects such as V8 CallSite objects.
+Never return one, for example a caught DOMException.
+The check does not see a `then` on the prototype of a class of caller code, or a `then` or a new
+parent that is set, and undone again, before permitkit's check after the verifier call: return
+the result as an object without a prototype, also for a function result.
+The capture happens at load, so permitkit must load before untrusted code;
+code that runs first can replace a constructor, and permitkit then captures the prototype of the
+replacement. A captured prototype that becomes frozen later gains no `then`, and an own or
+inherited `then` on it is still caught. A global replaced after load, for example
+`globalThis.Error = X`, makes objects with `X.prototype`, which permitkit never captured: this
+is the limit of a class of caller code, with the same remedy. The second
+covers a verifier that returns a thenable that is not a native promise, for example a query
+builder of an ORM: such a result never counts. Make `verify` an `async` function that awaits
+the builder. In an async `verify`, `return await` a library promise and never return it
+directly. `return await` removes the extra `then` read at return. Every `await` inside
+`verify`, this one too, still reads `Promise.prototype.constructor`. A hook that is set and
+removed in that window is not seen, the same limit as a self-removing `then`.
+
 ## Errors
 
 permitkit throws only for programming and configuration errors. Decisions never throw for bad
@@ -144,7 +178,7 @@ The private field also makes the `PermitkitError` type nominal. An object litera
 
 ## Size bounds
 
-Before schema validation, every input is copied through a size guard (`src/bounds.ts`). Input
+Before validation, every input is copied through a size guard (`src/bounds.ts`). Input
 that is not plain data (objects other than plain objects and arrays, hidden keys, holes; see the
 threat model in the README for the one gap) is
 unusable as a whole and gives a deny. Getters and setters count as not plain data; the guard reads
@@ -162,9 +196,9 @@ that throws could identify, with a swapped prototype, also copies as its own key
 it has none; Node refuses it (see the README threat model). An error is identified there only
 where the runtime has `Error.isError`. A swapped typed array or boxed string is refused before
 its keys are read, on both paths, so its size costs nothing.
-The guard stays in front of every validator. Requests and policy documents use hand-written
-validators. Approval inputs and decision records still use Zod 3, which validates every item of
-an oversized array and keeps one issue per failing item (GHSA-mrhx-c7xc-m3w5, no fix in Zod 3).
+The guard stays in front of every validator. Every input (requests, policy documents, approval
+inputs and stored decision records) uses permitkit's own validators, which check every item of a
+list, also of a list longer than its limit; the guard bounds that work.
 Requests: depth 24, 20,000 values, 1,000 items per array or object, 4,096
 characters per string. Audit records: 300,000 values, and the request inside meets the request
 bounds. Policies: depth 24, 500,000 values, 10,000 items, 4,096 characters.

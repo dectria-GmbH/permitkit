@@ -29,6 +29,8 @@ export const parseDate = Date.parse;
 export const jsonText = JSON.stringify;
 export const objectPrototype: object = Object.prototype;
 export const arrayPrototype: object = Array.prototype;
+const functionPrototype: object = Function.prototype;
+const promisePrototype: object = Promise.prototype;
 const create = Object.create;
 const DateConstructor = Date;
 const SetConstructor = Set;
@@ -49,6 +51,10 @@ const regExpExecMethod = RegExp.prototype.exec;
 const sliceMethod = String.prototype.slice;
 const indexOfMethod = String.prototype.indexOf;
 const toISOStringMethod = Date.prototype.toISOString;
+const promiseThenMethod = Promise.prototype.then;
+// The key is captured, so a replaced Symbol cannot point the check at another key.
+const speciesKey = Symbol.species;
+const speciesDescriptor = getOwnPropertyDescriptor(Promise, speciesKey);
 const setUTCFullYearMethod = Date.prototype.setUTCFullYear;
 const getUTCDateMethod = Date.prototype.getUTCDate;
 /* oxlint-enable typescript/unbound-method */
@@ -252,16 +258,399 @@ export function daysInMonth(year: number, month: number): number {
   return apply(getUTCDateMethod, end, []);
 }
 
+/** The promises that awaitable marked. guardedThen reads through `await` only on these. */
+const marked = new WeakSet<object>();
+
+/** Waits for a marked promise and hands on its value or reason. Never rejects. */
+async function follow(
+  source: Promise<unknown>,
+  fulfilled: (value: unknown) => void,
+  rejected: (reason: unknown) => void,
+): Promise<void> {
+  let value: unknown;
+  try {
+    // The source has an own constructor that is the captured Promise, so `await` reads no
+    // `then`, no `constructor` through the prototype chain and no Symbol.species.
+    value = await source;
+  } catch (reason) {
+    rejected(reason);
+    return;
+  }
+  fulfilled(value);
+}
+
 /**
- * The promise, with an own `constructor` that is the captured Promise. `await` reads
- * `constructor` on a native promise: if it is not %Promise%, the promise is resolved through its
- * `then`, and replaced Promise.prototype.constructor and then methods could choose the value.
+ * The own `then` of a marked promise. The native then builds its result through
+ * Promise[Symbol.species], a getter that caller code can replace, and the promise it returns
+ * would read Promise.prototype.constructor and then when awaited. This one returns a marked
+ * promise from the captured constructor, so `await` on it, `.then` on it again, Promise.all and
+ * Promise.race read the same own markers. It calls the callbacks in the same job as the native
+ * then. On a promise that permitkit did not mark, it is the native then.
+ */
+function guardedThen(
+  this: Promise<unknown>,
+  onFulfilled?: unknown,
+  onRejected?: unknown,
+): Promise<unknown> {
+  if (!weakSetHas(marked, this)) {
+    // Not permitkit's promise: behave as the native then.
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+    return apply(promiseThenMethod, this, [onFulfilled, onRejected]) as Promise<unknown>;
+  }
+  const derived = new PromiseConstructor<unknown>((resolve, reject) => {
+    const settle = (handler: unknown, input: unknown, passOn: (value: unknown) => void) => {
+      if (typeof handler !== "function") {
+        passOn(input);
+        return;
+      }
+      try {
+        resolve(apply(handler, undefined, [input]));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    void follow(
+      this,
+      (value) => {
+        settle(onFulfilled, value, resolve);
+      },
+      (reason) => {
+        settle(onRejected, reason, reject);
+      },
+    );
+  });
+  return awaitable(derived);
+}
+freeze(guardedThen);
+
+/**
+ * The promise, with an own `constructor` that is the captured Promise and an own `then` that is
+ * guardedThen. `await` reads `constructor` on a native promise: if it is not %Promise%, the
+ * promise is resolved through its `then`, and a replaced Promise.prototype.constructor and then
+ * could choose the value. A caller that returns the promise from an async function, calls .then
+ * on it or passes it to Promise.all or Promise.race reads `then`, and gets guardedThen.
  */
 export function awaitable<T>(promise: Promise<T>): Promise<T> {
-  const descriptor = bareObject<PropertyDescriptor>();
-  descriptor.value = PromiseConstructor;
-  if (!defineOwn(promise, "constructor", descriptor)) {
+  const marker = bareObject<PropertyDescriptor>();
+  marker.value = PromiseConstructor;
+  const then = bareObject<PropertyDescriptor>();
+  then.value = guardedThen;
+  if (!defineOwn(promise, "constructor", marker) || !defineOwn(promise, "then", then)) {
     throw new TypeError("The promise could not be marked.");
   }
+  weakSetAdd(marked, promise);
   return promise;
+}
+
+/**
+ * The own data property `prototype` of a constructor on `owner` (globalThis or Intl), if the
+ * runtime has one.
+ */
+function optionalPrototype(name: string, owner: unknown = globalThis): unknown {
+  if ((typeof owner !== "object" || owner === null) && typeof owner !== "function") {
+    return undefined;
+  }
+  const constructor = ownDataValue(owner, name);
+  return typeof constructor === "function" ? ownDataValue(constructor, "prototype") : undefined;
+}
+
+/**
+ * %WrapForValidIteratorPrototype%: the prototype of what Iterator.from returns for an object
+ * that is not an Iterator. The source has no prototype, so no Symbol.iterator lookup runs.
+ */
+function wrapForValidIteratorPrototype(): unknown {
+  const iteratorConstructor = ownDataValue(globalThis, "Iterator");
+  const from =
+    typeof iteratorConstructor === "function"
+      ? ownDataValue(iteratorConstructor, "from")
+      : undefined;
+  if (typeof from !== "function") return undefined;
+  const source = bareObject<{ next: () => object }>();
+  source.next = () => bareObject();
+  const wrapped: unknown = apply(from, iteratorConstructor, [source]);
+  return typeof wrapped === "object" && wrapped !== null ? getPrototypeOf(wrapped) : undefined;
+}
+
+function* generatorShape(): Generator<number> {
+  yield 0;
+}
+async function* asyncGeneratorShape(): AsyncGenerator<number> {
+  yield 0;
+}
+
+/**
+ * The ECMAScript built-in prototypes other than Object.prototype, Array.prototype,
+ * Function.prototype and Promise.prototype, captured at load, with the prototypes of the Intl
+ * and Temporal constructors. A verifier result that inherits from one of them, for example an
+ * Error, is resolved through a `then` there. Promise.prototype has its own `then` and is checked
+ * on its own. Prototypes that a runtime may lack are read from globalThis, Intl or Temporal and
+ * left out if missing. %SegmentsPrototype% and %SegmentIteratorPrototype% are left out: reaching
+ * them builds an Intl.Segmenter, which loads locale data. Host objects are not ECMAScript
+ * built-ins.
+ */
+function capturedPrototypes(): readonly object[] {
+  const arrayIterator: unknown = getPrototypeOf([].values());
+  const iteratorPrototype: unknown = getPrototypeOf(arrayIterator);
+  const generatorFunction: unknown = getPrototypeOf(generatorShape);
+  const asyncGeneratorFunction: unknown = getPrototypeOf(asyncGeneratorShape);
+  const generatorPrototype: unknown = getPrototypeOf(getPrototypeOf(generatorShape()));
+  const asyncGeneratorPrototype: unknown = getPrototypeOf(getPrototypeOf(asyncGeneratorShape()));
+  const helperMap: unknown =
+    typeof iteratorPrototype === "object" && iteratorPrototype !== null
+      ? ownDataValue(iteratorPrototype, "map")
+      : undefined;
+  const intl: unknown = ownDataValue(globalThis, "Intl");
+  const temporal: unknown = ownDataValue(globalThis, "Temporal");
+  const candidates: unknown[] = [
+    Error.prototype,
+    EvalError.prototype,
+    RangeError.prototype,
+    ReferenceError.prototype,
+    SyntaxError.prototype,
+    TypeError.prototype,
+    URIError.prototype,
+    optionalPrototype("AggregateError"),
+    optionalPrototype("SuppressedError"),
+    RegExp.prototype,
+    Date.prototype,
+    Map.prototype,
+    Set.prototype,
+    WeakMap.prototype,
+    WeakSet.prototype,
+    optionalPrototype("WeakRef"),
+    optionalPrototype("FinalizationRegistry"),
+    ArrayBuffer.prototype,
+    optionalPrototype("SharedArrayBuffer"),
+    DataView.prototype,
+    getPrototypeOf(Int8Array.prototype),
+    Int8Array.prototype,
+    Uint8Array.prototype,
+    Uint8ClampedArray.prototype,
+    Int16Array.prototype,
+    Uint16Array.prototype,
+    Int32Array.prototype,
+    Uint32Array.prototype,
+    optionalPrototype("Float16Array"),
+    Float32Array.prototype,
+    Float64Array.prototype,
+    BigInt64Array.prototype,
+    BigUint64Array.prototype,
+    Boolean.prototype,
+    Number.prototype,
+    String.prototype,
+    Symbol.prototype,
+    BigInt.prototype,
+    optionalPrototype("DisposableStack"),
+    optionalPrototype("AsyncDisposableStack"),
+    iteratorPrototype,
+    arrayIterator,
+    getPrototypeOf(new Map().entries()),
+    getPrototypeOf(new Set().values()),
+    getPrototypeOf(""[Symbol.iterator]()),
+    getPrototypeOf(/a/g[Symbol.matchAll]("")),
+    typeof helperMap === "function"
+      ? getPrototypeOf(apply(helperMap, [].values(), [(item: unknown) => item]))
+      : undefined,
+    wrapForValidIteratorPrototype(),
+    generatorFunction,
+    asyncGeneratorFunction,
+    getPrototypeOf(async () => {}),
+    generatorPrototype,
+    asyncGeneratorPrototype,
+    getPrototypeOf(asyncGeneratorPrototype),
+    optionalPrototype("Collator", intl),
+    optionalPrototype("DateTimeFormat", intl),
+    optionalPrototype("DisplayNames", intl),
+    optionalPrototype("DurationFormat", intl),
+    optionalPrototype("ListFormat", intl),
+    optionalPrototype("Locale", intl),
+    optionalPrototype("NumberFormat", intl),
+    optionalPrototype("PluralRules", intl),
+    optionalPrototype("RelativeTimeFormat", intl),
+    optionalPrototype("Segmenter", intl),
+    optionalPrototype("Duration", temporal),
+    optionalPrototype("Instant", temporal),
+    optionalPrototype("PlainDate", temporal),
+    optionalPrototype("PlainDateTime", temporal),
+    optionalPrototype("PlainMonthDay", temporal),
+    optionalPrototype("PlainTime", temporal),
+    optionalPrototype("PlainYearMonth", temporal),
+    optionalPrototype("ZonedDateTime", temporal),
+  ];
+  const found: object[] = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (
+      ((typeof candidate === "object" && candidate !== null) || typeof candidate === "function") &&
+      candidate !== objectPrototype &&
+      candidate !== arrayPrototype &&
+      candidate !== functionPrototype &&
+      candidate !== promisePrototype &&
+      !contains(found, candidate)
+    ) {
+      append(found, candidate);
+    }
+  }
+  return freeze(found);
+}
+const builtinPrototypes = capturedPrototypes();
+
+/**
+ * Object.prototype, Array.prototype, Function.prototype, Promise.prototype and every one in
+ * builtinPrototypes. Object.prototype is listed although its [[Prototype]] cannot change.
+ */
+function chainedPrototypes(): readonly object[] {
+  const found: object[] = [objectPrototype, arrayPrototype, functionPrototype, promisePrototype];
+  for (let index = 0; index < builtinPrototypes.length; index += 1) {
+    append(found, builtinPrototypes[index]);
+  }
+  return freeze(found);
+}
+const checkedPrototypes = chainedPrototypes();
+
+/** The [[Prototype]] of each entry of checkedPrototypes at load, in the same order. */
+function parentsAtLoad(): readonly unknown[] {
+  const parents: unknown[] = [];
+  for (let index = 0; index < checkedPrototypes.length; index += 1) {
+    append(parents, getPrototypeOf(checkedPrototypes[index]));
+  }
+  return freeze(parents);
+}
+const checkedParents = parentsAtLoad();
+
+/**
+ * False if a `then` on a built-in prototype could turn a value into a thenable, or if
+ * Promise.prototype.then, Promise.prototype.constructor or Promise[Symbol.species] is not the
+ * one found at load. The built-in prototypes are Object.prototype, Array.prototype,
+ * Function.prototype and every one in builtinPrototypes, all captured at load. False also if
+ * one of them, or Promise.prototype, has another [[Prototype]] than at load. A verifier that
+ * is an async function resolves its own promise with its result, and that resolution reads
+ * `then` through the prototype chain before permitkit sees the value. The captured then reads
+ * `constructor` and Symbol.species of the verifier's promise, and a getter there runs with that
+ * promise as `this`. Reads descriptors only, so no getter runs. A `then` on the prototype of a
+ * class of caller code is not seen: the settled value does not show which chain was read.
+ */
+export function promiseHooksIntact(): boolean {
+  if (hasOwn(objectPrototype, "then") || hasOwn(arrayPrototype, "then")) return false;
+  if (hasOwn(functionPrototype, "then")) return false;
+  if (builtinThen() || parentChanged()) return false;
+  const then = getOwnPropertyDescriptor(promisePrototype, "then");
+  if (then === undefined || !hasOwn(then, "value") || then.value !== promiseThenMethod) {
+    return false;
+  }
+  const constructor = getOwnPropertyDescriptor(promisePrototype, "constructor");
+  if (
+    constructor === undefined ||
+    !hasOwn(constructor, "value") ||
+    constructor.value !== PromiseConstructor
+  ) {
+    return false;
+  }
+  const species = getOwnPropertyDescriptor(PromiseConstructor, speciesKey);
+  return (
+    species !== undefined &&
+    speciesDescriptor !== undefined &&
+    hasOwn(species, "get") &&
+    hasOwn(species, "set") &&
+    species.get === speciesDescriptor.get &&
+    species.set === speciesDescriptor.set
+  );
+}
+
+/**
+ * True if an entry of checkedPrototypes has another [[Prototype]] than at load. Code that puts
+ * an object with a `then` between a built-in prototype and its parent gives no prototype an own
+ * `then`, yet every value that inherits from it is a thenable.
+ */
+function parentChanged(): boolean {
+  for (let index = 0; index < checkedPrototypes.length; index += 1) {
+    const prototype = checkedPrototypes[index];
+    if (prototype !== undefined && getPrototypeOf(prototype) !== checkedParents[index]) return true;
+  }
+  return false;
+}
+
+/** True if a prototype in builtinPrototypes has an own `then`. */
+function builtinThen(): boolean {
+  for (let index = 0; index < builtinPrototypes.length; index += 1) {
+    const prototype = builtinPrototypes[index];
+    if (prototype !== undefined && hasOwn(prototype, "then")) return true;
+  }
+  return false;
+}
+
+/** True if the value or an object on its prototype chain has a `then`. Runs no getter. */
+export function hasThen(value: unknown): boolean {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return false;
+  let current: object | null = value;
+  for (let depth = 0; current !== null && depth < 64; depth += 1) {
+    if (hasOwn(current, "then")) return true;
+    const next: unknown = getPrototypeOf(current);
+    current = typeof next === "object" || typeof next === "function" ? next : null;
+  }
+  return false;
+}
+
+/**
+ * True if Promise.prototype is on the value's prototype chain, or if an object on it has a
+ * `then`. Runs no getter. A chain longer than 64 counts as true.
+ */
+function promiseLike(value: object): { readonly promise: boolean; readonly thenable: boolean } {
+  let current: object | null = value;
+  let thenable = false;
+  for (let depth = 0; current !== null; depth += 1) {
+    if (depth >= 64 || current === promisePrototype) return { promise: true, thenable: true };
+    if (hasOwn(current, "then")) thenable = true;
+    const next: unknown = getPrototypeOf(current);
+    current = typeof next === "object" || typeof next === "function" ? next : null;
+  }
+  return { promise: false, thenable };
+}
+
+/** The result of settledValue. `refused` is set if the value must not count as a result. */
+export interface Settled {
+  readonly value: unknown;
+  readonly refused?: "promise" | "thenable";
+}
+
+/**
+ * The settled value of a native promise, or the value itself for anything else, in a box
+ * without a prototype. `await` on a value reads `then` through the prototype chain, and on a
+ * native promise it reads `constructor`: a polluted Object.prototype.then or a replaced
+ * Promise.prototype.constructor and then could choose the value. Here a native promise is read
+ * through the captured then, and every other value is taken as it is.
+ *
+ * The captured then reads `constructor` and Symbol.species of the promise, and a getter there
+ * runs with the promise as `this`: it can give the promise own fields and then make then throw.
+ * So the prototype chain is read before then runs. If then throws for a value that has
+ * Promise.prototype or a `then` on its chain, the value is refused, never taken as it is.
+ */
+export function settledValue(value: unknown): Promise<Settled> {
+  const promise = new PromiseConstructor<Settled>((resolve, reject) => {
+    const box = (item: unknown) => {
+      const result = bareObject<{ value: unknown }>();
+      result.value = item;
+      resolve(result);
+    };
+    if ((typeof value === "object" && value !== null) || typeof value === "function") {
+      const shape = promiseLike(value);
+      try {
+        // Throws a TypeError at once if the value is not a native promise.
+        // The promise that then returns settles with the value; nothing reads it.
+        void apply(promiseThenMethod, value, [box, reject]);
+        return;
+      } catch {
+        // Not a native promise, or its constructor or species failed.
+      }
+      if (shape.thenable) {
+        const result = bareObject<{ value: unknown; refused: "promise" | "thenable" }>();
+        result.value = undefined;
+        result.refused = shape.promise ? "promise" : "thenable";
+        resolve(result);
+        return;
+      }
+    }
+    box(value);
+  });
+  return awaitable(promise);
 }

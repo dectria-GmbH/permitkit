@@ -12,12 +12,15 @@
   bundle check. The second smoke test scans `dist` for plain uses of Node built-ins and runs it in
   a V8 context without them. The scan is a tripwire, not a proof: it cannot see names built at
   run time, so never compute a global or module name in `src`.
-- Requests and policy documents use hand-written validators (`src/validate.ts`,
-  `src/request.ts`, `src/policy-document.ts`). Zod 3 is still a runtime dependency, but only
-  approval inputs (through `src/zod-schemas.ts`) and decision records (`src/audit.ts`) use it,
-  until their own validators replace it. Do not import Zod anywhere else, and do not add a
-  runtime dependency.
-  `pnpm bundle-check` fails if `decide` pulls in Zod.
+- Every input uses hand-written validators (`src/validate.ts`, `src/request.ts`,
+  `src/policy-document.ts`, `src/approval-input.ts`, `src/record.ts`). permitkit has no runtime
+  dependency; do not add one. `pnpm bundle-check` fails if `package.json` lists one or if the
+  bundle of all exports holds a module outside `dist`.
+- The validators follow the Zod 3 schemas of f04df14. `test/zod-verdicts.test.ts` compares them
+  with the recorded Zod verdicts in `test/zod-verdicts/`, which cannot be recorded again: do not
+  change the generators, seeds or run counts in `test/verdict-corpora.ts` and the modules it
+  uses. A validator never changes its input, and calls only built-ins captured in
+  `src/intrinsics.ts`; `test/call-time-spy.test.ts` checks that.
 - Absence never widens access. Never add a schema default or an optional field whose absence
   means "everywhere", "no limit" or "no deny rules"; the wide case is an explicit `kind` value. See
   "Design choices" in `README.md`.

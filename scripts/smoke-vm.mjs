@@ -5,8 +5,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
 import { allowlist, compareWithAllowlist, filesUnder } from "./portable-scan.mjs";
@@ -78,12 +77,9 @@ for (const text of ["", "abc", "Grüße", "😀 𝔘", "a\ud800b", "\udc00", "x\
     `encoding of ${JSON.stringify(text)}`,
   );
 }
-const requireFromRoot = createRequire(new URL("package.json", root));
-const zodEntry = pathToFileURL(requireFromRoot.resolve("zod").replace(/index\.cjs$/, "index.js"));
 const modules = new Map();
 function resolve(specifier, parent) {
   if (specifier.startsWith(".")) return new URL(specifier, parent).href;
-  if (specifier === "zod") return zodEntry.href;
   throw new Error(`cannot resolve ${specifier} from ${parent}`);
 }
 function load(url) {

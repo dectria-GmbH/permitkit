@@ -1,27 +1,12 @@
-import { z } from "zod";
-
-import { boundedSnapshot, detach, ownDataValue, wrapperBounds } from "./bounds.js";
+import { boundedSnapshot, wrapperBounds } from "./bounds.js";
 import { canonicalJson } from "./canonical.js";
 import { decide, parseRequest, type Decision } from "./decide.js";
-import { append } from "./intrinsics.js";
-import type { AccessRequest } from "./request.js";
-
-const recordShapeSchema = z
-  .object({
-    schema: z.literal("permitkit.decision/2"),
-    policy: z.object({ version: z.string(), digest: z.string() }).strict(),
-    request: z.unknown(),
-    requestDigest: z.string().nullable(),
-    actorChain: z.array(z.unknown()),
-    outcome: z.string(),
-    reason: z.string(),
-    rule: z.unknown(),
-    approval: z.unknown(),
-  })
-  .strict();
 import { isPermitkitError, PermitkitError } from "./errors.js";
-import { safeParse } from "./parse.js";
+import { append } from "./intrinsics.js";
 import { isCompiledPolicy, type CompiledPolicy } from "./policy.js";
+import { storedRecord } from "./record.js";
+import type { AccessRequest } from "./request.js";
+import { invalid, type Issue } from "./validate.js";
 
 export interface ActorChainEntry {
   readonly type: "human" | "service" | "agent";
@@ -119,20 +104,18 @@ export function reevaluate(policy: CompiledPolicy, record: DecisionRecord): Reev
 function reevaluateChecked(policy: CompiledPolicy, record: DecisionRecord): ReevaluationResult {
   const loaded = { version: policy.version, digest: policy.digest };
   const snapshot = boundedSnapshot(record, wrapperBounds);
-  // The request is read from the plain-data copy before any Zod call, not from the Zod output:
-  // Zod calls built-ins at call time and passes them the objects it validates, so a replaced
-  // push or Array.isArray could swap the request it returns or change it in place. Zod gets its
-  // own copy and never sees the snapshot. The status order stays: shape, policy, request.
-  const storedRequest = ownDataValue(snapshot, "request");
-  const parsed = storedRequest === null ? null : parseRequest(storedRequest);
-  const shape = safeParse(recordShapeSchema, detach(snapshot));
-  if (!shape.success) return { status: "not_replayable" };
-  // detach: a missing key must read as undefined, never as an inherited value.
-  const stored = detach(shape.data);
+  // A hand-written validator on the plain-data copy. Its output holds objects without a
+  // prototype, so a missing key reads as undefined, never as an inherited value.
+  const issues: Issue[] = [];
+  const stored = storedRecord(snapshot, null, issues);
+  if (stored === invalid) return { status: "not_replayable" };
   if (stored.policy.version !== loaded.version || stored.policy.digest !== loaded.digest) {
     return { status: "policy_mismatch", expected: stored.policy, loaded };
   }
-  if (parsed === null || !parsed.ok) return { status: "not_replayable" };
+  const storedRequest = stored.request;
+  if (storedRequest === null) return { status: "not_replayable" };
+  const parsed = parseRequest(storedRequest);
+  if (!parsed.ok) return { status: "not_replayable" };
   const decision = decide(policy, parsed.request);
   let same: boolean;
   try {

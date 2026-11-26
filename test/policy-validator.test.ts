@@ -1,12 +1,12 @@
 // Named cases for each rule of the policy validator. Each case runs through the hand-written
-// validator and the earlier Zod schema; both must give the expected verdict and first path, so a
-// failure names the rule. Cross-references (catalogue, roles, ids, proofTypes with requireProof)
+// validator and must give the expected verdict and first path, so a failure names the rule. The
+// expected verdicts are those of the earlier Zod schema; test/zod-verdicts.test.ts compares
+// seeded corpora with its recorded verdicts. Cross-references (catalogue, roles, ids, proofTypes with requireProof)
 // are checked in compilePolicy after the validator and are tested in policy.test.ts.
 import { describe, expect, it } from "vitest";
 
 import { policyDocument } from "../src/policy-document.js";
 import { maxApprovalWindowSeconds } from "../src/time.js";
-import { policySchema } from "../src/zod-schemas.js";
 import { dropAt, expectedOf, runCase, setAt, type CorpusCase } from "./differential.js";
 
 const base = (): Record<string, unknown> => ({
@@ -409,16 +409,6 @@ const cases: CorpusCase[] = [
 
 describe("policy validator rules", () => {
   it.each(cases.map((item) => [item.name, item] as const))("%s", (_name, item) => {
-    const { reference, actual, outputDifference } = runCase(
-      policySchema,
-      policyDocument,
-      base,
-      item,
-    );
-    expect({ zod: reference, handWritten: actual }).toEqual({
-      zod: expectedOf(item),
-      handWritten: expectedOf(item),
-    });
-    expect(outputDifference).toBeNull();
+    expect(runCase(policyDocument, base, item)).toBe(expectedOf(item));
   });
 });

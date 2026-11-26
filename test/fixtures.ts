@@ -88,3 +88,8 @@ export const policy = compilePolicy(catalog, policyInput);
 export function editablePolicyInput(): PolicyInput & Record<string, unknown> {
   return structuredClone(policyInput) as PolicyInput & Record<string, unknown>;
 }
+
+/** A verifier result without a prototype: the shape that README asks every verifier to return. */
+export function bare<T extends object>(fields: T): T {
+  return Object.assign<object, T>(Object.create(null) as object, fields);
+}

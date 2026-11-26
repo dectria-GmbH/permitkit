@@ -12,7 +12,7 @@ import {
   decide,
 } from "../src/index.js";
 import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
-import { catalog, editablePolicyInput, policy } from "./fixtures.js";
+import { bare, catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 const request = accessRequest(human("u-lead", role("lead", everywhere)), "ticket:read");
 
@@ -97,7 +97,7 @@ describe("functions in the input", () => {
             type: "t",
             verify: () => {
               seen = true;
-              return { valid: false, reason: "no" };
+              return bare({ valid: false, reason: "no" });
             },
           },
         ],

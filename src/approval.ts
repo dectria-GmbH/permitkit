@@ -1,24 +1,19 @@
-import { z } from "zod";
-
+import {
+  approval as approvalCheck,
+  approvalInput,
+  type Approval,
+  type ApprovalProof,
+} from "./approval-input.js";
 import {
   approvalInputBounds,
-  detach,
   maxApprovals,
   ownArrayLength,
   ownDataValue,
   requestBounds,
   snapshotOf,
 } from "./bounds.js";
-import {
-  decide,
-  denyRuleMatches,
-  parseRequest,
-  permissionOf,
-  requestDigest,
-  type Decision,
-} from "./decide.js";
+import { decide, denyRuleMatches, permissionOf, requestDigest, type Decision } from "./decide.js";
 import { scopeCovers } from "./engine/conditions.js";
-import { safeParse } from "./parse.js";
 import { isPermitkitError, PermitkitError } from "./errors.js";
 import {
   append,
@@ -37,37 +32,17 @@ import {
   newSet,
   objectKeys,
   setAdd,
+  hasThen,
+  promiseHooksIntact,
   setHas,
+  settledValue,
 } from "./intrinsics.js";
 import { internalsOf, type CompiledPolicy, type DenyRule } from "./policy.js";
 import type { ApprovalReasonCode, ApprovalRejectionCode } from "./reasons.js";
-import { instant, requestTime } from "./time.js";
-import { invalid } from "./validate.js";
-import {
-  accessRequestSchema,
-  requestTimeSchema,
-  subjectSchema,
-  timestampSchema,
-} from "./zod-schemas.js";
+import { instant } from "./time.js";
+import { invalid, type Checked, type Issue } from "./validate.js";
 
-const hexDigest = z.string().regex(/^[0-9a-f]{64}$/, "Use a lowercase hex SHA-256 digest.");
-const timestamp = timestampSchema;
-
-/**
- * Evidence that a specific person approved a specific request, for example a WebAuthn
- * assertion whose challenge is the request digest. permitkit does not interpret `payload`;
- * a verifier for the proof `type` does.
- */
-export const approvalProofSchema = z
-  .object({
-    type: z.string().min(1).max(64),
-    approverId: z.string().min(1).max(256),
-    requestDigest: hexDigest,
-    payload: z.unknown(),
-  })
-  .strict();
-
-export type ApprovalProof = z.output<typeof approvalProofSchema>;
+export type { Approval, ApprovalInput, ApprovalProof, PriorRequest } from "./approval-input.js";
 
 export type ProofVerification =
   | { readonly valid: true; readonly approverId: string; readonly requestDigest: string }
@@ -79,7 +54,28 @@ export type ProofVerification =
  * and the signed challenge. permitkit compares these with what it expects. Never copy them from
  * `expected`; that turns the comparison into a no-op, and a valid assertion for one request then
  * passes for another. `expected` is for lookups, for example to load the approver's credentials.
+ * `expected` is frozen and has no prototype, so methods such as `hasOwnProperty` are not on it.
  * The verifier should also time out on its own: permitkit waits for its promise.
+ *
+ * Rule: return every result, also `{ valid: false }`, as an object without a prototype, for
+ * example `Object.assign(Object.create(null), { valid: true, approverId, requestDigest })`.
+ * Resolving the verifier's promise reads `then` through the prototype chain of the result, and a
+ * `then` that caller code sets there can turn the result into another value. permitkit catches a
+ * lasting `then` on the ECMAScript prototypes that it captures at load and on their prototype
+ * chain. It does not check host objects, for example DOMException, Buffer, Response, Request,
+ * Headers, URL, Blob, EventTarget, AbortSignal, Event, CryptoKey, streams or WebAssembly objects:
+ * never return one, such as a caught DOMException. It cannot see a `then` on a class of caller
+ * code, or a `then` or a new parent that is set, and undone, before permitkit's check after
+ * the verifier call. It does not check %SegmentsPrototype%, %SegmentIteratorPrototype%,
+ * built-in constructors or namespace objects: a function result is covered only through
+ * Function.prototype and the captured function prototypes, so return a result without a
+ * prototype. Load permitkit, and the module that builds your results, before
+ * untrusted code: the captured prototypes are those found at load.
+ * Return a native promise or a plain value: any other thenable, for example a query builder,
+ * never counts.
+ * In an async `verify`, `return await` a library promise; never return it directly. That
+ * removes the extra `then` read at return. Every `await` in `verify`, this one too, still reads
+ * `Promise.prototype.constructor`. A hook set and removed in that window is not seen.
  */
 export interface ApprovalProofVerifier {
   readonly type: string;
@@ -88,45 +84,6 @@ export interface ApprovalProofVerifier {
     expected: { readonly approverId: string; readonly requestDigest: string },
   ): ProofVerification | Promise<ProofVerification>;
 }
-
-export const approvalSchema = z
-  .object({
-    /** The approving principal, as one identity with its roles. */
-    approver: subjectSchema,
-    approvedAt: timestamp,
-    /** The digest of the request this approval is for. */
-    requestDigest: hexDigest,
-    proof: approvalProofSchema.optional(),
-  })
-  .strict();
-
-export type Approval = z.output<typeof approvalSchema>;
-
-export const approvalInputSchema = z
-  .object({
-    /** The original request. Its context.now is the request time. */
-    request: accessRequestSchema,
-    approvals: z.array(z.unknown()).max(maxApprovals),
-    /** Evaluation time. The requester's rights and the window are checked at this time. */
-    now: requestTimeSchema,
-    /**
-     * Earlier requests by the approvers, as the consumer's records show them. Required if the
-     * operator switched on requesterNeverApprovesSameType.
-     */
-    priorRequests: z
-      .array(
-        z
-          .object({
-            principalId: z.string().min(1),
-            permission: z.string().min(1),
-          })
-          .strict(),
-      )
-      .optional(),
-  })
-  .strict();
-
-export type ApprovalInput = z.input<typeof approvalInputSchema>;
 
 export interface ApprovalRejection {
   readonly index: number;
@@ -169,7 +126,7 @@ export function evaluateApprovals(
 ): Promise<ApprovalDecision> {
   // A plain function, not async: the promise of an async function has no own constructor, so
   // the caller's `await` would read Promise.prototype.constructor and then, which caller code
-  // can replace. awaitable gives the returned promise an own constructor.
+  // can replace. awaitable gives the returned promise an own constructor and an own then.
   return awaitable(evaluateApprovalsGuarded(policy, input, options));
 }
 
@@ -257,21 +214,20 @@ async function evaluateApprovalsUnguarded(
     return result("deny", whole.reason === "too_large" ? "input_too_large" : "invalid_input");
   }
   const snapshot = whole.value;
-  // The request and the evaluation time come from the hand-written validators, read from the
-  // plain-data copy before any Zod call. Zod calls built-ins at call time and passes them the
-  // objects it validates: a replaced push or Array.isArray could add a role to the request that
-  // Zod returns, swap it, or change the validated objects in place. So Zod gets its own copy and
-  // never sees the snapshot, and its output for these two keys is not used.
-  const checked = parseRequest(ownDataValue(snapshot, "request"));
-  if (!checked.ok) return result("deny", "invalid_input");
-  const request = checked.request;
-  const nowChecked = requestTime(ownDataValue(snapshot, "now"), null, []);
-  if (nowChecked === invalid) return result("deny", "invalid_input");
-  const nowText: string = nowChecked;
-  const parsed = safeParse(approvalInputSchema, detach(snapshot));
-  if (!parsed.success) return result("deny", "invalid_input");
-  const data = detach(parsed.data);
+  // Hand-written validators on the plain-data copy: every value below is read from it, and no
+  // built-in runs that caller code could have replaced after load.
+  const issues: Issue[] = [];
+  const data = approvalInput(snapshot, null, issues);
+  if (data === invalid) return result("deny", "invalid_input");
+  const request = data.request;
+  const nowText = data.now;
   const priorRequests = data.priorRequests;
+  // Every approval is validated into a new object before any further step and before any
+  // verifier runs, so no caller code runs between the check of a value and its use.
+  const approvals: Checked<Approval>[] = [];
+  for (let index = 0; index < data.approvals.length; index += 1) {
+    append(approvals, approvalCheck(data.approvals[index], null, []));
+  }
   const now = instant(nowText);
   const requestedAt = instant(request.context.now);
   // Written so that an unreadable time fails the check.
@@ -348,14 +304,12 @@ async function evaluateApprovalsUnguarded(
 
   const counted: string[] = [];
   const rejected: ApprovalRejection[] = [];
-  for (let index = 0; index < data.approvals.length; index += 1) {
-    const raw = data.approvals[index];
-    const parsedApproval = safeParse(approvalSchema, raw);
-    if (!parsedApproval.success) {
+  for (let index = 0; index < approvals.length; index += 1) {
+    const approval = approvals[index];
+    if (approval === undefined || approval === invalid) {
       append(rejected, { index, approverId: null, reason: "approval_invalid" });
       continue;
     }
-    const approval = detach(parsedApproval.data);
     const approver = approval.approver;
     const reject = (reason: ApprovalRejectionCode, detail?: string) => {
       append(rejected, { index, approverId: approver.id, reason, ...(detail ? { detail } : {}) });
@@ -483,6 +437,14 @@ async function evaluateApprovalsUnguarded(
   return result("pending", "approvals_pending", rest);
 }
 
+/** The detail of a proof that is not counted because a promise hook changed. */
+const hooksChanged =
+  "a then on, or a changed parent of, a built-in prototype, or a replaced " +
+  "Promise.prototype.then, Promise.prototype.constructor or Promise[Symbol.species]";
+
+/** The detail of a proof whose result is a thenable but not a native promise. */
+const foreignThenable = "verifier returned a thenable that is not a native promise";
+
 async function checkProof(
   approval: Approval,
   approverId: string,
@@ -500,18 +462,30 @@ async function checkProof(
   }
   const verifier = mapGet(verifiers, proof.type);
   if (verifier === undefined) return proofRejection("proof_verifier_missing", proof.type);
+  // A then on a built-in prototype, a changed parent of one, or a replaced
+  // Promise.prototype.then could choose the result of an async verifier inside its own promise,
+  // before permitkit reads it. Fail closed, before the call and again after the result settles.
+  if (!promiseHooksIntact()) return proofRejection("proof_invalid", hooksChanged);
   try {
-    const verification: unknown = await verifier.verify(proof, {
-      approverId,
-      requestDigest: digestValue,
-    });
+    // Not `await` on the result: it would read `then` and `constructor`, which caller code can
+    // replace after load and so choose the verification.
+    const settled = await settledValue(
+      verifier.verify(proof, expectation(approverId, digestValue)),
+    );
+    if (!promiseHooksIntact()) return proofRejection("proof_invalid", hooksChanged);
+    // The captured then threw for a promise or thenable: a getter on its constructor or species
+    // may have changed the value, so it never counts.
+    if (settled.refused === "promise") return proofRejection("proof_invalid", hooksChanged);
+    if (settled.refused === "thenable") return proofRejection("proof_invalid", foreignThenable);
+    const verification = settled.value;
     // Count only the exact success shape. Anything else, also a truthy string, is a rejection.
     // Own properties only: an inherited `valid` or echo must never count.
     if (ownValue(verification, "valid") !== true) {
       const reason = ownValue(verification, "reason");
+      if (typeof reason === "string") return proofRejection("proof_invalid", reason);
       return proofRejection(
         "proof_invalid",
-        typeof reason === "string" ? reason : "verifier did not confirm",
+        hasThen(verification) ? foreignThenable : "verifier did not confirm",
       );
     }
     if (
@@ -525,6 +499,18 @@ async function checkProof(
     // The verifier threw, or its result or error object threw when read. Never count it.
     return proofRejection("proof_invalid", "verifier failed");
   }
+}
+
+/**
+ * What the verifier gets as `expected`: frozen and without a prototype. A read of an inherited
+ * key, for example `toJSON` in JSON.stringify(expected), then runs no getter that caller code
+ * set on Object.prototype.
+ */
+function expectation(approverId: string, digestValue: string): VerifierExpectation {
+  const value = bareObject<{ approverId: string; requestDigest: string }>();
+  value.approverId = approverId;
+  value.requestDigest = digestValue;
+  return freeze(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

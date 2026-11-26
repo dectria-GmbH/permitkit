@@ -1,12 +1,8 @@
-// Shared parts of the differential tests: the earlier Zod pipeline as the reference, a strict
-// data comparison, generators for valid documents, and near-valid mutations of them.
-import { appendFileSync } from "node:fs";
-
+// Shared parts of the validator tests: verdicts of a hand-written validator, generators for
+// valid documents, and near-valid mutations of them.
 import * as fc from "fast-check";
-import type { z } from "zod";
 
-import { detach, snapshotOf, type InputBounds } from "../src/bounds.js";
-import { safeParse } from "../src/parse.js";
+import { snapshotOf, type InputBounds } from "../src/bounds.js";
 import {
   earliestInstant,
   latestInstant,
@@ -27,14 +23,6 @@ export type Verdict =
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly firstPath: string; readonly count: number };
 
-/** The earlier pipeline: Zod safeParse, then detach. */
-export function viaZod(schema: z.ZodTypeAny, snapshot: unknown): Verdict {
-  const result = safeParse(schema, snapshot);
-  if (result.success) return { ok: true, value: detach(result.data) };
-  const issues = result.error.issues;
-  return { ok: false, firstPath: JSON.stringify(issues[0]?.path ?? null), count: issues.length };
-}
-
 /** A hand-written validator. Throws if it accepts and still reports an issue. */
 export function viaCheck<T>(check: Check<T>, snapshot: unknown): Verdict {
   const issues: Issue[] = [];
@@ -47,115 +35,9 @@ export function viaCheck<T>(check: Check<T>, snapshot: unknown): Verdict {
   return { ok: true, value };
 }
 
-/**
- * Null if both values are the same data: same primitives (Object.is), same arrays, objects with
- * the same prototype, the same own keys in the same order (also keys set to undefined) and the
- * same values. Otherwise a description of the first difference.
- */
-export function difference(actual: unknown, expected: unknown, at = "$"): string | null {
-  if (
-    typeof actual !== "object" ||
-    actual === null ||
-    typeof expected !== "object" ||
-    expected === null
-  ) {
-    return Object.is(actual, expected) ? null : `${at}: ${String(actual)} vs ${String(expected)}`;
-  }
-  if (Array.isArray(actual) !== Array.isArray(expected)) return `${at}: array vs non-array`;
-  if (Object.getPrototypeOf(actual) !== Object.getPrototypeOf(expected)) return `${at}: prototype`;
-  const actualKeys = Reflect.ownKeys(actual).map(String);
-  const expectedKeys = Reflect.ownKeys(expected).map(String);
-  if (actualKeys.join("\u0000") !== expectedKeys.join("\u0000")) {
-    return `${at}: keys [${actualKeys.join(",")}] vs [${expectedKeys.join(",")}]`;
-  }
-  for (const key of actualKeys) {
-    if (key === "length" && Array.isArray(actual)) continue;
-    const found = difference(Reflect.get(actual, key), Reflect.get(expected, key), `${at}.${key}`);
-    if (found !== null) return found;
-  }
-  return null;
-}
-
 /** `"accept"`, or the path of the first issue as JSON. */
 export function verdictOf(verdict: Verdict): string {
   return verdict.ok ? "accept" : verdict.firstPath;
-}
-
-/** What a comparison asserts: the verdict with the first path, and any output difference. */
-export function summaryOf(
-  actual: Verdict,
-  reference: Verdict,
-): { verdict: string; outputDifference: string | null } {
-  return {
-    verdict: verdictOf(actual),
-    outputDifference: actual.ok && reference.ok ? difference(actual.value, reference.value) : null,
-  };
-}
-
-/** Compares one input under the given bounds. */
-export function compareOnce<T>(
-  schema: z.ZodTypeAny,
-  check: Check<T>,
-  input: unknown,
-  bounds: InputBounds,
-): { readonly skipped: true } | { readonly skipped: false; reference: Verdict; actual: Verdict } {
-  const snapshot = snapshotOf(input, bounds);
-  if (!snapshot.ok) return { skipped: true };
-  return {
-    skipped: false,
-    reference: viaZod(schema, snapshot.value),
-    actual: viaCheck(check, snapshot.value),
-  };
-}
-
-/** Counts per mutation class, for the report and for the health checks. */
-export class Tally {
-  readonly classes = new Map<
-    string,
-    { runs: number; accepted: number; rejected: number; samePath: number; skipped: number }
-  >();
-
-  add(name: string, result: ReturnType<typeof compareOnce>): void {
-    const row = this.classes.get(name) ?? {
-      runs: 0,
-      accepted: 0,
-      rejected: 0,
-      samePath: 0,
-      skipped: 0,
-    };
-    row.runs += 1;
-    if (result.skipped) row.skipped += 1;
-    else if (result.reference.ok) row.accepted += 1;
-    else {
-      row.rejected += 1;
-      if (!result.actual.ok && result.actual.firstPath === result.reference.firstPath) {
-        row.samePath += 1;
-      }
-    }
-    this.classes.set(name, row);
-  }
-
-  total(): { runs: number; accepted: number; rejected: number; samePath: number; skipped: number } {
-    const sum = { runs: 0, accepted: 0, rejected: 0, samePath: 0, skipped: 0 };
-    for (const row of this.classes.values()) {
-      sum.runs += row.runs;
-      sum.accepted += row.accepted;
-      sum.rejected += row.rejected;
-      sum.samePath += row.samePath;
-      sum.skipped += row.skipped;
-    }
-    return sum;
-  }
-
-  /** Writes the table to the file in PERMITKIT_DIFF_STATS, if set. */
-  report(title: string): void {
-    const file = process.env["PERMITKIT_DIFF_STATS"];
-    if (file === undefined) return;
-    const rows = [...this.classes.entries()].toSorted(([a], [b]) => (a < b ? -1 : 1));
-    const lines = [`## ${title}`, ...rows.map(([name, row]) => `${name}: ${JSON.stringify(row)}`)];
-    lines.push(`total: ${JSON.stringify(this.total())}`, "");
-    appendFileSync(file, lines.join("\n"));
-  }
 }
 
 // Generators for valid parts. Each also yields values at the inclusive limits.
@@ -671,28 +553,17 @@ export interface CorpusCase {
   readonly expected: "accept" | readonly Key[];
 }
 
-/**
- * Runs one corpus case through both validators, with bounds wide enough for every limit.
- * Returns what each one said, so a failure names the case and both verdicts.
- */
+/** Runs one corpus case through the validator, with bounds wide enough for every limit. */
 export function runCase<T>(
-  schema: z.ZodTypeAny,
   check: Check<T>,
   base: () => Record<string, unknown>,
   item: CorpusCase,
-): { reference: string; actual: string; outputDifference: string | null } {
+): string {
   const doc = base();
   item.edit(doc);
-  const result = compareOnce(schema, check, doc, wideBounds);
-  if (result.skipped) throw new Error(`${item.name}: the size guard refused the input`);
-  return {
-    reference: verdictOf(result.reference),
-    actual: verdictOf(result.actual),
-    outputDifference:
-      result.reference.ok && result.actual.ok
-        ? difference(result.actual.value, result.reference.value)
-        : null,
-  };
+  const snapshot = snapshotOf(doc, wideBounds);
+  if (!snapshot.ok) throw new Error(`${item.name}: the size guard refused the input`);
+  return verdictOf(viaCheck(check, snapshot.value));
 }
 
 export function expectedOf(item: CorpusCase): string {
