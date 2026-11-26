@@ -449,10 +449,34 @@ function capturedPrototypes(): readonly object[] {
 const builtinPrototypes = capturedPrototypes();
 
 /**
+ * Object.prototype, Array.prototype, Function.prototype, Promise.prototype and every one in
+ * builtinPrototypes. Object.prototype is listed although its [[Prototype]] cannot change.
+ */
+function chainedPrototypes(): readonly object[] {
+  const found: object[] = [objectPrototype, arrayPrototype, functionPrototype, promisePrototype];
+  for (let index = 0; index < builtinPrototypes.length; index += 1) {
+    append(found, builtinPrototypes[index]);
+  }
+  return freeze(found);
+}
+const checkedPrototypes = chainedPrototypes();
+
+/** The [[Prototype]] of each entry of checkedPrototypes at load, in the same order. */
+function parentsAtLoad(): readonly unknown[] {
+  const parents: unknown[] = [];
+  for (let index = 0; index < checkedPrototypes.length; index += 1) {
+    append(parents, getPrototypeOf(checkedPrototypes[index]));
+  }
+  return freeze(parents);
+}
+const checkedParents = parentsAtLoad();
+
+/**
  * False if a `then` on a built-in prototype could turn a value into a thenable, or if
  * Promise.prototype.then, Promise.prototype.constructor or Promise[Symbol.species] is not the
  * one found at load. The built-in prototypes are Object.prototype, Array.prototype,
- * Function.prototype and every one in builtinPrototypes, all captured at load. A verifier that
+ * Function.prototype and every one in builtinPrototypes, all captured at load. False also if
+ * one of them, or Promise.prototype, has another [[Prototype]] than at load. A verifier that
  * is an async function resolves its own promise with its result, and that resolution reads
  * `then` through the prototype chain before permitkit sees the value. The captured then reads
  * `constructor` and Symbol.species of the verifier's promise, and a getter there runs with that
@@ -462,7 +486,7 @@ const builtinPrototypes = capturedPrototypes();
 export function promiseHooksIntact(): boolean {
   if (hasOwn(objectPrototype, "then") || hasOwn(arrayPrototype, "then")) return false;
   if (hasOwn(functionPrototype, "then")) return false;
-  if (builtinThen()) return false;
+  if (builtinThen() || parentChanged()) return false;
   const then = getOwnPropertyDescriptor(promisePrototype, "then");
   if (then === undefined || !hasOwn(then, "value") || then.value !== promiseThenMethod) {
     return false;
@@ -484,6 +508,19 @@ export function promiseHooksIntact(): boolean {
     species.get === speciesDescriptor.get &&
     species.set === speciesDescriptor.set
   );
+}
+
+/**
+ * True if an entry of checkedPrototypes has another [[Prototype]] than at load. Code that puts
+ * an object with a `then` between a built-in prototype and its parent gives no prototype an own
+ * `then`, yet every value that inherits from it is a thenable.
+ */
+function parentChanged(): boolean {
+  for (let index = 0; index < checkedPrototypes.length; index += 1) {
+    const prototype = checkedPrototypes[index];
+    if (prototype !== undefined && getPrototypeOf(prototype) !== checkedParents[index]) return true;
+  }
+  return false;
 }
 
 /** True if a prototype in builtinPrototypes has an own `then`. */

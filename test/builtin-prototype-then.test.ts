@@ -3,6 +3,8 @@
 // promise through Error.prototype.then, and that then chooses the value permitkit reads. The
 // settled value does not show which chain was read, so permitkit checks every built-in
 // prototype that it captured at load for an own `then`, before and after each verifier call.
+// An object with a `then` put between such a prototype and its parent gives no prototype an own
+// `then`, so permitkit also compares the parent of each captured prototype with the one at load.
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -74,10 +76,13 @@ const hooksChanged =
 
 let fired = 0;
 const polluted: object[] = [];
+const reparented: (readonly [object, object | null])[] = [];
 
 afterEach(() => {
   for (const prototype of polluted) deleteKey(prototype, "then");
   polluted.length = 0;
+  for (const [prototype, parent] of reparented) Reflect.setPrototypeOf(prototype, parent);
+  reparented.length = 0;
 });
 
 /** Resolves any value with a confirmed verification, in an object without a prototype. */
@@ -125,11 +130,41 @@ async function attack(prototype: object, make: () => object) {
   return { clean, hooked, fired };
 }
 
+/**
+ * The decision without a hook, and with an object that has a forging `then` put between
+ * `prototype` and its parent. No prototype gets an own `then`.
+ */
+async function reparent(prototype: object, make: () => object) {
+  const verifier = rejecting(make);
+  const clean = summary(await evaluateApprovals(policy, input, { verifiers: [verifier] }));
+  fired = 0;
+  const parent = Reflect.getPrototypeOf(prototype);
+  const evil: object = Object.create(parent) as object;
+  // oxlint-disable-next-line unicorn/no-thenable
+  define(evil, "then", { value: forgingThen, writable: true, configurable: true });
+  Reflect.setPrototypeOf(prototype, evil);
+  reparented.push([prototype, parent]);
+  let hooked: ReturnType<typeof summary>;
+  try {
+    hooked = summary(await evaluateApprovals(policy, input, { verifiers: [verifier] }));
+  } finally {
+    Reflect.setPrototypeOf(prototype, parent);
+  }
+  return { clean, hooked, fired };
+}
+
 const refused = {
   clean: { outcome: "pending counted=0", detail: "bad signature" },
   hooked: { outcome: "pending counted=0", detail: hooksChanged },
   fired: 0,
 };
+
+/** The hooked decision is refused, and the forging then never runs. */
+const parentRefused = (detail: string) => ({
+  clean: { outcome: "pending counted=0", detail },
+  hooked: { outcome: "pending counted=0", detail: hooksChanged },
+  fired: 0,
+});
 
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object;
 const arrayIteratorPrototype = Object.getPrototypeOf([].values()) as object;
@@ -166,6 +201,57 @@ describe("a then on a built-in prototype of the verifier result", () => {
 
   it("%IteratorPrototype%, with a Set iterator result", async () => {
     expect(await attack(iteratorPrototype, () => new Set().values())).toEqual(refused);
+  });
+});
+
+describe("an object with a then put into the prototype chain of a built-in prototype", () => {
+  it("Error.prototype, with an Error result", async () => {
+    expect(await reparent(Error.prototype, () => new Error("bad"))).toEqual(
+      parentRefused("bad signature"),
+    );
+  });
+
+  it("TypeError.prototype, with a TypeError result", async () => {
+    expect(await reparent(TypeError.prototype, () => new TypeError("bad"))).toEqual(
+      parentRefused("bad signature"),
+    );
+  });
+
+  it("Map.prototype, with a Map result", async () => {
+    expect(await reparent(Map.prototype, () => new Map())).toEqual(parentRefused("bad signature"));
+  });
+
+  it("%TypedArray%.prototype, with a Uint8Array result", async () => {
+    expect(await reparent(typedArrayPrototype, () => new Uint8Array(1))).toEqual(
+      parentRefused("bad signature"),
+    );
+  });
+
+  it("Array.prototype, with an array result", async () => {
+    expect(await reparent(Array.prototype, () => [])).toEqual(parentRefused("bad signature"));
+  });
+
+  it("Function.prototype, with a function result", async () => {
+    // A function result is not an object result, so the clean decision has no reason.
+    expect(await reparent(Function.prototype, () => () => undefined)).toEqual(
+      parentRefused("verifier did not confirm"),
+    );
+  });
+
+  it("%IteratorPrototype%, with an array iterator result", async () => {
+    expect(await reparent(iteratorPrototype, () => [].values())).toEqual(
+      parentRefused("bad signature"),
+    );
+  });
+
+  it("Date.prototype, with a Date result", async () => {
+    expect(await reparent(Date.prototype, () => new Date(0))).toEqual(
+      parentRefused("bad signature"),
+    );
+  });
+
+  it("Object.prototype cannot get another parent", () => {
+    expect(Reflect.setPrototypeOf(Object.prototype, Object.create(null) as object)).toBe(false);
   });
 });
 
