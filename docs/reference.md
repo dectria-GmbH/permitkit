@@ -78,19 +78,26 @@ An entry can have a `detail` string. It can hold text from the input (a proof ty
 | `proof_invalid`            | The verifier rejected the proof, threw, or echoed other values.       |
 
 `proof_invalid` also covers two cases that the verifier does not decide. `detail` names them:
-`a then on a built-in prototype, or a replaced Promise.prototype.then, Promise.prototype.constructor
-or Promise[Symbol.species]` (checked before and after each verifier call, and set if the captured
-`then` throws for the verifier's promise), and
-`verifier returned a thenable that is not a native promise`. The first check reads every
-ECMAScript built-in prototype that permitkit captured at load, for example Object.prototype,
+`a then on, or a changed parent of, a built-in prototype, or a replaced Promise.prototype.then,
+Promise.prototype.constructor or Promise[Symbol.species]` (checked before and after each verifier
+call, and set if the captured `then` throws for the verifier's promise), and
+`verifier returned a thenable that is not a native promise`. The first check reads the
+ECMAScript built-in prototypes that permitkit captured at load, for example Object.prototype,
 Error.prototype, Map.prototype and the typed array, iterator and Intl prototypes, so a lasting
 `then` there is caught. It also compares the prototype of each of them with the one at load, so
-an object with a `then` put into their prototype chain is caught. Host objects are not checked:
+an object with a `then` put into their prototype chain is caught. The list is not complete.
+%SegmentsPrototype% and %SegmentIteratorPrototype%, the prototypes of the results of
+`Intl.Segmenter`, are not checked: reaching them needs a `new Intl.Segmenter` at load, which
+costs about 10 to 20 ms. Temporal prototypes are not checked either. Built-in constructors, for
+example `Error` itself, and namespace objects, for example `Math` and `JSON`, are not checked:
+a function result is covered only through Function.prototype and the captured function
+prototypes. Host objects are not checked:
 DOMException, Buffer, Response, Request, Headers, URL, Blob, EventTarget, AbortSignal, Event,
 CryptoKey, streams and WebAssembly objects. Never return one, for example a caught DOMException.
-The check does not see a `then` on the prototype of a class of caller code, or a
-`then` that is removed again before the verifier result settles: return the result as an object
-without a prototype. The capture happens at load, so permitkit must load before untrusted code;
+The check does not see a `then` on the prototype of a class of caller code, or a `then` or a new
+parent that is set, and undone again, before permitkit's check after the verifier call: return
+the result as an object without a prototype, also for a function result.
+The capture happens at load, so permitkit must load before untrusted code;
 code that runs first can replace a constructor, and permitkit then captures the prototype of the
 replacement. A captured prototype that becomes frozen later gains no `then`, and an own or
 inherited `then` on it is still caught. A global replaced after load, for example

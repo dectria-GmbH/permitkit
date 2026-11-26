@@ -65,8 +65,14 @@ export type ProofVerification =
  * chain. It does not check host objects, for example DOMException, Buffer, Response, Request,
  * Headers, URL, Blob, EventTarget, AbortSignal, Event, CryptoKey, streams or WebAssembly objects:
  * never return one, such as a caught DOMException. It cannot see a `then` on a class of caller
- * code, or a `then` that is set and removed while the verifier runs. Return a native
- * promise or a plain value: any other thenable, for example a query builder, never counts.
+ * code, or a `then` or a new parent that is set, and undone, before permitkit's check after
+ * the verifier call. It does not check %SegmentsPrototype%, %SegmentIteratorPrototype%, the
+ * Temporal prototypes, built-in constructors or namespace objects: a function result is covered
+ * only through Function.prototype and the captured function prototypes, so return a result
+ * without a prototype. Load permitkit, and the module that builds your results, before
+ * untrusted code: the captured prototypes are those found at load.
+ * Return a native promise or a plain value: any other thenable, for example a query builder,
+ * never counts.
  * In an async `verify`, `return await` a library promise; never return it directly. That
  * removes the extra `then` read at return. Every `await` in `verify`, this one too, still reads
  * `Promise.prototype.constructor`. A hook set and removed in that window is not seen.
@@ -433,8 +439,8 @@ async function evaluateApprovalsUnguarded(
 
 /** The detail of a proof that is not counted because a promise hook changed. */
 const hooksChanged =
-  "a then on a built-in prototype, or a replaced Promise.prototype.then, " +
-  "Promise.prototype.constructor or Promise[Symbol.species]";
+  "a then on, or a changed parent of, a built-in prototype, or a replaced " +
+  "Promise.prototype.then, Promise.prototype.constructor or Promise[Symbol.species]";
 
 /** The detail of a proof whose result is a thenable but not a native promise. */
 const foreignThenable = "verifier returned a thenable that is not a native promise";
@@ -456,9 +462,9 @@ async function checkProof(
   }
   const verifier = mapGet(verifiers, proof.type);
   if (verifier === undefined) return proofRejection("proof_verifier_missing", proof.type);
-  // A then on a built-in prototype, or a replaced Promise.prototype.then, could choose the
-  // result of an async verifier inside its own promise, before permitkit reads it. Fail closed,
-  // before the call and again after the result settles.
+  // A then on a built-in prototype, a changed parent of one, or a replaced
+  // Promise.prototype.then could choose the result of an async verifier inside its own promise,
+  // before permitkit reads it. Fail closed, before the call and again after the result settles.
   if (!promiseHooksIntact()) return proofRejection("proof_invalid", hooksChanged);
   try {
     // Not `await` on the result: it would read `then` and `constructor`, which caller code can

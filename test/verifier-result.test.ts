@@ -115,8 +115,8 @@ function FakePromise(): void {}
 
 /** The detail of a proof that is not counted because a promise hook changed. */
 const hooksChanged =
-  "a then on a built-in prototype, or a replaced Promise.prototype.then, " +
-  "Promise.prototype.constructor or Promise[Symbol.species]";
+  "a then on, or a changed parent of, a built-in prototype, or a replaced " +
+  "Promise.prototype.then, Promise.prototype.constructor or Promise[Symbol.species]";
 const speciesDescriptor = Object.getOwnPropertyDescriptor(Promise, Symbol.species);
 
 const confirming: ApprovalProofVerifier = {

@@ -71,8 +71,8 @@ const input = {
 };
 
 const hooksChanged =
-  "a then on a built-in prototype, or a replaced Promise.prototype.then, " +
-  "Promise.prototype.constructor or Promise[Symbol.species]";
+  "a then on, or a changed parent of, a built-in prototype, or a replaced " +
+  "Promise.prototype.then, Promise.prototype.constructor or Promise[Symbol.species]";
 
 let fired = 0;
 const polluted: object[] = [];
