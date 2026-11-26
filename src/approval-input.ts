@@ -49,7 +49,8 @@ export type Approval = {
 /**
  * An earlier request by an approver, as the consumer's records show it. There is no subject
  * field: permitkit cannot filter by subject, so the caller passes only the entries it wants
- * to count. Ids compare as exact strings: case and whitespace matter.
+ * to count. Ids compare as exact strings: case and whitespace matter. An extra key makes the
+ * input invalid.
  */
 export type PriorRequest = {
   principalId: string;

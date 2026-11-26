@@ -84,7 +84,11 @@ entry has the approver's id and the requested permission; it applies no other fi
 narrower list refuses fewer approvers. A `PriorRequest` has no subject field, so permitkit cannot
 filter the history by subject: if you scope it to one subject, pass only those entries.
 With a separation rule, `priorRequests` is required:
-absent refuses with `sod_history_missing`, never read as empty. Both lists are also required when the rule
+absent refuses with `sod_history_missing`, never read as empty. The permission of each entry must
+be in the catalogue. permitkit checks this only if the policy sets `requesterNeverApprovesSameType`
+or the input has a `separation` rule, and then an unknown permission gives `invalid_input` once
+the earlier checks pass.
+Both lists are also required when the rule
 waives Rule B, because the result reports each waived check.
 
 Where `requesterMayApprove` is `true`, simple Rule B does not apply: a contributor and an
@@ -160,15 +164,32 @@ costs about 10 to 20 ms. Built-in constructors, for
 example `Error` itself, and namespace objects, for example `Math` and `JSON`, are not checked:
 a function result is covered only through Function.prototype and the captured function
 prototypes. Host objects are not checked:
-DOMException, Buffer, Response, Request, Headers, URL, Blob, EventTarget, AbortSignal, Event,
-CryptoKey, streams and WebAssembly objects, and engine objects such as V8 CallSite objects.
-Never return one, for example a caught DOMException.
+every host object, for example DOMException, Buffer, Response, Request, Headers, URL, Blob,
+EventTarget, AbortSignal, Event, CryptoKey, streams and WebAssembly objects, the Node error
+classes whose `code` starts with `ERR_` (for example the error from `Buffer.alloc(-1)`), and
+engine objects such as V8 CallSite objects.
+Never return one, for example a caught DOMException or `ERR_*` error. Never return a Proxy
+either, also one around an object without a prototype. permitkit does not detect or refuse a Proxy.
+A handler object without its own `get` inherits a lasting `Object.prototype.get`, and the engine
+uses it as the `get` trap. It answers the `then` read when an async verifier's promise resolves
+with the Proxy. For this read the target does not matter. It also answers permitkit's own reads of
+`valid`, `reason`, `approverId` and `requestDigest`, for a sync verifier too, if the target has
+that own key.
 The check does not see a `then` on the prototype of a class of caller code, or a `then` or a new
 parent that is set, and undone again, before permitkit's check after the verifier call: return
 the result as an object without a prototype, also for a function result.
 The capture happens at load, so permitkit must load before untrusted code;
 code that runs first can replace a constructor, and permitkit then captures the prototype of the
-replacement. A captured prototype that becomes frozen later gains no `then`, and an own or
+replacement. The load of permitkit calls live built-ins too, among others
+`Array.prototype.values`, `Map.prototype.entries`, `Set.prototype.values`,
+`String.prototype[Symbol.iterator]`,
+`RegExp.prototype[Symbol.matchAll]` (which reads the getter of `RegExp.prototype.flags`),
+`Iterator.prototype.map` and `Iterator.from` where the runtime has them, the constructors `Map`,
+`Set` and `WeakSet`, `Object.getPrototypeOf`, `Object.hasOwn`, `Object.create`, `Object.freeze`,
+`Reflect.apply` and `Reflect.getOwnPropertyDescriptor`. Code that runs first also runs during the
+load. Other modules of permitkit also read or call built-ins at load, so import permitkit before
+any code that you do not trust.
+A captured prototype that becomes frozen later gains no `then`, and an own or
 inherited `then` on it is still caught. A global replaced after load, for example
 `globalThis.Error = X`, makes objects with `X.prototype`, which permitkit never captured: this
 is the limit of a class of caller code, with the same remedy. The second

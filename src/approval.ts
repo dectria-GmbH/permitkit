@@ -71,15 +71,26 @@ export type ProofVerification =
  * Resolving the verifier's promise reads `then` through the prototype chain of the result, and a
  * `then` that caller code sets there can turn the result into another value. permitkit catches a
  * lasting `then` on the ECMAScript prototypes that it captures at load and on their prototype
- * chain. It does not check host objects, for example DOMException, Buffer, Response, Request,
- * Headers, URL, Blob, EventTarget, AbortSignal, Event, CryptoKey, streams or WebAssembly objects:
- * never return one, such as a caught DOMException. It cannot see a `then` on a class of caller
- * code, or a `then` or a new parent that is set, and undone, before permitkit's check after
- * the verifier call. It does not check %SegmentsPrototype%, %SegmentIteratorPrototype%,
- * built-in constructors or namespace objects: a function result is covered only through
- * Function.prototype and the captured function prototypes, so return a result without a
- * prototype. Load permitkit, and the module that builds your results, before
- * untrusted code: the captured prototypes are those found at load.
+ * chain. It does not check host objects: every host object, for example DOMException, Buffer,
+ * Response, Request, Headers, URL, Blob, EventTarget, AbortSignal, Event, CryptoKey, streams or
+ * WebAssembly objects, and the Node error classes whose `code` starts with `ERR_`. Never return
+ * one, such as a caught DOMException or `ERR_*` error. Never return a Proxy either, also one
+ * around an object without a prototype. permitkit does not detect or refuse a Proxy. A handler
+ * object without its own `get` inherits a lasting `Object.prototype.get`, and the engine uses it
+ * as the `get` trap. It answers the `then` read when an async verifier's promise resolves with
+ * the Proxy; for this read the target does not matter. It also answers permitkit's own reads of
+ * `valid`, `reason`, `approverId` and `requestDigest` (ownValue), for a sync verifier too, if the
+ * target has that own key. It cannot see a `then` on a
+ * class of caller code, or a `then` or a new parent that is set, and undone, before
+ * permitkit's check after the verifier call. It does not check %SegmentsPrototype%,
+ * %SegmentIteratorPrototype%, built-in constructors or namespace objects: a function result is
+ * covered only through Function.prototype and the captured function prototypes, so return a
+ * result without a prototype. Load permitkit, and the module that builds your results, before
+ * untrusted code: the captured prototypes are those found at load, and the load of
+ * `src/intrinsics.ts` calls live built-ins, among others: iteration of arrays, Maps, Sets and
+ * strings, `matchAll` and `flags` of RegExp, `Iterator.prototype.map`, `Iterator.from`, and the
+ * constructors and helpers listed in the README. Other modules (decide, policy, bounds,
+ * validate, sha256) also run built-ins at load, so import permitkit before untrusted code.
  * Return a native promise or a plain value: any other thenable, for example a query builder,
  * never counts.
  * In an async `verify`, `return await` a library promise; never return it directly. That
