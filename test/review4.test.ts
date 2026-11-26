@@ -84,6 +84,7 @@ describe("verifier results", () => {
         proof: { type: "t", approverId: "u5", requestDigest: digestValue, payload: {} },
       },
     ];
+    // A plain empty object on purpose: it inherits the polluted fields, which must not count.
     const verifier = { type: "t", verify: () => ({}) } as unknown as ApprovalProofVerifier;
     pollute("valid", true);
     pollute("approverId", "u5");

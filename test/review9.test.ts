@@ -12,7 +12,7 @@ import {
   type ApprovalProofVerifier,
 } from "../src/index.js";
 import { accessRequest, everywhere, human, role, viaAgent, within } from "../src/testing/index.js";
-import { catalog, editablePolicyInput, policy } from "./fixtures.js";
+import { bare, catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 const polluted: string[] = [];
 
@@ -131,7 +131,7 @@ describe("proof types", () => {
     const digestValue = requestDigest(typed, request);
     const weak: ApprovalProofVerifier = {
       type: "weak",
-      verify: (_proof, expected) => ({ valid: true, ...expected }),
+      verify: (_proof, expected) => bare({ valid: true, ...expected }),
     };
     const result = await evaluateApprovals(
       typed,

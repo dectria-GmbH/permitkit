@@ -203,6 +203,7 @@ describe("proof verifier results", () => {
   }));
 
   it("rejects anything but the exact success shape and never throws", async () => {
+    // Malformed results on purpose, as plain objects; each one must be rejected.
     const results: ((expected: { approverId: string; requestDigest: string }) => unknown)[] = [
       () => null,
       () => undefined,

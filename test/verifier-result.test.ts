@@ -72,6 +72,9 @@ const input = {
     },
   ],
 };
+// Plain objects on purpose: these tests check that permitkit counts no proof when a hook can
+// reach a result with a prototype. A real verifier returns its result without a prototype
+// (README, "Approval proofs"), as in "counts no proof when the verifier result has no prototype".
 const forged = { valid: true, approverId: "bob", requestDigest: digest };
 const failing = { valid: false as const, reason: "bad signature" };
 

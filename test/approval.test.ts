@@ -10,7 +10,7 @@ import {
   type Subject,
 } from "../src/index.js";
 import { accessRequest, everywhere, human, role, viaAgent, within } from "../src/testing/index.js";
-import { catalog, editablePolicyInput, policy } from "./fixtures.js";
+import { bare, catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 const requester = human("u-req", role("lead", everywhere));
 const peerA = human("u-a", role("lead", everywhere));
@@ -402,13 +402,13 @@ describe("approval proofs", () => {
     verify(proof: ApprovalProof, expected) {
       const payload = proof.payload as { signedBy?: string; over?: string };
       if (payload.signedBy !== expected.approverId || payload.over !== expected.requestDigest) {
-        return { valid: false, reason: "bad signature" };
+        return bare({ valid: false, reason: "bad signature" });
       }
-      return {
+      return bare({
         valid: true,
         approverId: expected.approverId,
         requestDigest: expected.requestDigest,
-      };
+      });
     },
   };
   const signed = (
@@ -464,7 +464,7 @@ describe("approval proofs", () => {
   it("rejects a verifier echo for another request and a verifier that throws", async () => {
     const lazy: ApprovalProofVerifier = {
       type: "test-signature",
-      verify: () => ({ valid: true, approverId: "u-a", requestDigest: "0".repeat(64) }),
+      verify: () => bare({ valid: true, approverId: "u-a", requestDigest: "0".repeat(64) }),
     };
     const throwing: ApprovalProofVerifier = {
       type: "test-signature",

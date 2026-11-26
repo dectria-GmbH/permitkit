@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { compilePolicy, evaluateApprovals, PermitkitError, requestDigest } from "../src/index.js";
 import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
-import { catalog, editablePolicyInput, policy } from "./fixtures.js";
+import { bare, catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 const polluted: string[] = [];
 
@@ -33,7 +33,7 @@ const unproven = {
   approvedAt: "2026-01-15T10:10:00.000Z",
   requestDigest: digestValue,
 };
-const strict = { type: "t", verify: () => ({ valid: false, reason: "strict" }) };
+const strict = { type: "t", verify: () => bare({ valid: false, reason: "strict" }) };
 
 describe("proof path under a polluted then", () => {
   it("does not count an approval without a proof", async () => {
@@ -64,7 +64,7 @@ describe("verifier options", () => {
         reads += 1;
         return reads === 2 ? "x" : "t";
       },
-      verify: () => ({ valid: true, approverId: "u5", requestDigest: digestValue }),
+      verify: () => bare({ valid: true, approverId: "u5", requestDigest: digestValue }),
     };
     await expect(
       evaluateApprovals(proofPolicy, base, { verifiers: [strict, sneaky] as never }),
@@ -73,7 +73,7 @@ describe("verifier options", () => {
 
   it("does not take a verifier type from a polluted prototype", async () => {
     pollute("type", "t");
-    const typeless = { verify: () => ({ valid: true }) };
+    const typeless = { verify: () => bare({ valid: true }) };
     await expect(
       evaluateApprovals(proofPolicy, base, { verifiers: [typeless] as never }),
     ).rejects.toMatchObject({ code: "options_invalid" });

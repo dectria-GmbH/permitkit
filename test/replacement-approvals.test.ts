@@ -51,6 +51,9 @@ proofInput.approvalRules = [
 ];
 const proofPolicy = compilePolicy(catalog, proofInput);
 const proofDigest = requestDigest(proofPolicy, request);
+// Plain object results on purpose: the harness also replaces Object.assign and Object.create,
+// and this verifier must not call a replaced built-in. A real verifier returns its result
+// without a prototype (README, "Approval proofs").
 const verifier: ApprovalProofVerifier = {
   type: "sig",
   verify(proof: ApprovalProof, expected) {

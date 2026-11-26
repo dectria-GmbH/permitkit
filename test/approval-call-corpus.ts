@@ -195,6 +195,9 @@ export function approvalCases(hooks: SpyHooks): ApprovalCase[] {
       }
     },
   });
+  // Plain object results on purpose: the corpus records which built-ins permitkit calls, and the
+  // result shape is not under test here. A real verifier returns its result without a prototype
+  // (README, "Approval proofs").
   const sig = verifierOf("sig", (payload, approverId, digest) => {
     switch (payload) {
       case "ok":

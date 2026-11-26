@@ -251,15 +251,18 @@ whose challenge is the request digest. permitkit defines the interface and does 
 WebAuthn:
 
 ```ts
+// A copy of the fields in an object without a prototype (see below).
+const bare = <T extends object>(fields: T): T => Object.assign(Object.create(null), fields);
+
 const verifier: ApprovalProofVerifier = {
   type: "webauthn",
   async verify(proof, expected) {
     // Your WebAuthn library checks the signature against the approver's stored credentials.
     const credentials = await loadCredentials(expected.approverId);
     const assertion = await verifyAssertion(proof.payload, credentials, { timeoutMs: 5000 });
-    if (!assertion.ok) return { valid: false, reason: assertion.error };
+    if (!assertion.ok) return bare({ valid: false, reason: assertion.error });
     // Return what the signature covers. Never copy the values from `expected`.
-    return { valid: true, approverId: assertion.userId, requestDigest: assertion.challenge };
+    return bare({ valid: true, approverId: assertion.userId, requestDigest: assertion.challenge });
   },
 };
 await evaluateApprovals(policy, input, { verifiers: [verifier] });
@@ -277,23 +280,17 @@ Each entry in `rejected` can have a `detail` string. It can hold text from the i
 proof type, or the `reason` that your verifier returned. Escape it before you render it, for
 example in HTML or in a log viewer.
 
-An async verifier like this one can be fooled by code that sets `Object.prototype.then`, which
-would turn its `{ valid: false }` into another value while its promise resolves. permitkit
-checks for such a `then` before and after each verifier call and then counts no proof. A `then`
-that is set and removed again while the verifier runs is not seen. So return the result as an
-object without a prototype; its promise then resolves without a `then` lookup:
+Return every result as an object without a prototype, as `bare` does above, also a result with
+`valid: false`. An async verifier resolves its own promise with its result, and that resolution
+reads `then` through the prototype chain. If the result is a plain object, code that sets
+`Object.prototype.then` can turn `{ valid: false }` into a confirmed result. permitkit checks
+Object.prototype, Array.prototype and Function.prototype for a `then` before and after each
+verifier call and then counts no proof. A `then` that is set and removed again while the
+verifier runs is not seen, and neither is a `then` on another prototype of the result, for
+example `Error.prototype` if the verifier returns an `Error`. A result without a prototype gives
+such a `then` nothing to find.
 
-```ts
-return Object.assign(Object.create(null), {
-  valid: true,
-  approverId: assertion.userId,
-  requestDigest: assertion.challenge,
-});
-```
-
-`expected` is frozen and has no prototype. Read its two fields, and call no method such as
-`hasOwnProperty` on it. See "Replaced built-ins" in the threat model for what the check cannot
-see.
+See "Replaced built-ins" in the threat model for what the check cannot see.
 
 ### Separation of duties
 
@@ -485,7 +482,8 @@ Not covered:
   This check is the mitigation, and it has limits. permitkit cannot protect the awaits inside
   your verifier code: what your WebAuthn library or database client returns there is in your
   hands. A `then` that is set during the verifier call and removed before its result settles is
-  not seen either. Waiting is not the only way into that window: any read of an inherited
+  not seen either, and neither is a `then` on a prototype other than the three above, for example
+  `Error.prototype` when the verifier returns an `Error`. Waiting is not the only way into that window: any read of an inherited
   property inside the verifier can run a getter that caller code set, for example `toJSON` in
   `JSON.stringify`. permitkit passes `expected` frozen and without a prototype, so a read on it
   runs no such getter, but a read on your own objects can. Return the result as an object without

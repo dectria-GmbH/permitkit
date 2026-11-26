@@ -11,7 +11,7 @@ import {
   type ApprovalProofVerifier,
 } from "../src/index.js";
 import { accessRequest, everywhere, human, role } from "../src/testing/index.js";
-import { catalog, editablePolicyInput, policy } from "./fixtures.js";
+import { bare, catalog, editablePolicyInput, policy } from "./fixtures.js";
 
 const polluted: string[] = [];
 
@@ -188,7 +188,7 @@ describe("proof verifiers and options", () => {
 
   it("throws a coded error for bad options and duplicate verifier types", async () => {
     const base = { request, now: "2026-01-15T10:30:00.000Z", approvals };
-    const ok = { type: "t", verify: () => ({ valid: false, reason: "no" }) };
+    const ok = { type: "t", verify: () => bare({ valid: false, reason: "no" }) };
     for (const options of [
       null,
       { verifiers: "x" },

@@ -55,9 +55,14 @@ export type ProofVerification =
  * `expected`; that turns the comparison into a no-op, and a valid assertion for one request then
  * passes for another. `expected` is for lookups, for example to load the approver's credentials.
  * `expected` is frozen and has no prototype, so methods such as `hasOwnProperty` are not on it.
- * The verifier should also time out on its own: permitkit waits for its promise. Return the
- * result as an object without a prototype (`Object.assign(Object.create(null), { ... })`):
- * then no `then` on Object.prototype can turn it into another value while its promise resolves.
+ * The verifier should also time out on its own: permitkit waits for its promise.
+ *
+ * Rule: return every result, also `{ valid: false }`, as an object without a prototype, for
+ * example `Object.assign(Object.create(null), { valid: true, approverId, requestDigest })`.
+ * Resolving the verifier's promise reads `then` through the prototype chain of the result, and a
+ * `then` that caller code sets there, on any prototype, can turn the result into another value.
+ * permitkit cannot see a `then` that is set and removed while the verifier runs. Return a native
+ * promise or a plain value: any other thenable, for example a query builder, never counts.
  */
 export interface ApprovalProofVerifier {
   readonly type: string;
@@ -444,8 +449,8 @@ async function checkProof(
   }
   const verifier = mapGet(verifiers, proof.type);
   if (verifier === undefined) return proofRejection("proof_verifier_missing", proof.type);
-  // A then on a built-in prototype, or a replaced Promise.prototype.then, could choose the
-  // result of an async verifier inside its own promise, before permitkit reads it. Fail closed,
+  // A then on Object.prototype, Array.prototype or Function.prototype, or a replaced
+  // Promise.prototype.then, could choose the result of an async verifier inside its own promise, before permitkit reads it. Fail closed,
   // before the call and again after the result settles.
   if (!promiseHooksIntact()) return proofRejection("proof_invalid", hooksChanged);
   try {
