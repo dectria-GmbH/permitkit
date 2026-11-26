@@ -171,8 +171,13 @@ const arrayIteratorPrototype = Object.getPrototypeOf([].values()) as object;
 const iteratorPrototype = Object.getPrototypeOf(arrayIteratorPrototype) as object;
 // What Iterator.from returns for an object that is not an Iterator; a prototype-less source
 // keeps the Symbol.iterator lookup out of the way.
+const iteratorConstructor = (
+  globalThis as unknown as { Iterator: { from(source: object): object } }
+).Iterator;
 const makeWrapped = () =>
-  Iterator.from(Object.assign(Object.create(null) as object, { next: () => ({}) })) as object;
+  iteratorConstructor.from(
+    Object.assign(Object.create(null) as object, { next: () => ({}) }),
+  ) as object;
 const wrapForValidIteratorPrototype = Object.getPrototypeOf(makeWrapped()) as object;
 
 describe("a then on a built-in prototype of the verifier result", () => {

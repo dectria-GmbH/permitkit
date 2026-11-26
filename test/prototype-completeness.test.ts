@@ -150,7 +150,12 @@ function enumerate(): Found[] {
   const from = (globalThis as { Iterator?: { from?: unknown } }).Iterator?.from;
   if (typeof from === "function") {
     const source = Object.assign(Object.create(null) as object, { next: () => ({}) });
-    add("%WrapForValidIteratorPrototype%", getPrototypeOf(Reflect.apply(from, Iterator, [source])));
+    add(
+      "%WrapForValidIteratorPrototype%",
+      getPrototypeOf(
+        Reflect.apply(from, (globalThis as { Iterator?: unknown }).Iterator, [source]),
+      ),
+    );
   }
   // %AsyncFromSyncIteratorPrototype% belongs to an internal wrapper that no expression returns.
   return found;
