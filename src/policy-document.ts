@@ -117,7 +117,8 @@ export type SeparationOfDuties = {
    * `"required"`: an evaluateApprovals input for a request that needs approval must carry a
    * separation rule, and an input without one is refused (`separation_rule_missing`). A request
    * that needs no approval is not affected. Absent: an input without a rule is evaluated as
-   * before, with the requester refused and the two flags above.
+   * before, with the requester refused and the two flags above. Such an input skips the
+   * contributor check silently, so set `"required"` where contributors are used.
    */
   perRequestRule?: "required" | undefined;
 };

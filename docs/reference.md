@@ -81,7 +81,9 @@ The same-type check reads the existing `priorRequests` input: earlier requests b
 from the caller's records. The caller decides their scope, for example every request for the
 permission or only the requests for the same subject. permitkit refuses an approver only if an
 entry has the approver's id and the requested permission; it applies no other filter, so a
-narrower list refuses fewer approvers. With a separation rule, `priorRequests` is required:
+narrower list refuses fewer approvers. A `PriorRequest` has no subject field, so permitkit cannot
+filter the history by subject: if you scope it to one subject, pass only those entries.
+With a separation rule, `priorRequests` is required:
 absent refuses with `sod_history_missing`, never read as empty. Both lists are also required when the rule
 waives Rule B, because the result reports each waived check.
 
@@ -102,7 +104,13 @@ self-approval or `roleSeparation: "off"`, and `exclusiveRequestAndApproveRoles` 
 self-approval. A consumer that passes the rule per request sets both flags to `false` and sets
 `perRequestRule: "required"`, so that an input for a request that needs approval and has no rule
 refuses (`separation_rule_missing`, checked in the order above). Without `perRequestRule`, an input without a rule is evaluated as
-before: the requester never approves, and only the flags apply.
+before: the requester never approves, and only the flags apply. Such an input skips the
+contributor check silently, because only a rule carries `contributors`. A deployment that uses
+contributors should set `perRequestRule: "required"`.
+
+All id comparisons in these checks are exact string comparisons: the requester, the approvers,
+`contributors` and `priorRequests[].principalId`. Case and whitespace matter, and permitkit does
+not normalize them. Pass one canonical form of each id everywhere.
 
 `ApprovalDecision.separation` holds the applied rule (`version`, `requesterMayApprove`,
 `roleSeparation`) or `null`. `ApprovalDecision.waived` lists, for each counted approver with a

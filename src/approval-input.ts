@@ -46,7 +46,11 @@ export type Approval = {
   proof?: ApprovalProof | undefined;
 };
 
-/** An earlier request by an approver, as the consumer's records show it. */
+/**
+ * An earlier request by an approver, as the consumer's records show it. There is no subject
+ * field: permitkit cannot filter by subject, so the caller passes only the entries it wants
+ * to count. Ids compare as exact strings: case and whitespace matter.
+ */
 export type PriorRequest = {
   principalId: string;
   permission: string;
@@ -70,6 +74,7 @@ export type SeparationRule = {
   roleSeparation: "off" | "simple" | "strict";
   /**
    * The principals who contributed to the subject of the request, from the consumer's records.
+   * Ids compare as exact strings, like the requester and approver ids.
    * Required: an empty list means "no contributors".
    */
   contributors: readonly string[];

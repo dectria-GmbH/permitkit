@@ -342,7 +342,9 @@ The operator switches these settings in the policy:
   that permission, or a narrower set, for example only requests for the same subject. permitkit
   matches each entry by approver id and permission only and applies no other filter. Each entry
   must name a permission of the current catalogue, or the result is `invalid_input`, so filter
-  out permissions that a later release removed.
+  out permissions that a later release removed. An entry has no subject field, so permitkit
+  cannot filter the history by subject. If you want a per-subject scope, pass only the entries
+  for that subject.
 - `exclusiveRequestAndApproveRoles`: nobody may hold both a role that grants the permission and an
   approver role for it. Requests and approvals from such subjects are refused. Every approval
   rule then needs `eligibleApprovers: { kind: "roles", ... }`.
@@ -367,7 +369,9 @@ await evaluateApprovals(policy, {
 });
 ```
 
-The default refuses self-approval; an input without a rule behaves as before. Self-approval does
+The default refuses self-approval; an input without a rule behaves as before. That includes the
+contributor check: an input without a rule skips it silently, and nothing in the result says
+so. A deployment that uses contributors should set `perRequestRule: "required"`. Self-approval does
 not lower the number of distinct approvers. Where it is allowed, simple Rule B does not apply,
 and strict Rule B with self-approval is refused. The rule only tightens the policy flags: set
 both to `false` and set `perRequestRule: "required"` in `separationOfDuties`, so that an input for a request that needs
@@ -641,6 +645,9 @@ Not covered:
 - Ids, role names and scope values are compared as exact strings. permitkit does not change case,
   trim spaces or normalize Unicode. Normalize ids and scope values once, where they enter your
   system, or a deny rule for `vip` does not match `VIP`.
+- The same holds for every id in the separation checks: the requester, the approvers,
+  `contributors` and `priorRequests[].principalId`. `"u-17"` and `"U-17 "` are two principals.
+  Pass one canonical form of each id everywhere.
 - Timestamps are ISO 8601 with seconds, at most three fraction digits and an offset
   (`Z` or `+hh:mm` up to 23:59). Other forms are rejected, because engines read them differently.
 - Inputs pass a size guard before validation. Limits are in [docs/reference.md](docs/reference.md).
