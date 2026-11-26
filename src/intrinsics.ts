@@ -342,9 +342,15 @@ export function awaitable<T>(promise: Promise<T>): Promise<T> {
   return promise;
 }
 
-/** The own data property `prototype` of a constructor on globalThis, if the runtime has one. */
-function optionalPrototype(name: string): unknown {
-  const constructor = ownDataValue(globalThis, name);
+/**
+ * The own data property `prototype` of a constructor on `owner` (globalThis or Intl), if the
+ * runtime has one.
+ */
+function optionalPrototype(name: string, owner: unknown = globalThis): unknown {
+  if ((typeof owner !== "object" || owner === null) && typeof owner !== "function") {
+    return undefined;
+  }
+  const constructor = ownDataValue(owner, name);
   return typeof constructor === "function" ? ownDataValue(constructor, "prototype") : undefined;
 }
 
@@ -356,11 +362,13 @@ async function* asyncGeneratorShape(): AsyncGenerator<number> {
 }
 
 /**
- * Every built-in prototype other than Object.prototype, Array.prototype, Function.prototype and
- * Promise.prototype, captured at load. A verifier result that inherits from one of them, for
- * example an Error, is resolved through a `then` there. Promise.prototype has its own `then`
- * and is checked on its own. Prototypes that a runtime may lack are read from globalThis and
- * left out if missing.
+ * The ECMAScript built-in prototypes other than Object.prototype, Array.prototype,
+ * Function.prototype and Promise.prototype, captured at load, with the prototypes of the Intl
+ * constructors. A verifier result that inherits from one of them, for example an Error, is
+ * resolved through a `then` there. Promise.prototype has its own `then` and is checked on its
+ * own. Prototypes that a runtime may lack are read from globalThis or Intl and left out if
+ * missing. %SegmentsPrototype% and %SegmentIteratorPrototype% are left out: reaching them
+ * builds an Intl.Segmenter, which loads locale data. Host objects are not ECMAScript built-ins.
  */
 function capturedPrototypes(): readonly object[] {
   const arrayIterator: unknown = getPrototypeOf([].values());
@@ -373,6 +381,7 @@ function capturedPrototypes(): readonly object[] {
     typeof iteratorPrototype === "object" && iteratorPrototype !== null
       ? ownDataValue(iteratorPrototype, "map")
       : undefined;
+  const intl: unknown = ownDataValue(globalThis, "Intl");
   const candidates: unknown[] = [
     Error.prototype,
     EvalError.prototype,
@@ -429,6 +438,16 @@ function capturedPrototypes(): readonly object[] {
     generatorPrototype,
     asyncGeneratorPrototype,
     getPrototypeOf(asyncGeneratorPrototype),
+    optionalPrototype("Collator", intl),
+    optionalPrototype("DateTimeFormat", intl),
+    optionalPrototype("DisplayNames", intl),
+    optionalPrototype("DurationFormat", intl),
+    optionalPrototype("ListFormat", intl),
+    optionalPrototype("Locale", intl),
+    optionalPrototype("NumberFormat", intl),
+    optionalPrototype("PluralRules", intl),
+    optionalPrototype("RelativeTimeFormat", intl),
+    optionalPrototype("Segmenter", intl),
   ];
   const found: object[] = [];
   for (let index = 0; index < candidates.length; index += 1) {

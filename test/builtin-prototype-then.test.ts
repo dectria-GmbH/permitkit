@@ -202,6 +202,16 @@ describe("a then on a built-in prototype of the verifier result", () => {
   it("%IteratorPrototype%, with a Set iterator result", async () => {
     expect(await attack(iteratorPrototype, () => new Set().values())).toEqual(refused);
   });
+
+  it("Intl.NumberFormat.prototype, with a NumberFormat result", async () => {
+    expect(await attack(Intl.NumberFormat.prototype, () => new Intl.NumberFormat("en"))).toEqual(
+      refused,
+    );
+  });
+
+  it("Intl.Locale.prototype, with a Locale result", async () => {
+    expect(await attack(Intl.Locale.prototype, () => new Intl.Locale("en"))).toEqual(refused);
+  });
 });
 
 describe("an object with a then put into the prototype chain of a built-in prototype", () => {
