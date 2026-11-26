@@ -1,5 +1,8 @@
 {
   "src": {
+    "src/approval.ts": [
+      "Buffer | * chain. It does not check host objects, for example DOMException, Buffer, Response, Request,"
+    ],
     "src/canonical.ts": [
       "node: | * No caller code runs: only data properties are read. In a runtime without node:util a proxy"
     ],
