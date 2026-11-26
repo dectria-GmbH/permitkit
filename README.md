@@ -291,6 +291,11 @@ So a lasting `then` on a built-in prototype is caught. A `then` on the prototype
 your code is not seen, and neither is a `then` that is set and removed again before the result
 settles. The remedy is a result without a prototype: it gives such a `then` nothing to find.
 
+In an async `verify`, write `return await lib()` for a library promise, never `return lib()`.
+An async function that returns a promise reads that promise's `then` when it returns. A
+`Promise.prototype.then` that caller code sets and removes in that moment can then forge the
+result.
+
 The capture happens when permitkit loads, so load permitkit before code you do not trust. Code
 that runs first can, for example, replace `globalThis.Map`, and permitkit then captures the
 prototype of the replacement.

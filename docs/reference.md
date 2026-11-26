@@ -91,7 +91,9 @@ code that runs first can replace a constructor, and permitkit then captures the 
 replacement. The second
 covers a verifier that returns a thenable that is not a native promise, for example a query
 builder of an ORM: such a result never counts. Make `verify` an `async` function that awaits
-the builder.
+the builder. In an async `verify`, `return await` a library promise and never return it
+directly: the return reads the promise's `then`, and a `Promise.prototype.then` that is set and
+removed in that moment can forge the result.
 
 ## Errors
 

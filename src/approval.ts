@@ -64,6 +64,7 @@ export type ProofVerification =
  * lasting `then` on a built-in prototype. It cannot see a `then` on a class of caller code, or a
  * `then` that is set and removed while the verifier runs. Return a native
  * promise or a plain value: any other thenable, for example a query builder, never counts.
+ * In an async `verify`, `return await` a library promise; never return it directly.
  */
 export interface ApprovalProofVerifier {
   readonly type: string;
