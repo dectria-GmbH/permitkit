@@ -169,6 +169,11 @@ const parentRefused = (detail: string) => ({
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object;
 const arrayIteratorPrototype = Object.getPrototypeOf([].values()) as object;
 const iteratorPrototype = Object.getPrototypeOf(arrayIteratorPrototype) as object;
+// What Iterator.from returns for an object that is not an Iterator; a prototype-less source
+// keeps the Symbol.iterator lookup out of the way.
+const makeWrapped = () =>
+  Iterator.from(Object.assign(Object.create(null) as object, { next: () => ({}) })) as object;
+const wrapForValidIteratorPrototype = Object.getPrototypeOf(makeWrapped()) as object;
 
 describe("a then on a built-in prototype of the verifier result", () => {
   it("Error.prototype, with an Error result", async () => {
@@ -201,6 +206,10 @@ describe("a then on a built-in prototype of the verifier result", () => {
 
   it("%IteratorPrototype%, with a Set iterator result", async () => {
     expect(await attack(iteratorPrototype, () => new Set().values())).toEqual(refused);
+  });
+
+  it("%WrapForValidIteratorPrototype%, with an Iterator.from result", async () => {
+    expect(await attack(wrapForValidIteratorPrototype, makeWrapped)).toEqual(refused);
   });
 
   it("Intl.NumberFormat.prototype, with a NumberFormat result", async () => {
@@ -250,6 +259,12 @@ describe("an object with a then put into the prototype chain of a built-in proto
 
   it("%IteratorPrototype%, with an array iterator result", async () => {
     expect(await reparent(iteratorPrototype, () => [].values())).toEqual(
+      parentRefused("bad signature"),
+    );
+  });
+
+  it("%WrapForValidIteratorPrototype%, with an Iterator.from result", async () => {
+    expect(await reparent(wrapForValidIteratorPrototype, makeWrapped)).toEqual(
       parentRefused("bad signature"),
     );
   });

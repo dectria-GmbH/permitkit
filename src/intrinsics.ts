@@ -354,6 +354,23 @@ function optionalPrototype(name: string, owner: unknown = globalThis): unknown {
   return typeof constructor === "function" ? ownDataValue(constructor, "prototype") : undefined;
 }
 
+/**
+ * %WrapForValidIteratorPrototype%: the prototype of what Iterator.from returns for an object
+ * that is not an Iterator. The source has no prototype, so no Symbol.iterator lookup runs.
+ */
+function wrapForValidIteratorPrototype(): unknown {
+  const iteratorConstructor = ownDataValue(globalThis, "Iterator");
+  const from =
+    typeof iteratorConstructor === "function"
+      ? ownDataValue(iteratorConstructor, "from")
+      : undefined;
+  if (typeof from !== "function") return undefined;
+  const source = bareObject<{ next: () => object }>();
+  source.next = () => bareObject();
+  const wrapped: unknown = apply(from, iteratorConstructor, [source]);
+  return typeof wrapped === "object" && wrapped !== null ? getPrototypeOf(wrapped) : undefined;
+}
+
 function* generatorShape(): Generator<number> {
   yield 0;
 }
@@ -432,6 +449,7 @@ function capturedPrototypes(): readonly object[] {
     typeof helperMap === "function"
       ? getPrototypeOf(apply(helperMap, [].values(), [(item: unknown) => item]))
       : undefined,
+    wrapForValidIteratorPrototype(),
     generatorFunction,
     asyncGeneratorFunction,
     getPrototypeOf(async () => {}),
