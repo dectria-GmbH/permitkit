@@ -88,12 +88,13 @@ Error.prototype, Map.prototype and the typed array, iterator and Intl prototypes
 an object with a `then` put into their prototype chain is caught. The list is not complete.
 %SegmentsPrototype% and %SegmentIteratorPrototype%, the prototypes of the results of
 `Intl.Segmenter`, are not checked: reaching them needs a `new Intl.Segmenter` at load, which
-costs about 10 to 20 ms. Temporal prototypes are not checked either. Built-in constructors, for
+costs about 10 to 20 ms. Built-in constructors, for
 example `Error` itself, and namespace objects, for example `Math` and `JSON`, are not checked:
 a function result is covered only through Function.prototype and the captured function
 prototypes. Host objects are not checked:
 DOMException, Buffer, Response, Request, Headers, URL, Blob, EventTarget, AbortSignal, Event,
-CryptoKey, streams and WebAssembly objects. Never return one, for example a caught DOMException.
+CryptoKey, streams and WebAssembly objects, and engine objects such as V8 CallSite objects.
+Never return one, for example a caught DOMException.
 The check does not see a `then` on the prototype of a class of caller code, or a `then` or a new
 parent that is set, and undone again, before permitkit's check after the verifier call: return
 the result as an object without a prototype, also for a function result.

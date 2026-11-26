@@ -381,11 +381,12 @@ async function* asyncGeneratorShape(): AsyncGenerator<number> {
 /**
  * The ECMAScript built-in prototypes other than Object.prototype, Array.prototype,
  * Function.prototype and Promise.prototype, captured at load, with the prototypes of the Intl
- * constructors. A verifier result that inherits from one of them, for example an Error, is
- * resolved through a `then` there. Promise.prototype has its own `then` and is checked on its
- * own. Prototypes that a runtime may lack are read from globalThis or Intl and left out if
- * missing. %SegmentsPrototype% and %SegmentIteratorPrototype% are left out: reaching them
- * builds an Intl.Segmenter, which loads locale data. Host objects are not ECMAScript built-ins.
+ * and Temporal constructors. A verifier result that inherits from one of them, for example an
+ * Error, is resolved through a `then` there. Promise.prototype has its own `then` and is checked
+ * on its own. Prototypes that a runtime may lack are read from globalThis, Intl or Temporal and
+ * left out if missing. %SegmentsPrototype% and %SegmentIteratorPrototype% are left out: reaching
+ * them builds an Intl.Segmenter, which loads locale data. Host objects are not ECMAScript
+ * built-ins.
  */
 function capturedPrototypes(): readonly object[] {
   const arrayIterator: unknown = getPrototypeOf([].values());
@@ -399,6 +400,7 @@ function capturedPrototypes(): readonly object[] {
       ? ownDataValue(iteratorPrototype, "map")
       : undefined;
   const intl: unknown = ownDataValue(globalThis, "Intl");
+  const temporal: unknown = ownDataValue(globalThis, "Temporal");
   const candidates: unknown[] = [
     Error.prototype,
     EvalError.prototype,
@@ -466,6 +468,14 @@ function capturedPrototypes(): readonly object[] {
     optionalPrototype("PluralRules", intl),
     optionalPrototype("RelativeTimeFormat", intl),
     optionalPrototype("Segmenter", intl),
+    optionalPrototype("Duration", temporal),
+    optionalPrototype("Instant", temporal),
+    optionalPrototype("PlainDate", temporal),
+    optionalPrototype("PlainDateTime", temporal),
+    optionalPrototype("PlainMonthDay", temporal),
+    optionalPrototype("PlainTime", temporal),
+    optionalPrototype("PlainYearMonth", temporal),
+    optionalPrototype("ZonedDateTime", temporal),
   ];
   const found: object[] = [];
   for (let index = 0; index < candidates.length; index += 1) {

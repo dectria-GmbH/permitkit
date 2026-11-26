@@ -66,10 +66,10 @@ export type ProofVerification =
  * Headers, URL, Blob, EventTarget, AbortSignal, Event, CryptoKey, streams or WebAssembly objects:
  * never return one, such as a caught DOMException. It cannot see a `then` on a class of caller
  * code, or a `then` or a new parent that is set, and undone, before permitkit's check after
- * the verifier call. It does not check %SegmentsPrototype%, %SegmentIteratorPrototype%, the
- * Temporal prototypes, built-in constructors or namespace objects: a function result is covered
- * only through Function.prototype and the captured function prototypes, so return a result
- * without a prototype. Load permitkit, and the module that builds your results, before
+ * the verifier call. It does not check %SegmentsPrototype%, %SegmentIteratorPrototype%,
+ * built-in constructors or namespace objects: a function result is covered only through
+ * Function.prototype and the captured function prototypes, so return a result without a
+ * prototype. Load permitkit, and the module that builds your results, before
  * untrusted code: the captured prototypes are those found at load.
  * Return a native promise or a plain value: any other thenable, for example a query builder,
  * never counts.
