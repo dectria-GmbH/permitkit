@@ -81,8 +81,14 @@ An entry can have a `detail` string. It can hold text from the input (a proof ty
 `a then on a built-in prototype, or a replaced Promise.prototype.then, Promise.prototype.constructor
 or Promise[Symbol.species]` (checked before and after each verifier call, and set if the captured
 `then` throws for the verifier's promise), and
-`verifier returned a thenable that is not a native promise`. The built-in prototypes that the
-first check reads are Object.prototype, Array.prototype and Function.prototype. The second
+`verifier returned a thenable that is not a native promise`. The first check reads every
+built-in prototype that permitkit captured at load, for example Object.prototype,
+Error.prototype, Map.prototype and the typed array and iterator prototypes, so a lasting `then`
+there is caught. It does not see a `then` on the prototype of a class of caller code, or a
+`then` that is removed again before the verifier result settles: return the result as an object
+without a prototype. The capture happens at load, so permitkit must load before untrusted code;
+code that runs first can replace a constructor, and permitkit then captures the prototype of the
+replacement. The second
 covers a verifier that returns a thenable that is not a native promise, for example a query
 builder of an ORM: such a result never counts. Make `verify` an `async` function that awaits
 the builder.

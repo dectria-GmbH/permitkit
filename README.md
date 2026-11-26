@@ -283,12 +283,17 @@ example in HTML or in a log viewer.
 Return every result as an object without a prototype, as `bare` does above, also a result with
 `valid: false`. An async verifier resolves its own promise with its result, and that resolution
 reads `then` through the prototype chain. If the result is a plain object, code that sets
-`Object.prototype.then` can turn `{ valid: false }` into a confirmed result. permitkit checks
-Object.prototype, Array.prototype and Function.prototype for a `then` before and after each
-verifier call and then counts no proof. A `then` that is set and removed again while the
-verifier runs is not seen, and neither is a `then` on another prototype of the result, for
-example `Error.prototype` if the verifier returns an `Error`. A result without a prototype gives
-such a `then` nothing to find.
+`Object.prototype.then` can turn `{ valid: false }` into a confirmed result. Before and after
+each verifier call, permitkit checks every built-in prototype that it captured at load for an
+own `then`, and then counts no proof: Object.prototype, Array.prototype, Function.prototype, the
+Error types, RegExp, Date, Map, Set, the typed arrays, the iterator prototypes and the others.
+So a lasting `then` on a built-in prototype is caught. A `then` on the prototype of a class in
+your code is not seen, and neither is a `then` that is set and removed again before the result
+settles. The remedy is a result without a prototype: it gives such a `then` nothing to find.
+
+The capture happens when permitkit loads, so load permitkit before code you do not trust. Code
+that runs first can, for example, replace `globalThis.Map`, and permitkit then captures the
+prototype of the replacement.
 
 Two changes break verifiers written for earlier versions:
 
@@ -482,8 +487,9 @@ Not covered:
   through the prototype chain before permitkit sees the value. The captured `then` reads the
   `constructor` and `Promise[Symbol.species]` of the verifier's promise, and a getter there runs
   with that promise as `this`. So before each verifier call and again after its result settles,
-  permitkit checks that Object.prototype, Array.prototype and Function.prototype have no own
-  `then`, and that Promise.prototype.then, Promise.prototype.constructor and
+  permitkit checks that no built-in prototype that it captured at load has an own `then`
+  (Object.prototype, Array.prototype, Function.prototype and the others in `src/intrinsics.ts`),
+  and that Promise.prototype.then, Promise.prototype.constructor and
   `Promise[Symbol.species]` are the ones it found at load. If not, the proof does not count
   (`proof_invalid`). If the captured `then` throws for a promise or a thenable, the proof does
   not count either.
@@ -495,8 +501,8 @@ Not covered:
   This check is the mitigation, and it has limits. permitkit cannot protect the awaits inside
   your verifier code: what your WebAuthn library or database client returns there is in your
   hands. A `then` that is set during the verifier call and removed before its result settles is
-  not seen either, and neither is a `then` on a prototype other than the three above, for example
-  `Error.prototype` when the verifier returns an `Error`. Waiting is not the only way into that window: any read of an inherited
+  not seen either, and neither is a `then` on the prototype of a class in your code: the settled
+  value does not show which prototype chain its resolution read. Waiting is not the only way into that window: any read of an inherited
   property inside the verifier can run a getter that caller code set, for example `toJSON` in
   `JSON.stringify`. permitkit passes `expected` frozen and without a prototype, so a read on it
   runs no such getter, but a read on your own objects can. Return the result as an object without
