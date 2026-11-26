@@ -61,8 +61,11 @@ export type ProofVerification =
  * example `Object.assign(Object.create(null), { valid: true, approverId, requestDigest })`.
  * Resolving the verifier's promise reads `then` through the prototype chain of the result, and a
  * `then` that caller code sets there can turn the result into another value. permitkit catches a
- * lasting `then` on a built-in prototype. It cannot see a `then` on a class of caller code, or a
- * `then` that is set and removed while the verifier runs. Return a native
+ * lasting `then` on the ECMAScript prototypes that it captures at load and on their prototype
+ * chain. It does not check host objects, for example DOMException, Buffer, Response, Request,
+ * Headers, URL, Blob, EventTarget, AbortSignal, Event, CryptoKey, streams or WebAssembly objects:
+ * never return one, such as a caught DOMException. It cannot see a `then` on a class of caller
+ * code, or a `then` that is set and removed while the verifier runs. Return a native
  * promise or a plain value: any other thenable, for example a query builder, never counts.
  * In an async `verify`, `return await` a library promise; never return it directly.
  */

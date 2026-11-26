@@ -284,10 +284,14 @@ Return every result as an object without a prototype, as `bare` does above, also
 `valid: false`. An async verifier resolves its own promise with its result, and that resolution
 reads `then` through the prototype chain. If the result is a plain object, code that sets
 `Object.prototype.then` can turn `{ valid: false }` into a confirmed result. Before and after
-each verifier call, permitkit checks every built-in prototype that it captured at load for an
-own `then`, and then counts no proof: Object.prototype, Array.prototype, Function.prototype, the
-Error types, RegExp, Date, Map, Set, the typed arrays, the iterator prototypes and the others.
-So a lasting `then` on a built-in prototype is caught. A `then` on the prototype of a class in
+each verifier call, permitkit checks the ECMAScript built-in prototypes that it captured at load
+(listed in `src/intrinsics.ts`): Object.prototype, Array.prototype, Function.prototype, the Error
+types, RegExp, Date, Map, Set, the typed arrays, the iterator prototypes, the Intl prototypes and
+others. If one of them has an own `then`, or another prototype than at load, no proof counts.
+So a lasting `then` on these prototypes or on their prototype chain is caught. Host objects are
+not checked: DOMException, Buffer, Response, Request, Headers, URL, Blob, EventTarget,
+AbortSignal, Event, CryptoKey, streams and WebAssembly objects. Never return such an object, for
+example a DOMException from `catch (e) { return e }`. A `then` on the prototype of a class in
 your code is not seen, and neither is a `then` that is set and removed again before the result
 settles. The remedy is a result without a prototype: it gives such a `then` nothing to find.
 
@@ -494,10 +498,17 @@ Not covered:
   with that promise as `this`. So before each verifier call and again after its result settles,
   permitkit checks that no built-in prototype that it captured at load has an own `then`
   (Object.prototype, Array.prototype, Function.prototype and the others in `src/intrinsics.ts`),
-  and that Promise.prototype.then, Promise.prototype.constructor and
-  `Promise[Symbol.species]` are the ones it found at load. If not, the proof does not count
-  (`proof_invalid`). If the captured `then` throws for a promise or a thenable, the proof does
-  not count either.
+  that none of them has another prototype than at load, and that Promise.prototype.then,
+  Promise.prototype.constructor and `Promise[Symbol.species]` are the ones it found at load. If
+  not, the proof does not count (`proof_invalid`). If the captured `then` throws for a promise
+  or a thenable, the proof does not count either. Host objects such as DOMException, Buffer,
+  Response, URL, Blob, EventTarget, CryptoKey, streams and WebAssembly objects are not checked.
+
+  Two changes after load do not widen these limits. A captured prototype that becomes frozen or
+  non-extensible gains no `then`. An own or inherited `then` on it is still caught by the two
+  checks. A global replaced after load, for example `globalThis.Error = X`, makes objects with
+  `X.prototype`. permitkit never captured that prototype, so this is the limit of a class of
+  caller code. The remedy is again a result without a prototype.
 
   The check covers permitkit's own realm. A verifier from another realm (a `node:vm` context, an
   iframe) has its own `Object.prototype`, which the check does not read: it should return an

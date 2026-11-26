@@ -82,13 +82,20 @@ An entry can have a `detail` string. It can hold text from the input (a proof ty
 or Promise[Symbol.species]` (checked before and after each verifier call, and set if the captured
 `then` throws for the verifier's promise), and
 `verifier returned a thenable that is not a native promise`. The first check reads every
-built-in prototype that permitkit captured at load, for example Object.prototype,
-Error.prototype, Map.prototype and the typed array and iterator prototypes, so a lasting `then`
-there is caught. It does not see a `then` on the prototype of a class of caller code, or a
+ECMAScript built-in prototype that permitkit captured at load, for example Object.prototype,
+Error.prototype, Map.prototype and the typed array, iterator and Intl prototypes, so a lasting
+`then` there is caught. It also compares the prototype of each of them with the one at load, so
+an object with a `then` put into their prototype chain is caught. Host objects are not checked:
+DOMException, Buffer, Response, Request, Headers, URL, Blob, EventTarget, AbortSignal, Event,
+CryptoKey, streams and WebAssembly objects. Never return one, for example a caught DOMException.
+The check does not see a `then` on the prototype of a class of caller code, or a
 `then` that is removed again before the verifier result settles: return the result as an object
 without a prototype. The capture happens at load, so permitkit must load before untrusted code;
 code that runs first can replace a constructor, and permitkit then captures the prototype of the
-replacement. The second
+replacement. A captured prototype that becomes frozen later gains no `then`, and an own or
+inherited `then` on it is still caught. A global replaced after load, for example
+`globalThis.Error = X`, makes objects with `X.prototype`, which permitkit never captured: this
+is the limit of a class of caller code, with the same remedy. The second
 covers a verifier that returns a thenable that is not a native promise, for example a query
 builder of an ORM: such a result never counts. Make `verify` an `async` function that awaits
 the builder. In an async `verify`, `return await` a library promise and never return it
