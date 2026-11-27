@@ -798,4 +798,4 @@ Report a vulnerability in private, as described in
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). Copyright (c) 2026 dectria GmbH.

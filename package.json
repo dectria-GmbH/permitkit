@@ -2,6 +2,7 @@
   "name": "permitkit",
   "version": "0.1.0",
   "description": "Authorization toolkit for TypeScript: roles, scopes, deny rules, dual approval and delegated agent access, as a pure and auditable decision function.",
+  "author": "dectria GmbH",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dectria-GmbH/permitkit.git"
