@@ -37,45 +37,113 @@ after permitkit loads changes no decision (see the README threat model).
 
 How to await the result safely: see "Promises in `evaluateApprovals`" in the README threat model.
 
-| Code                             | Outcome   | Meaning                                                                       |
-| -------------------------------- | --------- | ----------------------------------------------------------------------------- |
-| `approved`                       | `allow`   | Enough distinct, eligible approvals exist.                                    |
-| `approvals_pending`              | `pending` | Fewer eligible approvals exist than the rule requires.                        |
-| `approval_window_expired`        | `deny`    | The approval window closed before the evaluation time.                        |
-| `approval_not_required`          | `allow`   | No approval rule applies to the request.                                      |
-| `requester_denied`               | `deny`    | The requester no longer holds the permission. See `requesterDecision`.        |
-| `not_approvable_at_request_time` | `deny`    | At its request time, the request was not `approval_required` under this rule. |
-| `sod_history_missing`            | `deny`    | The prior-request check is on, but the input has no `priorRequests`.          |
-| `too_many_approvals`             | `deny`    | The input holds more than 20 approvals. Checked before the input is read.     |
-| `input_too_large`                | `deny`    | The request or the whole input exceeds the size bounds below.                 |
-| `invalid_input`                  | `deny`    | The input does not match the schema, is not plain data, or is inconsistent.   |
+| Code                             | Outcome   | Meaning                                                                                                          |
+| -------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------- |
+| `approved`                       | `allow`   | Enough distinct, eligible approvals exist.                                                                       |
+| `approvals_pending`              | `pending` | Fewer eligible approvals exist than the rule requires.                                                           |
+| `approval_window_expired`        | `deny`    | The approval window closed before the evaluation time.                                                           |
+| `approval_not_required`          | `allow`   | No approval rule applies to the request.                                                                         |
+| `requester_denied`               | `deny`    | The requester no longer holds the permission. See `requesterDecision`.                                           |
+| `not_approvable_at_request_time` | `deny`    | At its request time, the request was not `approval_required` under this rule.                                    |
+| `sod_history_missing`            | `deny`    | The prior-request check is on, or the input has a separation rule, but the input has no `priorRequests`.         |
+| `sod_contributors_missing`       | `deny`    | The input has a separation rule without a `contributors` list.                                                   |
+| `separation_invalid`             | `deny`    | The separation rule does not match its schema. Never falls back to the policy flags.                             |
+| `separation_rule_missing`        | `deny`    | The policy sets `perRequestRule: "required"`, and the input has no separation rule.                              |
+| `separation_conflict`            | `deny`    | The rule allows self-approval with strict role separation, which excludes it.                                    |
+| `separation_policy_conflict`     | `deny`    | The rule waives a check that a policy flag requires, or is strict under an approval rule without approver roles. |
+| `requester_role_conflict`        | `deny`    | The rule is strict, and the requester holds an approver role of the approval rule.                               |
+| `too_many_approvals`             | `deny`    | The input holds more than 20 approvals. Checked before the input is read.                                        |
+| `input_too_large`                | `deny`    | The request or the whole input exceeds the size bounds below.                                                    |
+| `invalid_input`                  | `deny`    | The input does not match the schema, is not plain data, or is inconsistent.                                      |
+
+The order of checks is: approval count, size bounds, input shape, separation rule shape, time,
+request digest, the requester's decision now and at request time, approval rule, window, prior
+requests for the policy flag, a missing rule where the policy requires one, rule conflicts,
+the two lists of the rule, prior request permissions, the requester's roles under a strict rule,
+then each approval.
+
+## Separation rule per request (`ApprovalInput.separation`)
+
+The consumer stores a versioned copy of its separation rule with each request and passes it in.
+permitkit applies the copy as given. It does not look up the rule and does not know whether the
+version is still current: the consumer checks the version at the decision, at the last required
+approval and at execution. The rule is not part of `requestDigest`, so the digest of a request
+does not change with the rule.
+
+| Field                 | Values                               | Effect                                                                                                                                                                                                                                                |
+| --------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`             | 1 to 128 characters                  | The result carries it.                                                                                                                                                                                                                                |
+| `requesterMayApprove` | `true` or `false`                    | Rule A. Only `true` allows the requester to count as one of the `approvers` distinct approvers. The required number does not change.                                                                                                                  |
+| `roleSeparation`      | `"off"`, `"simple"` or `"strict"`    | Rule B. `"simple"`: no contributor and no approver whom `priorRequests` lists with the permission approves. `"strict"`: the same, and no approver holds a role with a grant for the permission, and the requester holds no approver role of the rule. |
+| `contributors`        | list of principal ids, `[]` for none | Who contributed to the subject. Required: absent refuses with `sod_contributors_missing`, never read as empty.                                                                                                                                        |
+
+The same-type check reads the existing `priorRequests` input: earlier requests by the approvers,
+from the caller's records. The caller decides their scope, for example every request for the
+permission or only the requests for the same subject. permitkit refuses an approver only if an
+entry has the approver's id and the requested permission; it applies no other filter, so a
+narrower list refuses fewer approvers. A `PriorRequest` has no subject field, so permitkit cannot
+filter the history by subject: if you scope it to one subject, pass only those entries.
+With a separation rule, `priorRequests` is required:
+absent refuses with `sod_history_missing`, never read as empty. Both lists are also required when the rule
+waives Rule B, because the result reports each waived check.
+
+Where `requesterMayApprove` is `true`, simple Rule B does not apply: a contributor and an
+approver listed in `priorRequests` may approve. `"strict"` with `requesterMayApprove: true` refuses with
+`separation_conflict`. A request that an agent makes for a principal counts as the principal's own
+request: the principal approves it only where self-approval is allowed, and an agent in the chain
+never approves. An agent approver is refused under every rule (`approver_not_human`,
+`approver_is_delegated`).
+
+`decide()` does not see the per-request rule. Under a strict rule, a requester with an approver
+role gets `approval_required` from `decide()` and is refused only by `evaluateApprovals`
+(`requester_role_conflict`). A caller that wants the refusal at request time checks it itself.
+
+The rule only tightens the policy's `separationOfDuties` flags. A rule that waives what a flag
+requires refuses with `separation_policy_conflict`: `requesterNeverApprovesSameType` with
+self-approval or `roleSeparation: "off"`, and `exclusiveRequestAndApproveRoles` with
+self-approval. A consumer that passes the rule per request sets both flags to `false` and sets
+`perRequestRule: "required"`, so that an input for a request that needs approval and has no rule
+refuses (`separation_rule_missing`, checked in the order above). Without `perRequestRule`, an input without a rule is evaluated as
+before: the requester never approves, and only the flags apply. Such an input skips the
+contributor check silently, because only a rule carries `contributors`. A deployment that uses
+contributors should set `perRequestRule: "required"`.
+
+All id comparisons in these checks are exact string comparisons: the requester, the approvers,
+`contributors` and `priorRequests[].principalId`. Case and whitespace matter, and permitkit does
+not normalize them. Pass one canonical form of each id everywhere.
+
+`ApprovalDecision.separation` holds the applied rule (`version`, `requesterMayApprove`,
+`roleSeparation`) or `null`. `ApprovalDecision.waived` lists, for each counted approver with a
+waived check, the checks that the rule waived, in the order `requester`, `contributor`,
+`same_type`.
 
 ## Approval rejections (`ApprovalDecision.rejected`)
 
 An entry can have a `detail` string. It can hold text from the input (a proof type) or the
 `reason` that a verifier returned, so escape it before you render it.
 
-| Code                       | Meaning                                                               |
-| -------------------------- | --------------------------------------------------------------------- |
-| `approval_invalid`         | The approval does not match the approval schema.                      |
-| `approver_not_human`       | Only a human principal can approve.                                   |
-| `approver_is_delegated`    | An approval given through an agent does not count.                    |
-| `requester_cannot_approve` | The requesting principal, or an agent in its chain, cannot approve.   |
-| `duplicate_approver`       | This approver was already counted.                                    |
-| `digest_mismatch`          | The approval names another request digest.                            |
-| `approved_before_request`  | The approval time is before the request time.                         |
-| `approved_after_expiry`    | The approval time is after the approval window closed.                |
-| `approved_in_future`       | The approval time is after the evaluation time.                       |
-| `approver_role_missing`    | The approver holds none of the approver roles for this resource.      |
-| `approver_denied_by_rule`  | A deny rule for the permission matches the approver.                  |
-| `approver_not_permitted`   | The approver does not hold the permission (rules without roles).      |
-| `sod_role_conflict`        | The approver also holds a requesting role (if configured).            |
-| `sod_prior_request`        | The approver requested an action of this type before (if configured). |
-| `proof_missing`            | The rule requires a proof and the approval has none.                  |
-| `proof_type_not_allowed`   | The rule's `proofTypes` do not include the proof's type.              |
-| `proof_mismatch`           | The proof names another approver or another request digest.           |
-| `proof_verifier_missing`   | No verifier is registered for the proof type.                         |
-| `proof_invalid`            | The verifier rejected the proof, threw, or echoed other values.       |
+| Code                       | Meaning                                                                                                               |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `approval_invalid`         | The approval does not match the approval schema.                                                                      |
+| `approver_not_human`       | Only a human principal can approve.                                                                                   |
+| `approver_is_delegated`    | An approval given through an agent does not count.                                                                    |
+| `requester_cannot_approve` | The requesting principal (unless the separation rule allows self-approval), or an agent in its chain, cannot approve. |
+| `duplicate_approver`       | This approver was already counted.                                                                                    |
+| `digest_mismatch`          | The approval names another request digest.                                                                            |
+| `approved_before_request`  | The approval time is before the request time.                                                                         |
+| `approved_after_expiry`    | The approval time is after the approval window closed.                                                                |
+| `approved_in_future`       | The approval time is after the evaluation time.                                                                       |
+| `approver_role_missing`    | The approver holds none of the approver roles for this resource.                                                      |
+| `approver_denied_by_rule`  | A deny rule for the permission matches the approver.                                                                  |
+| `approver_not_permitted`   | The approver does not hold the permission (rules without roles).                                                      |
+| `sod_role_conflict`        | The approver also holds a requesting role (if configured).                                                            |
+| `sod_prior_request`        | `priorRequests` lists the approver with the requested permission (if configured).                                     |
+| `sod_contributor`          | The separation rule lists the approver as a contributor, and Rule B applies.                                          |
+| `proof_missing`            | The rule requires a proof and the approval has none.                                                                  |
+| `proof_type_not_allowed`   | The rule's `proofTypes` do not include the proof's type.                                                              |
+| `proof_mismatch`           | The proof names another approver or another request digest.                                                           |
+| `proof_verifier_missing`   | No verifier is registered for the proof type.                                                                         |
+| `proof_invalid`            | The verifier rejected the proof, threw, or echoed other values.                                                       |
 
 `proof_invalid` also covers two cases that the verifier does not decide. `detail` names them:
 `a then on, or a changed parent of, a built-in prototype, or a replaced Promise.prototype.then,

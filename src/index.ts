@@ -40,6 +40,7 @@ export type {
 
 export { evaluateApprovals } from "./approval.js";
 export type {
+  AppliedSeparation,
   Approval,
   ApprovalDecision,
   ApprovalInput,
@@ -47,7 +48,11 @@ export type {
   ApprovalProof,
   ApprovalProofVerifier,
   ApprovalRejection,
+  ApprovalWaiver,
+  PriorRequest,
   ProofVerification,
+  SeparationCheck,
+  SeparationRule,
 } from "./approval.js";
 
 export { evaluate } from "./authzen.js";

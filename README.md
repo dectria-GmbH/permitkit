@@ -200,7 +200,10 @@ and its `requestDigest`, collect approvals, then call `evaluateApprovals()`:
   rule applies at evaluation time, the result is `allow` with `approval_not_required`, the same
   as `decide()` at that time;
 - each approver is a human principal acting directly, not through an agent;
-- the requester never counts: neither the principal nor any agent id in its actor chain;
+- the requester does not count: neither the principal nor any agent id in its actor chain. Only
+  a separation rule in the input with `requesterMayApprove: true` lets the principal count as
+  one of the distinct approvers; agents in the chain never count (see
+  [Separation of duties](#separation-of-duties));
 - each approver counts once;
 - each approval names the request digest, which covers principal, each actor with the content
   of its grant, action, resource, request time and policy version, so an approval cannot move
@@ -333,16 +336,53 @@ See "Replaced built-ins" in the threat model for what the check cannot see.
 
 The operator switches these settings in the policy:
 
-- `requesterNeverApprovesSameType`: who requested an action of a type before may never approve an
-  action of that type. Pass the history as `priorRequests`; without it, the result is a deny.
-  An empty list means "no earlier requests", so pass the full history for the approvers. Each
-  entry must name a permission of the current catalogue, or the result is `invalid_input`, so
-  filter out permissions that a later release removed.
+- `requesterNeverApprovesSameType`: an approver whom `priorRequests` lists with the requested
+  permission may not approve. Without `priorRequests`, the result is a deny. An empty list means
+  "no earlier requests". You decide which earlier requests the list holds: every request for
+  that permission, or a narrower set, for example only requests for the same subject. permitkit
+  matches each entry by approver id and permission only and applies no other filter. Each entry
+  must name a permission of the current catalogue, or the result is `invalid_input`, so filter
+  out permissions that a later release removed. An entry has no subject field, so permitkit
+  cannot filter the history by subject. If you want a per-subject scope, pass only the entries
+  for that subject.
 - `exclusiveRequestAndApproveRoles`: nobody may hold both a role that grants the permission and an
   approver role for it. Requests and approvals from such subjects are refused. Every approval
   rule then needs `eligibleApprovers: { kind: "roles", ... }`.
 
 Both flags are required, also when `false`.
+
+A consumer that keeps its separation rule per action, with versions, passes a copy of the rule
+with each request instead, as `separation` in the `evaluateApprovals` input:
+
+```ts
+await evaluateApprovals(policy, {
+  request,
+  approvals,
+  now,
+  priorRequests, // earlier requests by the approvers, in the scope you choose; required with a rule
+  separation: {
+    version: "refund-approval@7",
+    requesterMayApprove: false, // Rule A: true lets the requester be one of the approvers
+    roleSeparation: "simple", // Rule B: "off", "simple" or "strict"
+    contributors: ["u-17"], // who contributed to the subject; required, [] for none
+  },
+});
+```
+
+The default refuses self-approval; an input without a rule behaves as before. That includes the
+contributor check: an input without a rule skips it silently, and nothing in the result says
+so. A deployment that uses contributors should set `perRequestRule: "required"`. Self-approval does
+not lower the number of distinct approvers. Where it is allowed, simple Rule B does not apply,
+and strict Rule B with self-approval is refused. The rule only tightens the policy flags: set
+both to `false` and set `perRequestRule: "required"` in `separationOfDuties`, so that an input for a request that needs
+approval and has no rule is refused. The result names the applied rule version in `separation` and, per
+counted approver, the checks that the rule waived in `waived`. The rule is not part of
+`requestDigest`. permitkit does not know whether the rule version is still current: check it at
+the decision, at the last approval and at execution. `decide()` does not see the per-request
+rule: under a strict rule, a requester with an approver role gets `approval_required` from
+`decide()` and is refused only by `evaluateApprovals` (`requester_role_conflict`). A caller that
+wants the refusal at request time checks it itself. All codes and rules:
+[docs/reference.md](docs/reference.md#separation-rule-per-request-approvalinputseparation).
 
 ### Audit and re-evaluation
 
@@ -573,6 +613,10 @@ Not covered:
   decision after `evaluateApprovals` returns is yours.
 
 - Proxies on the portable path, as described above, and changes to permitkit's own exports.
+- The currency of a separation rule. `evaluateApprovals` applies the rule copy that the input
+  holds. It does not know whether its version is still the consumer's current version. Checking
+  the version at the decision, at the last required approval and at execution is the caller's
+  duty; a stale or forged copy in the input is the caller's data.
 - Code with its own functions in the process can still change any other library and your own
   code around permitkit, for example the code that builds the request.
 
@@ -601,6 +645,9 @@ Not covered:
 - Ids, role names and scope values are compared as exact strings. permitkit does not change case,
   trim spaces or normalize Unicode. Normalize ids and scope values once, where they enter your
   system, or a deny rule for `vip` does not match `VIP`.
+- The same holds for every id in the separation checks: the requester, the approvers,
+  `contributors` and `priorRequests[].principalId`. `"u-17"` and `"U-17 "` are two principals.
+  Pass one canonical form of each id everywhere.
 - Timestamps are ISO 8601 with seconds, at most three fraction digits and an offset
   (`Z` or `+hh:mm` up to 23:59). Other forms are rejected, because engines read them differently.
 - Inputs pass a size guard before validation. Limits are in [docs/reference.md](docs/reference.md).
@@ -627,30 +674,33 @@ for any of them: the wide case is a value of its own, `{ kind: "all" }`, `{ kind
 
 What absence means after this rule:
 
-| Field                                                             | Absent, empty, `null` or malformed                                                                                          |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Grant, assignment, agent grant `scope`                            | Refused                                                                                                                     |
-| Grant and agent grant `limits`                                    | Refused                                                                                                                     |
-| A key set to `undefined` inside a match scope, range or threshold | Refused, never a dropped condition                                                                                          |
-| A range bound `min` or `max`                                      | Refused (`null` is the explicit open side)                                                                                  |
-| Deny rule `scope`                                                 | Refused                                                                                                                     |
-| Approval rule `when`                                              | Refused                                                                                                                     |
-| Approval rule `eligibleApprovers`                                 | Refused                                                                                                                     |
-| `requireProof`; `proofTypes` when `requireProof` is true          | Refused                                                                                                                     |
-| `denies`, `approvalRules`, `separationOfDuties` and its flags     | Missing: refused. An empty list means no rules, as written                                                                  |
-| `subject.act`, actor `act`, actor `grant`                         | Refused (`null` is the explicit "none")                                                                                     |
-| Agent grant `notBefore`, `revokedAt`                              | Refused (`null` is the explicit "not set")                                                                                  |
-| A property inside a match scope, on the resource                  | Narrows: the grant does not match                                                                                           |
-| A property inside a deny match scope, on the resource             | Narrows: counts as inside, the deny rule matches                                                                            |
-| A property in a `range` limit, on the resource                    | Narrows: the limit counts as exceeded                                                                                       |
-| A property in a `threshold`, on the resource                      | Narrows: the approval rule applies                                                                                          |
-| `resource.properties`                                             | Narrows: as if every property were missing                                                                                  |
-| Deny rule `roles`, `subjectTypes`                                 | Narrows: the deny rule applies to everyone                                                                                  |
-| `priorRequests` with `requesterNeverApprovesSameType`             | Missing: narrows (`sod_history_missing`). `[]` means no earlier requests. An unknown permission in it: `invalid_input`      |
-| An approval `proof` with `requireProof`                           | Narrows: `proof_missing`                                                                                                    |
-| Prior actor `grant: null`                                         | Explicit "no grant": prior actors grant nothing, so no grant checks run for that actor. A present prior grant must be valid |
-| `context.policyVersion`, `context.policyDigest`                   | No pin: the loaded policy decides, which still grants only what it says                                                     |
-| `resource.id`, `description`                                      | No effect on the decision                                                                                                   |
+| Field                                                             | Absent, empty, `null` or malformed                                                                                                   |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Grant, assignment, agent grant `scope`                            | Refused                                                                                                                              |
+| Grant and agent grant `limits`                                    | Refused                                                                                                                              |
+| A key set to `undefined` inside a match scope, range or threshold | Refused, never a dropped condition                                                                                                   |
+| A range bound `min` or `max`                                      | Refused (`null` is the explicit open side)                                                                                           |
+| Deny rule `scope`                                                 | Refused                                                                                                                              |
+| Approval rule `when`                                              | Refused                                                                                                                              |
+| Approval rule `eligibleApprovers`                                 | Refused                                                                                                                              |
+| `requireProof`; `proofTypes` when `requireProof` is true          | Refused                                                                                                                              |
+| `denies`, `approvalRules`, `separationOfDuties` and its flags     | Missing: refused. An empty list means no rules, as written                                                                           |
+| `subject.act`, actor `act`, actor `grant`                         | Refused (`null` is the explicit "none")                                                                                              |
+| Agent grant `notBefore`, `revokedAt`                              | Refused (`null` is the explicit "not set")                                                                                           |
+| A property inside a match scope, on the resource                  | Narrows: the grant does not match                                                                                                    |
+| A property inside a deny match scope, on the resource             | Narrows: counts as inside, the deny rule matches                                                                                     |
+| A property in a `range` limit, on the resource                    | Narrows: the limit counts as exceeded                                                                                                |
+| A property in a `threshold`, on the resource                      | Narrows: the approval rule applies                                                                                                   |
+| `resource.properties`                                             | Narrows: as if every property were missing                                                                                           |
+| Deny rule `roles`, `subjectTypes`                                 | Narrows: the deny rule applies to everyone                                                                                           |
+| `priorRequests` with `requesterNeverApprovesSameType`             | Missing: narrows (`sod_history_missing`). `[]` means no earlier requests. An unknown permission in it: `invalid_input`               |
+| `separation`                                                      | Missing: as before; refused (`separation_rule_missing`) with `perRequestRule: "required"`, if approval is needed. Malformed: refused |
+| `separation.contributors`, `priorRequests` with `separation`      | Missing: refused (`sod_contributors_missing`, `sod_history_missing`). `[]` means none                                                |
+| `separationOfDuties.perRequestRule`                               | Missing: an input without a rule is evaluated as before. Any value but `"required"`: refused                                         |
+| An approval `proof` with `requireProof`                           | Narrows: `proof_missing`                                                                                                             |
+| Prior actor `grant: null`                                         | Explicit "no grant": prior actors grant nothing, so no grant checks run for that actor. A present prior grant must be valid          |
+| `context.policyVersion`, `context.policyDigest`                   | No pin: the loaded policy decides, which still grants only what it says                                                              |
+| `resource.id`, `description`                                      | No effect on the decision                                                                                                            |
 
 What permitkit cannot check is the content of a list or an open record. It refuses a required
 field that is missing, `undefined` or `null` (where `null` is not the documented "none"), and an

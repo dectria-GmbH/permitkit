@@ -1,6 +1,6 @@
 // Compiled with `tsc --strict` against the built declarations in dist, as a consumer sees them
 // (pnpm consumer-types, after the build). Each line is something consumer code may write.
-import { PermitkitError } from "../../dist/index.js";
+import { PermitkitError, type PriorRequest } from "../../dist/index.js";
 
 /** A subclass can set its own name. */
 export class SubA extends PermitkitError {
@@ -24,3 +24,6 @@ export class SubB extends PermitkitError {
 export function codeOf(value: unknown): string | null {
   return PermitkitError.is(value) ? value.code : null;
 }
+
+/** An earlier request, typed with the exported PriorRequest. */
+export const earlier: PriorRequest = { principalId: "u-1", permission: "ticket:refund" };

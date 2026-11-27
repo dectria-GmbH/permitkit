@@ -69,7 +69,10 @@ export const approvalRejectionCodes = Object.freeze({
   approver_denied_by_rule: "A deny rule for this permission matches the approver.",
   approver_not_permitted: "The approver does not hold the permission that the rule requires.",
   sod_role_conflict: "Separation of duties: the approver also holds a requesting role.",
-  sod_prior_request: "Separation of duties: the approver requested an action of this type before.",
+  sod_prior_request:
+    "Separation of duties: priorRequests lists the approver with the requested permission.",
+  sod_contributor:
+    "Separation of duties: the separation rule lists the approver as a contributor to the subject.",
   proof_missing: "The rule requires an approval proof and the approval has none.",
   proof_type_not_allowed: "The rule does not accept this proof type.",
   proof_mismatch: "The proof names another approver or another request digest.",
@@ -89,7 +92,18 @@ export const approvalReasonCodes = Object.freeze({
   not_approvable_at_request_time:
     "At its request time, the request was not an approval_required decision under this rule.",
   sod_history_missing:
-    "The operator requires the prior-request check, but the input has no priorRequests.",
+    "The operator requires the prior-request check, or the input has a separation rule, but the input has no priorRequests.",
+  sod_contributors_missing:
+    "The input has a separation rule, but the rule has no contributors list.",
+  separation_invalid: "The separation rule does not match the separation rule schema.",
+  separation_rule_missing:
+    "The policy requires a separation rule per request, but the input has none.",
+  separation_conflict:
+    "The separation rule allows self-approval together with strict role separation, which excludes it.",
+  separation_policy_conflict:
+    "The separation rule waives a check that the policy's separationOfDuties requires, or asks for strict role separation under an approval rule without approver roles.",
+  requester_role_conflict:
+    "Separation of duties: the separation rule is strict, and the requester holds an approver role of the approval rule.",
   too_many_approvals: "The input holds more approvals than one evaluation reads (20).",
   input_too_large: "The request or the whole approval input exceeds the size bounds.",
   invalid_input:
