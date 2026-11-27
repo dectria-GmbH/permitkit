@@ -2,16 +2,20 @@
   "name": "permitkit",
   "version": "0.1.0",
   "description": "Authorization toolkit for TypeScript: roles, scopes, deny rules, dual approval and delegated agent access, as a pure and auditable decision function.",
+  "author": "dectria GmbH",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dectria-GmbH/permitkit.git"
   },
+  "homepage": "https://github.com/dectria-GmbH/permitkit#readme",
+  "bugs": {
+    "url": "https://github.com/dectria-GmbH/permitkit/issues"
+  },
   "license": "MIT",
-  "private": true,
   "type": "module",
   "sideEffects": false,
   "engines": {
-    "node": ">=24"
+    "node": ">=22.3.0"
   },
   "packageManager": "pnpm@12.21.0",
   "exports": {
@@ -28,11 +32,16 @@
   "files": [
     "dist",
     "src",
-    "docs",
+    "docs/reference.md",
+    "docs/database-enforcement.md",
     "AGENTS.md",
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -43,7 +52,8 @@
     "smoke": "node scripts/smoke.mjs && node --experimental-vm-modules scripts/smoke-vm.mjs",
     "bundle-check": "node scripts/bundle-check.mjs",
     "consumer-types": "tsc -p test/consumer/tsconfig.json",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build && pnpm smoke && pnpm bundle-check && pnpm consumer-types"
+    "pack-check": "node scripts/pack-check.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build && pnpm smoke && pnpm bundle-check && pnpm consumer-types && pnpm pack-check"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

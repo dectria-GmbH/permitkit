@@ -193,7 +193,7 @@ by their internal slots (on Node a `Map` or `Date`, also with a swapped prototyp
 other runtimes, see below), symbol or non-enumerable keys, getters and setters (which are not run),
 array holes and named array properties, revoked proxies, and input too deep to walk. On Node, every
 proxy is refused too. In a runtime without `process` (for example Cloudflare Workers without
-`nodejs_compat`), a proxy cannot be detected: it serializes as the data it reports, and its traps
+`nodejs_compat` and with a compatibility date before 2026-08-04), a proxy cannot be detected: it serializes as the data it reports, and its traps
 run. There, a built-in whose kind only a check that throws could identify serializes as its own keys
 when its prototype is set to `Object.prototype` or `null`, and as `{}` if it has none: a `Map`,
 `Set`, `WeakMap`, `WeakSet`, `Date`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, boxed number,

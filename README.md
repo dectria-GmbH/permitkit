@@ -4,7 +4,7 @@ Authorization toolkit for TypeScript: roles, scopes, limits, deny rules, dual ap
 delegated agent access. Every decision is a pure function of the policy and the request, so you
 can log it and re-evaluate it later against the same policy version.
 
-Status: 0.1, in development, not published. The API can change before 1.0.
+Status: 0.1, in development. The API can change before 1.0.
 
 ## Principles
 
@@ -27,12 +27,27 @@ Status: 0.1, in development, not published. The API can change before 1.0.
 
 ## Install
 
-The package is not on a registry yet. Build it from source with Node 24 and pnpm:
+Install an exact version from npm:
+
+```sh
+pnpm add --save-exact permitkit@0.1.0
+```
+
+Pin the exact version, because the API can change in any 0.x release. On Node, permitkit needs
+22.3 or newer. The package is ESM only: use `import`, not `require`.
+
+Releases from the release workflow carry npm provenance, so `npm audit signatures` can check where
+a version came from. Version 0.1.0 was published manually, without provenance.
+
+To work on the package itself, build it from source with Node 24 and pnpm:
 
 ```sh
 pnpm install
 pnpm build
 ```
+
+How a maintainer publishes a release:
+[docs/releasing.md](https://github.com/dectria-GmbH/permitkit/blob/main/docs/releasing.md).
 
 ## Quick start
 
@@ -434,7 +449,12 @@ two ways when it loads:
   `Map`, `Set`, `WeakMap`, `WeakSet`, `Date`, `RegExp`, `Promise`, buffer, typed array,
   `DataView`, boxed primitive, error, generator, `Map` or `Set` iterator, module namespace and
   `arguments` object.
-- **Other runtimes** (no `process`, for example Cloudflare Workers without `nodejs_compat`).
+  Cloudflare Workers have a working `process` with `nodejs_compat`, and also without it from
+  compatibility date 2026-08-04 (measured in local workerd 1.20261019). They then take this path.
+  The flag `no_nodejs_compat_v2` turns it off. If your deployment depends on one path, read the
+  exported `plainDataRuntime` (`"node"` or `"portable"`) at startup.
+- **Other runtimes** (no `process`, for example Cloudflare Workers without `nodejs_compat` and
+  with a compatibility date before 2026-08-04).
   permitkit uses only checks that never fail with an exception and run no caller code. A typed
   array and a `DataView` are refused by `ArrayBuffer.isView`, also with a swapped prototype and
   with own keys. An error is refused by `Error.isError` where the runtime has it. Elsewhere an
@@ -773,6 +793,11 @@ Commit it as a snapshot, so that every policy change shows up as a reviewable di
 `permitkit/kysely` (query helpers) are planned as separate entry points. The core stays free of
 framework dependencies.
 
+## Security
+
+Report a vulnerability in private, as described in
+[SECURITY.md](https://github.com/dectria-GmbH/permitkit/blob/main/SECURITY.md).
+
 ## Licence
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). Copyright (c) 2026 dectria GmbH.

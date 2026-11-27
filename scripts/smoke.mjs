@@ -40,5 +40,7 @@ assert.equal(allowed.outcome, "allow");
 assert.equal(denied.outcome, "deny");
 assert.equal(denied.reason, "no_grant");
 // Node gives util.types, so the package must not fall back to the portable checks.
-assert.equal(core.plainDataRuntime, "node");
+// process.getBuiltinModule needs Node 22.3 or newer, which engines.node promises.
+assert.equal(typeof process.getBuiltinModule, "function", "engines.node promises 22.3 or newer");
+assert.equal(core.plainDataRuntime, "node", "the package fell back to the portable path");
 console.log("smoke ok: permitkit and permitkit/testing load from dist");
