@@ -14,8 +14,9 @@
   tripwire, not a proof: it cannot see names built at run time, so never compute a global or
   module name in `src`.
 - Releases: a tag `vX.Y.Z` on `main` starts `.github/workflows/release.yml`, which publishes to
-  npm through trusted publishing. Never publish from a local machine, and never add an npm token
-  to the repository. Steps: `docs/releasing.md` in the repository.
+  npm through trusted publishing. Except for the one-time manual 0.1.0, never publish from a
+  local machine, and never add an npm token to the repository. Steps: `docs/releasing.md` in the
+  repository.
 - Every input uses hand-written validators (`src/validate.ts`, `src/request.ts`,
   `src/policy-document.ts`, `src/approval-input.ts`, `src/record.ts`). permitkit has no runtime
   dependency; do not add one. `pnpm bundle-check` fails if `package.json` lists one or if the
