@@ -1,7 +1,29 @@
 # Releasing
 
-The workflow `.github/workflows/release.yml` publishes permitkit to npm. Nobody publishes from a
-local machine, and the repository holds no npm token.
+The workflow `.github/workflows/release.yml` publishes permitkit to npm. Except for the one-time
+manual release 0.1.0 (next section), nobody publishes from a local machine, and the repository
+holds no npm token.
+
+## First release 0.1.0 (manual, one time)
+
+The owner publishes 0.1.0 by hand, because the repository is private and the trusted publisher
+does not exist yet. This release has no npm provenance: npm creates provenance only for packages
+built in a public repository. All later releases come from the workflow below.
+
+Publish the checked tarball, not the folder. The repository `.npmrc` sets `ignore-scripts`, and
+`package.json` has no build lifecycle script. `dist` is not in git. `npm publish` from the folder
+would therefore ship no `dist` and exit 0, and a published version cannot be replaced. The tarball
+route mirrors the workflow.
+
+1. Use a clean checkout of `main`. `git status` must print nothing.
+2. Run `git fetch` and confirm that `git rev-parse HEAD` equals `git rev-parse origin/main`.
+3. Run `pnpm install --frozen-lockfile`.
+4. Run `pnpm check`. Its exit code must be 0. It builds `dist` and runs the pack check.
+5. Run `npm pack`. It writes `permitkit-0.1.0.tgz`. Check the file list with
+   `tar -tzf permitkit-0.1.0.tgz | grep -c '^package/dist/'`. The count must be above 0.
+6. Run `npm publish ./permitkit-0.1.0.tgz --provenance=false --auth-type=web`, and confirm the
+   login in the browser.
+7. Check the result with `npm view permitkit@0.1.0`.
 
 ## Make a release
 
@@ -30,8 +52,8 @@ not. A published version cannot be replaced. If a release is wrong, publish a ne
 
 ### GitHub
 
-- Make the repository public before the first release. npm creates provenance only for packages
-  built in a public repository.
+- Make the repository public before the first workflow release. npm creates provenance only for
+  packages built in a public repository.
 - Settings, Environments: create the environment `npm` before the first tag. Add a required
   reviewer, and limit it to tags that match `v*.*.*`. If the environment does not exist, GitHub
   creates it on the first run without protection rules, and the publish job runs without
