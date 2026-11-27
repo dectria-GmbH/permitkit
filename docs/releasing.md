@@ -6,9 +6,9 @@ holds no npm token.
 
 ## First release 0.1.0 (manual, one time)
 
-The owner publishes 0.1.0 by hand, because the repository is private and the trusted publisher
-does not exist yet. This release has no npm provenance: npm creates provenance only for packages
-built in a public repository. All later releases come from the workflow below.
+The owner publishes 0.1.0 by hand, because the trusted publisher on npm is not set up yet. This
+release has no npm provenance: npm creates provenance only when the release workflow publishes the
+package (trusted publishing from GitHub Actions). All later releases come from the workflow below.
 
 Publish the checked tarball, not the folder. The repository `.npmrc` sets `ignore-scripts`, and
 `package.json` has no build lifecycle script. `dist` is not in git. `npm publish` from the folder
@@ -19,13 +19,21 @@ route mirrors the workflow.
 2. Run `git fetch` and confirm that `git rev-parse HEAD` equals `git rev-parse origin/main`.
 3. Run `pnpm install --frozen-lockfile`.
 4. Run `pnpm check`. Its exit code must be 0. It builds `dist` and runs the pack check.
-5. Run `npm pack`. It writes `permitkit-0.1.0.tgz`. Check the file list with
-   `tar -tzf permitkit-0.1.0.tgz | grep -c '^package/dist/'`. The count must be above 0.
+5. Run `npm pack`. It writes `permitkit-0.1.0.tgz`. Check that the tarball holds `dist`.
+   The command fails if it does not:
+
+   ```sh
+   test "$(tar -tzf permitkit-0.1.0.tgz | grep -c '^package/dist/')" -gt 0
+   ```
+
 6. Run `npm publish ./permitkit-0.1.0.tgz --provenance=false --auth-type=web`, and confirm the
    login in the browser.
 7. Check the result with `npm view permitkit@0.1.0`.
 
 ## Make a release
+
+The version 0.1.0 exists on npm and cannot be replaced. The first workflow release must therefore
+be 0.1.1 or higher.
 
 1. On a branch, set `version` in `package.json` to the new version, for example `0.2.0`. Change
    the version in the install command in `README.md` too.
