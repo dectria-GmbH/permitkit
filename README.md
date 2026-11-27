@@ -34,8 +34,10 @@ pnpm add --save-exact permitkit@0.1.0
 ```
 
 Pin the exact version, because the API can change in any 0.x release. On Node, permitkit needs
-22.3 or newer. Each release is built and published by GitHub Actions with npm provenance, so
-`npm audit signatures` can check where a version came from.
+22.3 or newer. The package is ESM only: use `import`, not `require`.
+
+Releases from the release workflow carry npm provenance, so `npm audit signatures` can check where
+a version came from. Version 0.1.0 was published manually, without provenance.
 
 To work on the package itself, build it from source with Node 24 and pnpm:
 
